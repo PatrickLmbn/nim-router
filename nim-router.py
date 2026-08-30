@@ -21,9 +21,9 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("nim-router")
 
 NIM_API_BASE = "https://integrate.api.nvidia.com/v1"
-FAILOVER_MAX_ATTEMPTS = 3
-HEALTH_REFRESH_INTERVAL = 300
-CACHE_TTL = 300
+HEALTH_REFRESH_INTERVAL = 180  # 3 minutes cooldown reset for unhealthy models
+RATE_LIMIT_COOLDOWN = 20       # 20 seconds cooldown on 429 rate limit
+CACHE_TTL = 180                # 3 minutes healthy pool cache
 
 VISION_KEYWORDS = (
     "vision",
@@ -40,8 +40,41 @@ VISION_KEYWORDS = (
     "llava",
     "multimodal",
     "pixtral",
-    "diffusion",
 )
+
+BANNED_KEYWORDS = (
+    "diffusion",
+    "diffusiongemma",
+    "embed",
+    "reward",
+    "clip",
+    "detector",
+    "parse",
+    "rerank",
+    "guard",
+    "safety",
+    "ising",
+    "topic-control",
+    "translate",
+    "synthetic-video",
+    "palmyra-med",
+    "palmyra-fin",
+)
+
+BANNED_MODELS = {
+    "google/diffusiongemma-26b-a4b-it",
+    "nvidia/ising-calibration-1.5-31b",
+    "nvidia/llama-3.1-nemoguard-8b-content-safety",
+    "nvidia/llama-3.1-nemotron-safety-guard-8b-v3",
+    "nvidia/nemotron-3.5-content-safety",
+    "nvidia/llama-3.1-nemoguard-8b-topic-control",
+    "nvidia/ai-synthetic-video-detector",
+    "nvidia/nemotron-parse",
+    "nvidia/nvclip",
+    "nvidia/riva-translate-4b-instruct-v1.1",
+    "nvidia/riva-translate-4b-instruct-v2",
+    "nvidia/riva-translate-4b-instruct",
+}
 
 
 class ChatCompletionRequest(BaseModel):
@@ -63,11 +96,22 @@ class ModelRouter:
         self._lock = asyncio.Lock()
         self._health: dict[str, dict] = {}
         self._latencies: dict[str, float] = {}
+        self._rate_limited_until: dict[str, float] = {}
         self._healthy_pool: list[str] = []
         self._pool_updated: float = 0
 
+    def _is_banned_model(self, model_id: str) -> bool:
+        if not model_id:
+            return True
+        mid = model_id.lower().strip()
+        if mid in BANNED_MODELS:
+            return True
+        return any(k in mid for k in BANNED_KEYWORDS)
+
     def _is_vision_model(self, model_id: str) -> bool:
-        mid = model_id.lower()
+        if self._is_banned_model(model_id):
+            return False
+        mid = model_id.lower().strip()
         return any(k in mid for k in VISION_KEYWORDS)
 
     def _is_vision_request(self, request: ChatCompletionRequest) -> bool:
@@ -98,6 +142,8 @@ class ModelRouter:
         return False
 
     async def _probe_model(self, client: httpx.AsyncClient, model_id: str, sem: asyncio.Semaphore) -> tuple[bool, float]:
+        if self._is_banned_model(model_id):
+            return False, 999.0
         async with sem:
             t0 = time.time()
             try:
@@ -116,8 +162,13 @@ class ModelRouter:
                     timeout=12.0
                 )
                 elapsed = round(time.time() - t0, 3)
-                is_valid = resp.status_code in (200, 429)
-                return is_valid, elapsed
+                if resp.status_code == 200:
+                    return True, elapsed
+                elif resp.status_code == 429:
+                    # Endpoint exists but rate limited: penalize latency so 200 OK models are prioritized
+                    return True, 10.0 + elapsed
+                else:
+                    return False, 999.0
             except Exception:
                 return False, 999.0
 
@@ -134,10 +185,13 @@ class ModelRouter:
 
                 data = response.json()
                 all_models = data.get("data", [])
-                logger.info(f"Discovered {len(all_models)} total models from NVIDIA API. Probing on minimal scale...")
+                logger.info(f"Discovered {len(all_models)} total models from NVIDIA API. Filtering non-chat/banned models...")
 
                 sem = asyncio.Semaphore(10)
-                valid_models = [m for m in all_models if m.get("id")]
+                valid_models = [
+                    m for m in all_models
+                    if m.get("id") and not self._is_banned_model(m.get("id"))
+                ]
                 total_probes = len(valid_models)
                 completed_count = 0
                 lock = asyncio.Lock()
@@ -148,14 +202,13 @@ class ModelRouter:
                     ok, latency = await self._probe_model(client, mid, sem)
                     async with lock:
                         completed_count += 1
-                        pct = int((completed_count / total_probes) * 100)
+                        pct = int((completed_count / total_probes) * 100) if total_probes else 100
                         bar_len = 30
-                        filled = int((completed_count / total_probes) * bar_len)
+                        filled = int((completed_count / total_probes) * bar_len) if total_probes else bar_len
                         filled_bar = "=" * filled
                         empty_bar = "-" * (bar_len - filled)
                         sys.stdout.write(f"\r\033[1;36mProbing models:\033[0m \033[90m[\033[1;32m{filled_bar}\033[90m{empty_bar}]\033[0m \033[1;37m{completed_count}/{total_probes}\033[0m \033[1;33m({pct}%)\033[0m")
                         sys.stdout.flush()
-
 
                     return m_obj, ok, latency
 
@@ -172,9 +225,8 @@ class ModelRouter:
 
                 accessible_models.sort(key=lambda m: self._latencies.get(m.get("id", ""), 999.0))
 
-
                 logger.info(
-                    f"Probe complete: {len(accessible_models)} working models found (filtered out {len(all_models) - len(accessible_models)} non-working/404)"
+                    f"Probe complete: {len(accessible_models)} working chat models found (filtered out non-working & banned models)"
                 )
                 top_3 = accessible_models[:3]
                 logger.info("Top-3 Priority Models (Lowest Latency):")
@@ -202,7 +254,7 @@ class ModelRouter:
                 try:
                     with open(path, "r") as f:
                         data = json.load(f)
-                    working = data.get("working_models", [])
+                    working = [mid for mid in data.get("working_models", []) if not self._is_banned_model(mid)]
                     if working:
                         logger.info(f"Loaded {len(working)} working models from {path}")
                         for i, mid in enumerate(working):
@@ -212,34 +264,30 @@ class ModelRouter:
                     logger.warning(f"Failed to read {path}: {e}")
 
         fallback_list = [
-            "deepseek-ai/deepseek-v4-flash-0731",
-            "deepseek-ai/deepseek-v4-pro-0813",
-            "google/diffusiongemma-26b-a4b-it",
-            "google/gemma-4-31b-it",
-            "meta/llama-3.2-11b-vision-instruct",
-            "meta/llama-3.2-90b-vision-instruct",
-            "meta/muse-glimmer-30b",
-            "minimaxai/minimax-m3",
-            "moonshotai/kimi-k3",
-            "nvidia/ising-calibration-1.5-31b",
-            "nvidia/llama-3.1-nemoguard-8b-content-safety",
-            "nvidia/llama-3.1-nemotron-safety-guard-8b-v3",
-            "nvidia/nemotron-3-nano-30b-a3b",
-            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
-            "nvidia/nemotron-3-super-120b-a12b",
-            "nvidia/nemotron-3.5-content-safety",
-            "nvidia/nemotron-3.5-lightning-30b-a3b",
-            "nvidia/riva-translate-4b-instruct-v1.1",
-            "nvidia/riva-translate-4b-instruct-v2",
             "openai/gpt-oss-120b",
             "openai/gpt-oss-20b",
+            "nvidia/nemotron-3.5-lightning-30b-a3b",
+            "nvidia/nemotron-3-nano-30b-a3b",
+            "nvidia/nemotron-3-super-120b-a12b",
+            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+            "meta/llama-3.2-90b-vision-instruct",
+            "meta/llama-3.2-11b-vision-instruct",
+            "meta/muse-glimmer-30b",
+            "google/gemma-4-31b-it",
+            "minimaxai/minimax-m3",
+            "moonshotai/kimi-k3",
+            "deepseek-ai/deepseek-v4-flash-0731",
+            "deepseek-ai/deepseek-v4-pro-0813",
             "poolside/laguna-xs-2.1",
         ]
-        for i, mid in enumerate(fallback_list):
+        clean_fallback = [mid for mid in fallback_list if not self._is_banned_model(mid)]
+        for i, mid in enumerate(clean_fallback):
             self._latencies[mid] = 0.3 + (i * 0.05)
-        return [{"id": mid} for mid in fallback_list]
+        return [{"id": mid} for mid in clean_fallback]
 
     def _is_model_healthy(self, model_id: str) -> bool:
+        if self._is_banned_model(model_id):
+            return False
         if model_id not in self._health:
             return True
         record = self._health[model_id]
@@ -250,12 +298,22 @@ class ModelRouter:
             record["healthy"] = True
         return record.get("healthy", True)
 
-    def _record_failure(self, model_id: str):
+    def _record_failure(self, model_id: str, status_code: int = 500):
+        now = time.time()
+        if status_code == 429:
+            self._rate_limited_until[model_id] = now + RATE_LIMIT_COOLDOWN
+            current = self._latencies.get(model_id, 1.0)
+            self._latencies[model_id] = round(current + 2.5, 3)
+        elif status_code == 404:
+            self.models = [m for m in self.models if m.get("id") != model_id]
+            self._healthy_pool = [mid for mid in self._healthy_pool if mid != model_id]
+            return
+
         if model_id not in self._health:
             self._health[model_id] = {"failures": 0, "last_check": 0, "healthy": True}
         self._health[model_id]["failures"] += 1
-        self._health[model_id]["last_check"] = time.time()
-        if self._health[model_id]["failures"] >= 2:
+        self._health[model_id]["last_check"] = now
+        if self._health[model_id]["failures"] >= 3:
             self._health[model_id]["healthy"] = False
             logger.warning(f"Model {model_id} temporarily marked unhealthy after {self._health[model_id]['failures']} failures")
 
@@ -263,6 +321,7 @@ class ModelRouter:
         if model_id in self._health:
             self._health[model_id]["failures"] = 0
             self._health[model_id]["healthy"] = True
+        self._rate_limited_until.pop(model_id, None)
 
         if model_id in self._latencies:
             self._latencies[model_id] = round(0.7 * self._latencies[model_id] + 0.3 * elapsed, 3)
@@ -270,11 +329,22 @@ class ModelRouter:
             self._latencies[model_id] = round(elapsed, 3)
 
     def _build_healthy_pool(self) -> list[str]:
-        healthy = [
-            mid for mid in [m.get("id") for m in self.models if m.get("id")]
-            if self._is_model_healthy(mid)
-        ]
-        healthy.sort(key=lambda mid: self._latencies.get(mid, 999.0))
+        now = time.time()
+        all_ids = [m.get("id") for m in self.models if m.get("id") and not self._is_banned_model(m.get("id"))]
+        healthy = [mid for mid in all_ids if self._is_model_healthy(mid)]
+
+        # Auto-recovery: If all models got marked unhealthy over time, reset health states
+        if not healthy and all_ids:
+            logger.warning("All models in pool were marked unhealthy; auto-resetting health states to restore availability.")
+            self._health.clear()
+            self._rate_limited_until.clear()
+            healthy = list(all_ids)
+
+        def sort_key(mid: str):
+            throttled = 1 if self._rate_limited_until.get(mid, 0) > now else 0
+            return (throttled, self._latencies.get(mid, 999.0))
+
+        healthy.sort(key=sort_key)
         return healthy
 
     async def _route_request(self, request: ChatCompletionRequest) -> Response:
@@ -282,7 +352,7 @@ class ModelRouter:
             if not self.models:
                 self.models = await self._discover_models()
                 if not self.models:
-                    raise RuntimeError("No models available from NVIDIA API")
+                    self.models = self._load_fallback_models()
 
             now = time.time()
             if not self._healthy_pool or (now - self._pool_updated) > CACHE_TTL:
@@ -292,65 +362,79 @@ class ModelRouter:
 
             is_vision = self._is_vision_request(request)
             requested_model = request.model
-            if requested_model and requested_model.lower() not in ("nim-free", "nim_free", "auto"):
-                candidate_ids = [requested_model]
-                if is_vision and not self._is_vision_model(requested_model):
-                    vision_fallbacks = [
-                        mid for mid in self._healthy_pool
-                        if self._is_vision_model(mid)
-                    ]
-                    candidate_ids += vision_fallbacks
-            else:
-                pool = self._healthy_pool if self._healthy_pool else [m.get("id") for m in self.models if m.get("id")]
-                candidate_pool = pool if pool else []
 
-                if is_vision:
+            pool = self._healthy_pool if self._healthy_pool else [m.get("id") for m in self.models if m.get("id") and not self._is_banned_model(m.get("id"))]
+            candidate_pool = [mid for mid in pool if not self._is_banned_model(mid)]
+
+            if not candidate_pool:
+                self._health.clear()
+                self._rate_limited_until.clear()
+                candidate_pool = self._build_healthy_pool()
+
+            if is_vision:
+                vision_capable = [
+                    mid for mid in candidate_pool
+                    if self._is_vision_model(mid)
+                ]
+                if not vision_capable:
+                    # Fallback to any known vision models
                     vision_capable = [
-                        mid for mid in candidate_pool
-                        if self._is_vision_model(mid)
+                        m.get("id") for m in self.models
+                        if m.get("id") and self._is_vision_model(m.get("id"))
                     ]
-                    if not vision_capable:
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Image/multimodal input detected in request, but no vision-capable models are currently available in the active pool."
-                        )
-                    candidate_pool = vision_capable
-                    logger.info(f"Vision request detected: isolated pool to {len(candidate_pool)} vision models: {candidate_pool}")
+                if not vision_capable:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Image/multimodal input detected in request, but no vision-capable models are available."
+                    )
+                candidate_pool = vision_capable
+                logger.info(f"Vision request detected: isolated pool to {len(candidate_pool)} vision models: {candidate_pool}")
 
-                if request.tools:
-                    tool_incompatible = ["safety", "guard", "translate", "ising-calibration", "topic-control"]
-                    tool_capable = [
-                        mid for mid in candidate_pool
-                        if not any(k in mid.lower() for k in tool_incompatible)
-                    ]
-                    if tool_capable:
-                        candidate_pool = tool_capable
+            if request.tools:
+                tool_incompatible = ["safety", "guard", "translate", "ising-calibration", "topic-control"]
+                tool_capable = [
+                    mid for mid in candidate_pool
+                    if not any(k in mid.lower() for k in tool_incompatible)
+                ]
+                if tool_capable:
+                    candidate_pool = tool_capable
 
-                if not candidate_pool:
-                    raise RuntimeError("No model IDs available in pool")
-
-                candidate_pool.sort(key=lambda mid: self._latencies.get(mid, 999.0))
-
-                top_3_pool = candidate_pool[:3]
-                standby_pool = candidate_pool[3:]
-
-                start_idx = self.model_index % len(top_3_pool)
-                self.model_index = (self.model_index + 1) % len(top_3_pool)
-
-                ordered_top_3 = [top_3_pool[(start_idx + i) % len(top_3_pool)] for i in range(len(top_3_pool))]
-                candidate_ids = ordered_top_3 + standby_pool
+            # Dynamic candidate list ordering:
+            if requested_model and requested_model.lower() not in ("nim-free", "nim_free", "auto"):
+                if self._is_banned_model(requested_model):
+                    logger.warning(f"Requested model {requested_model} is banned/non-chat; routing to healthy pool.")
+                    candidate_ids = candidate_pool
+                else:
+                    # Start with requested model, fallback across candidate pool
+                    other_candidates = [mid for mid in candidate_pool if mid != requested_model]
+                    candidate_ids = [requested_model] + other_candidates
+            else:
+                candidate_pool.sort(key=lambda mid: (
+                    1 if self._rate_limited_until.get(mid, 0) > now else 0,
+                    self._latencies.get(mid, 999.0)
+                ))
+                top_size = min(3, len(candidate_pool))
+                if top_size > 0:
+                    top_pool = candidate_pool[:top_size]
+                    standby_pool = candidate_pool[top_size:]
+                    start_idx = self.model_index % len(top_pool)
+                    self.model_index = (self.model_index + 1) % len(top_pool)
+                    ordered_top = [top_pool[(start_idx + i) % len(top_pool)] for i in range(len(top_pool))]
+                    candidate_ids = ordered_top + standby_pool
+                else:
+                    candidate_ids = candidate_pool
 
         tried_models = set()
-        attempts = min(FAILOVER_MAX_ATTEMPTS, len(candidate_ids))
-        for i in range(attempts):
-            selected_id = candidate_ids[i]
+        last_error = None
+        attempts = len(candidate_ids)  # Dynamic across ALL candidates
 
+        for selected_id in candidate_ids:
             if selected_id in tried_models:
                 continue
             tried_models.add(selected_id)
 
             current_latency = self._latencies.get(selected_id, 0.0)
-            logger.info(f"Routing request (attempt {i+1}/{attempts}) -> {selected_id} (latency: {current_latency:.3f}s, stream={request.stream})")
+            logger.info(f"Routing request (attempt {len(tried_models)}/{attempts}) -> {selected_id} (latency: {current_latency:.3f}s, stream={request.stream})")
 
             t0 = time.time()
             try:
@@ -359,20 +443,28 @@ class ModelRouter:
                 self._record_success(selected_id, elapsed)
                 return response
             except HTTPException as e:
-                if e.status_code in (400, 422, 429, 500, 502, 503, 504):
-                    self._record_failure(selected_id)
+                last_error = e
+                self._record_failure(selected_id, status_code=e.status_code)
+                if e.status_code == 429:
+                    logger.warning(f"Model {selected_id} returned 429 (Rate Limited), backing off 0.1s and failing over...")
+                    await asyncio.sleep(0.1)
+                elif e.status_code in (400, 422, 500, 502, 503, 504):
                     logger.warning(f"Model {selected_id} failed with status {e.status_code} ({e.detail}), failing over...")
                 elif e.status_code == 404:
-                    logger.warning(f"Model {selected_id} returned 404, skipping...")
+                    logger.warning(f"Model {selected_id} returned 404 Not Found, removed from pool.")
                 else:
                     logger.error(f"Non-retryable error for {selected_id}: {e.status_code} - {e.detail}")
                     raise
             except Exception as e:
-                self._record_failure(selected_id)
+                last_error = e
+                self._record_failure(selected_id, status_code=500)
                 logger.error(f"Unexpected error calling {selected_id}: {e}")
 
-        raise RuntimeError(f"All {attempts} model attempts failed for request")
-
+        detail_msg = last_error.detail if isinstance(last_error, HTTPException) else str(last_error)
+        raise HTTPException(
+            status_code=503,
+            detail=f"All {len(tried_models)} candidate NIM models failed or are temporarily rate-limited. Last error: {detail_msg}"
+        )
 
     async def _call_nvidia_endpoint(self, model_id: str, request: ChatCompletionRequest) -> Response:
         url = f"{NIM_API_BASE}/chat/completions"
@@ -505,11 +597,31 @@ class ModelRouter:
             body = await request.json()
             chat_req = ChatCompletionRequest(**body)
             return await self._route_request(chat_req)
-        except HTTPException:
-            raise
+        except HTTPException as e:
+            return Response(
+                content=json.dumps({
+                    "error": {
+                        "message": e.detail,
+                        "type": "upstream_error",
+                        "code": e.status_code
+                    }
+                }),
+                status_code=e.status_code,
+                media_type="application/json"
+            )
         except Exception as e:
             logger.error(f"Error processing request: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            return Response(
+                content=json.dumps({
+                    "error": {
+                        "message": str(e),
+                        "type": "router_error",
+                        "code": 500
+                    }
+                }),
+                status_code=500,
+                media_type="application/json"
+            )
 
 
 _router_instance: Optional[ModelRouter] = None
@@ -552,6 +664,33 @@ def create_app() -> FastAPI:
                 for mid in all_ids
             ]
         }
+
+    @app.get("/v1/models/{model_id:path}")
+    @app.get("/models/{model_id:path}")
+    async def get_model(model_id: str):
+        return {"id": model_id, "object": "model", "owned_by": "nvidia-nim"}
+
+    @app.get("/api/tags")
+    async def get_tags():
+        if not _router_instance:
+            return {"models": []}
+        model_list = [m.get("id") for m in _router_instance.models if m.get("id")]
+        all_ids = ["nim-free"] + model_list
+        return {
+            "models": [
+                {"name": mid, "model": mid, "modified_at": "2026-08-30T00:00:00Z", "size": 0}
+                for mid in all_ids
+            ]
+        }
+
+    @app.get("/api/version")
+    async def get_version():
+        return {"version": "1.0.0"}
+
+    @app.get("/props")
+    @app.get("/v1/props")
+    async def get_props():
+        return {}
 
     @app.post("/refresh")
     async def refresh_models():
