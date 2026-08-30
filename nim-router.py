@@ -53,8 +53,11 @@ logger.propagate = False
 
 NIM_API_BASE = "https://integrate.api.nvidia.com/v1"
 HEALTH_REFRESH_INTERVAL = 180
-RATE_LIMIT_COOLDOWN = 20
+RATE_LIMIT_COOLDOWN = 30
 CACHE_TTL = 180
+PRIMARY_POOL_SIZE = 7
+MODEL_MAX_RPM = 35
+MODEL_MAX_CONCURRENCY = 4
 
 VISION_KEYWORDS = (
     "vision",
@@ -128,8 +131,19 @@ class ModelRouter:
         self._health: dict[str, dict] = {}
         self._latencies: dict[str, float] = {}
         self._rate_limited_until: dict[str, float] = {}
+        self._request_history: dict[str, list[float]] = {}
+        self._in_flight: dict[str, int] = {}
         self._healthy_pool: list[str] = []
         self._pool_updated: float = 0
+
+    def _get_recent_rpm(self, model_id: str, now: float) -> int:
+        cutoff = now - 60.0
+        history = [t for t in self._request_history.get(model_id, []) if t > cutoff]
+        self._request_history[model_id] = history
+        return len(history)
+
+    def _record_request_dispatch(self, model_id: str, now: float):
+        self._request_history.setdefault(model_id, []).append(now)
 
     def _is_banned_model(self, model_id: str) -> bool:
         if not model_id:
@@ -371,7 +385,11 @@ class ModelRouter:
 
         def sort_key(mid: str):
             throttled = 1 if self._rate_limited_until.get(mid, 0) > now else 0
-            return (throttled, self._latencies.get(mid, 999.0))
+            rpm_over = 1 if self._get_recent_rpm(mid, now) >= MODEL_MAX_RPM else 0
+            busy = 1 if self._in_flight.get(mid, 0) >= MODEL_MAX_CONCURRENCY else 0
+            in_flight_count = self._in_flight.get(mid, 0)
+            latency = self._latencies.get(mid, 999.0)
+            return (throttled, rpm_over, busy, in_flight_count, latency)
 
         healthy.sort(key=sort_key)
         return healthy
@@ -437,9 +455,12 @@ class ModelRouter:
             else:
                 candidate_pool.sort(key=lambda mid: (
                     1 if self._rate_limited_until.get(mid, 0) > now else 0,
+                    1 if self._get_recent_rpm(mid, now) >= MODEL_MAX_RPM else 0,
+                    1 if self._in_flight.get(mid, 0) >= MODEL_MAX_CONCURRENCY else 0,
+                    self._in_flight.get(mid, 0),
                     self._latencies.get(mid, 999.0)
                 ))
-                top_size = min(3, len(candidate_pool))
+                top_size = min(PRIMARY_POOL_SIZE, len(candidate_pool))
                 if top_size > 0:
                     top_pool = candidate_pool[:top_size]
                     standby_pool = candidate_pool[top_size:]
@@ -460,9 +481,13 @@ class ModelRouter:
             tried_models.add(selected_id)
 
             current_latency = self._latencies.get(selected_id, 0.0)
-            logger.info(f"Routing request (attempt {len(tried_models)}/{attempts}) -> {selected_id} (latency: {current_latency:.3f}s, stream={request.stream})")
+            current_rpm = self._get_recent_rpm(selected_id, time.time())
+            in_flight_num = self._in_flight.get(selected_id, 0)
+            logger.info(f"Routing request (attempt {len(tried_models)}/{attempts}) -> {selected_id} (latency: {current_latency:.3f}s, rpm: {current_rpm}/{MODEL_MAX_RPM}, in-flight: {in_flight_num}, stream={request.stream})")
 
             t0 = time.time()
+            self._record_request_dispatch(selected_id, t0)
+            self._in_flight[selected_id] = in_flight_num + 1
             try:
                 response = await self._call_nvidia_endpoint(selected_id, request)
                 elapsed = time.time() - t0
@@ -473,8 +498,8 @@ class ModelRouter:
                 last_error = e
                 self._record_failure(selected_id, status_code=e.status_code)
                 if e.status_code == 429:
-                    logger.warning(f"Model {selected_id} returned 429 (Rate Limited), backing off 0.1s and failing over...")
-                    await asyncio.sleep(0.1)
+                    logger.warning(f"Model {selected_id} returned 429 (Rate Limited), backing off 0.15s and failing over...")
+                    await asyncio.sleep(0.15)
                 elif e.status_code in (400, 422, 500, 502, 503, 504):
                     logger.warning(f"Model {selected_id} failed with status {e.status_code} ({e.detail}), failing over...")
                 elif e.status_code == 404:
@@ -486,6 +511,8 @@ class ModelRouter:
                 last_error = e
                 self._record_failure(selected_id, status_code=500)
                 logger.error(f"Unexpected error calling {selected_id}: {e}")
+            finally:
+                self._in_flight[selected_id] = max(0, self._in_flight.get(selected_id, 1) - 1)
 
         detail_msg = last_error.detail if isinstance(last_error, HTTPException) else str(last_error)
         raise HTTPException(
