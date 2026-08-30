@@ -144,7 +144,7 @@ Add the `nim-router` provider directly to your `~/.config/opencode/opencode.json
       "npm": "@ai-sdk/openai",
       "name": "nim-router",
       "options": {
-        "baseURL": "http://127.0.0.1:11435/v1",
+        "baseURL": "http://localhost:11435/v1",
         "apiKey": "local"
       },
       "models": {
