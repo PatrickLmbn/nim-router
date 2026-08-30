@@ -21,9 +21,9 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("nim-router")
 
 NIM_API_BASE = "https://integrate.api.nvidia.com/v1"
-HEALTH_REFRESH_INTERVAL = 180  # 3 minutes cooldown reset for unhealthy models
-RATE_LIMIT_COOLDOWN = 20       # 20 seconds cooldown on 429 rate limit
-CACHE_TTL = 180                # 3 minutes healthy pool cache
+HEALTH_REFRESH_INTERVAL = 180
+RATE_LIMIT_COOLDOWN = 20
+CACHE_TTL = 180
 
 VISION_KEYWORDS = (
     "vision",
@@ -165,7 +165,6 @@ class ModelRouter:
                 if resp.status_code == 200:
                     return True, elapsed
                 elif resp.status_code == 429:
-                    # Endpoint exists but rate limited: penalize latency so 200 OK models are prioritized
                     return True, 10.0 + elapsed
                 else:
                     return False, 999.0
@@ -333,7 +332,6 @@ class ModelRouter:
         all_ids = [m.get("id") for m in self.models if m.get("id") and not self._is_banned_model(m.get("id"))]
         healthy = [mid for mid in all_ids if self._is_model_healthy(mid)]
 
-        # Auto-recovery: If all models got marked unhealthy over time, reset health states
         if not healthy and all_ids:
             logger.warning("All models in pool were marked unhealthy; auto-resetting health states to restore availability.")
             self._health.clear()
@@ -377,7 +375,6 @@ class ModelRouter:
                     if self._is_vision_model(mid)
                 ]
                 if not vision_capable:
-                    # Fallback to any known vision models
                     vision_capable = [
                         m.get("id") for m in self.models
                         if m.get("id") and self._is_vision_model(m.get("id"))
@@ -399,13 +396,11 @@ class ModelRouter:
                 if tool_capable:
                     candidate_pool = tool_capable
 
-            # Dynamic candidate list ordering:
             if requested_model and requested_model.lower() not in ("nim-free", "nim_free", "auto"):
                 if self._is_banned_model(requested_model):
                     logger.warning(f"Requested model {requested_model} is banned/non-chat; routing to healthy pool.")
                     candidate_ids = candidate_pool
                 else:
-                    # Start with requested model, fallback across candidate pool
                     other_candidates = [mid for mid in candidate_pool if mid != requested_model]
                     candidate_ids = [requested_model] + other_candidates
             else:
@@ -426,7 +421,7 @@ class ModelRouter:
 
         tried_models = set()
         last_error = None
-        attempts = len(candidate_ids)  # Dynamic across ALL candidates
+        attempts = len(candidate_ids)
 
         for selected_id in candidate_ids:
             if selected_id in tried_models:
