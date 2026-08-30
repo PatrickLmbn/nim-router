@@ -116,6 +116,19 @@ pm2 stop nim-router     # Stop server
 pm2 restart nim-router  # Restart server
 ```
 
+### 4. Uninstallation
+To cleanly stop background processes, remove virtual environments, and clean up configuration files:
+
+**Linux / macOS / WSL:**
+```bash
+bash uninstall.sh
+```
+
+**Windows:**
+```cmd
+uninstall.bat
+```
+
 ---
 
 ## Connecting to AI Agents & Harnesses
