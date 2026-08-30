@@ -134,7 +134,39 @@ providers:
     api_key: "local"
 ```
 
-### 2. Coding Harnesses (OpenCode, Aider, Cline, Continue.dev)
+### 2. OpenCode
+Add the `nim-router` provider directly to your `~/.config/opencode/opencode.json` (or `opencode.jsonc`):
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "providers": {
+    "nim-router": {
+      "npm": "@ai-sdk/openai",
+      "name": "nim-router",
+      "options": {
+        "baseURL": "http://127.0.0.1:11435/v1",
+        "apiKey": "local"
+      },
+      "models": {
+        "nim-free": {
+          "name": "nim-free",
+          "displayName": "NIM Free Router",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
+        }
+      }
+    }
+  }
+}
+```
+Then select the model inside OpenCode with:
+```bash
+/model nim-router/nim-free
+```
+
+### 3. Cline / Continue.dev / Aider
 Configure your assistant or harness to use local custom OpenAI endpoints:
 ```json
 {
@@ -145,7 +177,7 @@ Configure your assistant or harness to use local custom OpenAI endpoints:
 }
 ```
 
-### 3. OpenAI Python SDK
+### 4. OpenAI Python SDK
 ```python
 from openai import OpenAI
 
@@ -169,7 +201,7 @@ for chunk in response:
 print()
 ```
 
-### 4. cURL
+### 5. cURL
 ```bash
 curl -X POST http://localhost:11435/v1/chat/completions \
   -H "Content-Type: application/json" \
