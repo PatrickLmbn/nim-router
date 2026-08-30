@@ -16,9 +16,40 @@ from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+SUCCESS_LEVEL = 25
+logging.addLevelName(SUCCESS_LEVEL, "SUCCESS")
+
+def log_success(self, message, *args, **kws):
+    if self.isEnabledFor(SUCCESS_LEVEL):
+        self._log(SUCCESS_LEVEL, message, args, **kws)
+
+logging.Logger.success = log_success
+
+class ColoredFormatter(logging.Formatter):
+    LEVEL_COLORS = {
+        logging.DEBUG: "\033[90m",
+        logging.INFO: "\033[94m",
+        SUCCESS_LEVEL: "\033[92m",
+        logging.WARNING: "\033[93m",
+        logging.ERROR: "\033[91m",
+        logging.CRITICAL: "\033[1;91m",
+    }
+
+    def format(self, record):
+        color = self.LEVEL_COLORS.get(record.levelno, "")
+        reset = "\033[0m"
+        asctime = self.formatTime(record, "%Y-%m-%d %H:%M:%S")
+        levelname = record.levelname
+        msg = record.getMessage()
+        return f"{asctime} - {color}{levelname}{reset} - {color}{msg}{reset}"
+
+log_handler = logging.StreamHandler(sys.stdout)
+log_handler.setFormatter(ColoredFormatter())
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("nim-router")
+logger.setLevel(logging.INFO)
+logger.handlers = [log_handler]
+logger.propagate = False
 
 NIM_API_BASE = "https://integrate.api.nvidia.com/v1"
 HEALTH_REFRESH_INTERVAL = 180
@@ -224,7 +255,7 @@ class ModelRouter:
 
                 accessible_models.sort(key=lambda m: self._latencies.get(m.get("id", ""), 999.0))
 
-                logger.info(
+                logger.success(
                     f"Probe complete: {len(accessible_models)} working chat models found (filtered out non-working & banned models)"
                 )
                 top_3 = accessible_models[:3]
@@ -436,6 +467,7 @@ class ModelRouter:
                 response = await self._call_nvidia_endpoint(selected_id, request)
                 elapsed = time.time() - t0
                 self._record_success(selected_id, elapsed)
+                logger.success(f"Request completed successfully via {selected_id} ({elapsed:.3f}s)")
                 return response
             except HTTPException as e:
                 last_error = e
@@ -630,7 +662,7 @@ async def lifespan(app: FastAPI):
     _router_instance = ModelRouter(api_key=api_key)
     _router_instance.models = await _router_instance._discover_models()
     _router_instance._healthy_pool = _router_instance._build_healthy_pool()
-    logger.info(f"nim-router started with {len(_router_instance.models)} working models in active pool")
+    logger.success(f"nim-router started with {len(_router_instance.models)} working models in active pool")
     yield
     logger.info("nim-router shutting down")
 
