@@ -1,0 +1,23 @@
+INFO:     Started server process [146775]
+INFO:     Waiting for application startup.
+2026-08-30 16:13:30,097 - INFO - HTTP Request: GET https://integrate.api.nvidia.com/v1/models "HTTP/1.1 200 OK"
+2026-08-30 16:13:30,098 - INFO - Discovered 12 free chat models from NVIDIA API, probing for access...
+2026-08-30 16:13:30,345 - INFO - HTTP Request: POST https://integrate.api.nvidia.com/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-08-30 16:13:30,346 - INFO - HTTP Request: POST https://integrate.api.nvidia.com/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-08-30 16:13:30,356 - INFO - HTTP Request: POST https://integrate.api.nvidia.com/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-08-30 16:13:30,360 - INFO - HTTP Request: POST https://integrate.api.nvidia.com/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-08-30 16:13:30,360 - INFO - HTTP Request: POST https://integrate.api.nvidia.com/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-08-30 16:13:30,361 - INFO - HTTP Request: POST https://integrate.api.nvidia.com/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-08-30 16:13:30,362 - INFO - HTTP Request: POST https://integrate.api.nvidia.com/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-08-30 16:13:30,367 - INFO - HTTP Request: POST https://integrate.api.nvidia.com/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-08-30 16:13:30,368 - INFO - HTTP Request: POST https://integrate.api.nvidia.com/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-08-30 16:13:30,374 - INFO - HTTP Request: POST https://integrate.api.nvidia.com/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-08-30 16:13:30,379 - INFO - HTTP Request: POST https://integrate.api.nvidia.com/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-08-30 16:13:30,899 - INFO - HTTP Request: POST https://integrate.api.nvidia.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-08-30 16:13:30,899 - ERROR - Model discovery failed: name 'probe_results' is not defined
+2026-08-30 16:13:30,900 - INFO - nim-router started with 0 models
+INFO:     Application startup complete.
+ERROR:    [Errno 98] error while attempting to bind on address ('0.0.0.0', 11435): address already in use
+INFO:     Waiting for application shutdown.
+2026-08-30 16:13:30,900 - INFO - nim-router shutting down
+INFO:     Application shutdown complete.
