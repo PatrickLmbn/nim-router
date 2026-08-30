@@ -69,12 +69,23 @@ Client Request (model: "nim-free")
 ## Quick Start
 
 ### 1. Automated Setup (Recommended)
-Run the installation script to install dependencies, initialize `.env`, and optionally set up PM2 for background execution:
+Run the installation script for your operating system:
+
+**Linux / macOS / WSL:**
 ```bash
 git clone https://github.com/patricklmbn/nim-router.git
 cd nim-router
 bash install.sh
 ```
+
+**Windows (Command Prompt / PowerShell):**
+```cmd
+git clone https://github.com/patricklmbn/nim-router.git
+cd nim-router
+install.bat
+```
+*(Or simply double-click `install.bat` in File Explorer)*
+
 
 ### 2. Manual Installation
 If you prefer manual setup:
