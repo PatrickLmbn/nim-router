@@ -25,6 +25,24 @@ FAILOVER_MAX_ATTEMPTS = 3
 HEALTH_REFRESH_INTERVAL = 300
 CACHE_TTL = 300
 
+VISION_KEYWORDS = (
+    "vision",
+    "-vl",
+    "vl-",
+    "_vl",
+    "omni",
+    "paligemma",
+    "deplot",
+    "neva",
+    "florence",
+    "kosmos",
+    "fuyu",
+    "llava",
+    "multimodal",
+    "pixtral",
+    "diffusion",
+)
+
 
 class ChatCompletionRequest(BaseModel):
     model: str
@@ -47,6 +65,37 @@ class ModelRouter:
         self._latencies: dict[str, float] = {}
         self._healthy_pool: list[str] = []
         self._pool_updated: float = 0
+
+    def _is_vision_model(self, model_id: str) -> bool:
+        mid = model_id.lower()
+        return any(k in mid for k in VISION_KEYWORDS)
+
+    def _is_vision_request(self, request: ChatCompletionRequest) -> bool:
+        for msg in request.messages:
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("images"):
+                return True
+            content = msg.get("content")
+            if isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict):
+                        item_type = item.get("type", "")
+                        if (
+                            item_type in ("image_url", "image", "input_image")
+                            or "image_url" in item
+                            or "image" in item
+                        ):
+                            return True
+            elif isinstance(content, dict):
+                item_type = content.get("type", "")
+                if (
+                    item_type in ("image_url", "image", "input_image")
+                    or "image_url" in content
+                    or "image" in content
+                ):
+                    return True
+        return False
 
     async def _probe_model(self, client: httpx.AsyncClient, model_id: str, sem: asyncio.Semaphore) -> tuple[bool, float]:
         async with sem:
@@ -145,6 +194,7 @@ class ModelRouter:
 
     def _load_fallback_models(self) -> list[dict]:
         for path in [
+            os.path.join(os.path.dirname(__file__), "config", "models_status.json"),
             os.path.join(os.path.dirname(__file__), "tests", "models_status.json"),
             os.path.join(os.path.dirname(__file__), "models_status.json"),
         ]:
@@ -240,12 +290,32 @@ class ModelRouter:
                 self._pool_updated = now
                 logger.info(f"Healthy pool updated: {len(self._healthy_pool)} models")
 
+            is_vision = self._is_vision_request(request)
             requested_model = request.model
             if requested_model and requested_model.lower() not in ("nim-free", "nim_free", "auto"):
                 candidate_ids = [requested_model]
+                if is_vision and not self._is_vision_model(requested_model):
+                    vision_fallbacks = [
+                        mid for mid in self._healthy_pool
+                        if self._is_vision_model(mid)
+                    ]
+                    candidate_ids += vision_fallbacks
             else:
                 pool = self._healthy_pool if self._healthy_pool else [m.get("id") for m in self.models if m.get("id")]
                 candidate_pool = pool if pool else []
+
+                if is_vision:
+                    vision_capable = [
+                        mid for mid in candidate_pool
+                        if self._is_vision_model(mid)
+                    ]
+                    if not vision_capable:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Image/multimodal input detected in request, but no vision-capable models are currently available in the active pool."
+                        )
+                    candidate_pool = vision_capable
+                    logger.info(f"Vision request detected: isolated pool to {len(candidate_pool)} vision models: {candidate_pool}")
 
                 if request.tools:
                     tool_incompatible = ["safety", "guard", "translate", "ising-calibration", "topic-control"]
@@ -317,7 +387,7 @@ class ModelRouter:
             role = m.get("role", "")
             content = m.get("content")
 
-            if content is None or (isinstance(content, str) and not content.strip()):
+            if content is None or (isinstance(content, str) and not content.strip()) or content == []:
                 if m.get("reasoning_content"):
                     m["content"] = str(m["reasoning_content"]).strip()
                 elif m.get("reasoning"):

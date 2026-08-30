@@ -51,6 +51,7 @@ Client Request (model: "nim-free")
 - **Adaptive Real-Time Latency Tracking (EMA)**: Dynamically recalculates moving average latency scores on live requests to adapt to changing server loads.
 - **Zero-Downtime Automatic Failover**: Instantly catches HTTP `400`, `422`, `429`, and `5xx` errors and retries the request across alternate healthy models without dropping the connection.
 - **Real-Time Token Streaming (SSE)**: Full Server-Sent Events support for streaming responses in interactive applications and agent interfaces.
+- **Multimodal & Vision Routing**: Automatically detects image payloads (`image_url`, base64 data URIs) and routes to vision-capable models (e.g., Llama 3.2 Vision, Nemotron Omni).
 - **Agent & Tool-Calling Compatibility**: Automatically isolates and routes tool-enabled requests to models with structured function-calling capabilities.
 - **Message Normalization**: Automatically sanitizes empty or reasoning-only assistant message contents to prevent schema validation errors.
 
