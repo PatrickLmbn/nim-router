@@ -138,7 +138,19 @@ The router exposes a standard OpenAI-compatible API base URL (`http://localhost:
 Because your real `NVIDIA_API_KEY` is loaded securely by the router from `.env`, your client applications only connect locally to the router and do not need your real key. You can use `"local"` as the API key in all client configurations.
 
 ### 1. Hermes Agent (Recommended)
-Add the provider to `~/.hermes/config.yaml`:
+
+**Option A: Interactive CLI Setup**
+You can configure NIM Router interactively using the `hermes model` command:
+```bash
+hermes model
+```
+Choose **Custom Endpoint** and follow the prompts:
+- **Base URL**: `http://localhost:11435/v1`
+- **Model**: `nim-free`
+- **API Key**: `local` (optional)
+
+**Option B: Manual Configuration (`~/.hermes/config.yaml`)**
+Add the provider directly to `~/.hermes/config.yaml`:
 ```yaml
 providers:
   nim-router:
