@@ -223,6 +223,7 @@ echo ""
 mkdir -p "$HOME/.local/bin"
 cat << EOF > "$HOME/.local/bin/nim"
 #!/usr/bin/env bash
+cd "$DIR" || exit 1
 if [ -f "$DIR/.venv/bin/python" ]; then
     exec "$DIR/.venv/bin/python" "$DIR/nim-router.py" "\$@"
 else
@@ -235,7 +236,7 @@ chmod +x "$DIR/nim-router.py" "$HOME/.local/bin/nim" "$HOME/.local/bin/nimrouter
 
 if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
     export PATH="$HOME/.local/bin:$PATH"
-    if [ -f "$HOME/.zshrc" ] && ! grep -q '\.local/bin' "$HOME/.zshrc"; then
+    if [ -f "$HOME/.zshrc" ] && ! grep -q '\.local/bin' "$HOME/.zshrc'; then
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
     fi
     if [ -f "$HOME/.bashrc" ] && ! grep -q '\.local/bin' "$HOME/.bashrc"; then

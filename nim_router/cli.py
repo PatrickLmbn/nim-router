@@ -92,20 +92,30 @@ def show_help():
 
 def show_logs():
     print(get_rainbow_banner())
+    base_dir = os.path.dirname(os.path.dirname(__file__))
+    try:
+        os.chdir(base_dir)
+    except Exception:
+        pass
     pm2_bin = shutil.which("pm2")
     if pm2_bin:
         try:
             os.execvp(pm2_bin, [pm2_bin, "logs", "nim-router"])
         except Exception:
-            subprocess.run([pm2_bin, "logs", "nim-router"])
+            subprocess.run([pm2_bin, "logs", "nim-router"], cwd=base_dir)
     else:
         print("\033[91mPM2 is not installed on this system. Install PM2 via 'npm install -g pm2'.\033[0m")
 
 def restart_server():
     print(get_rainbow_banner())
+    base_dir = os.path.dirname(os.path.dirname(__file__))
+    try:
+        os.chdir(base_dir)
+    except Exception:
+        pass
     pm2_bin = shutil.which("pm2")
     if pm2_bin:
-        res = subprocess.run([pm2_bin, "restart", "nim-router", "--update-env"])
+        res = subprocess.run([pm2_bin, "restart", "nim-router", "--update-env"], cwd=base_dir)
         if res.returncode == 0:
             print("\n\033[1;32m[✓] Live nim server process restarted via PM2!\033[0m")
         else:
@@ -115,9 +125,14 @@ def restart_server():
 
 def stop_server():
     print(get_rainbow_banner())
+    base_dir = os.path.dirname(os.path.dirname(__file__))
+    try:
+        os.chdir(base_dir)
+    except Exception:
+        pass
     pm2_bin = shutil.which("pm2")
     if pm2_bin:
-        res = subprocess.run([pm2_bin, "stop", "nim-router"])
+        res = subprocess.run([pm2_bin, "stop", "nim-router"], cwd=base_dir)
         if res.returncode == 0:
             print("\n\033[1;32m[✓] Stopped nim server process via PM2.\033[0m")
         else:
