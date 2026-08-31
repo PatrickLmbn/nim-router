@@ -41,9 +41,9 @@ git clone https://github.com/PatrickLmbn/nim-router.git; cd nim-router; .\instal
 ## Features
 
 - **Universal Free Multi-Provider Support**:
-  - **NVIDIA NIM Free Tier** (`NVIDIA_API_KEYS` / `NVIDIA_API_KEY`)
-  - **Groq LPU Free Tier** (`GROQ_API_KEYS` / `GROQ_API_KEY` - 500+ tokens/sec)
-  - **Cerebras Wafer-Scale Free Tier** (`CEREBRAS_API_KEYS` / `CEREBRAS_API_KEY` - 1800+ tokens/sec)
+  - **NVIDIA NIM Free Tier** (`NVIDIA_API_KEY`)
+  - **Groq LPU Free Tier** (`GROQ_API_KEY` - 500+ tokens/sec)
+  - **Cerebras Wafer-Scale Free Tier** (`CEREBRAS_API_KEY` - 1800+ tokens/sec)
   - **OpenRouter Free Tier** (`OPENROUTER_API_KEY` - automatically pools all `:free` models)
   - **OpenCode API** (`OPENCODE_API_KEY`)
 - **Purpose-Based Virtual Category Models**: Select specialized virtual model categories directly in your agent or harness:
