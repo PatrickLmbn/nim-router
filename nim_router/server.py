@@ -4,6 +4,7 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
 
+from nim_router.config import get_nvidia_keys, get_openrouter_key, get_opencode_key
 from nim_router.engine import ModelRouter
 from nim_router.logger import logger
 
@@ -12,10 +13,14 @@ _router_instance: Optional[ModelRouter] = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _router_instance
-    api_key = os.getenv("NVIDIA_API_KEY", "")
-    if not api_key:
-        logger.warning("NVIDIA_API_KEY not set in environment (.env)")
-    _router_instance = ModelRouter(api_key=api_key)
+    nvidia_keys = get_nvidia_keys()
+    openrouter_key = get_openrouter_key()
+    opencode_key = get_opencode_key()
+
+    if not nvidia_keys and not openrouter_key and not opencode_key:
+        logger.warning("No API keys found in environment (.env). Please configure NVIDIA_API_KEYS, OPENROUTER_API_KEY, or OPENCODE_API_KEY.")
+
+    _router_instance = ModelRouter(api_key=nvidia_keys, openrouter_key=openrouter_key, opencode_key=opencode_key)
     _router_instance.models = await _router_instance._discover_models()
     _router_instance._healthy_pool = _router_instance._build_healthy_pool()
     logger.success(f"nim-router started with {len(_router_instance.models)} working models in active pool")

@@ -11,16 +11,29 @@ from nim_router.config import (
     MODEL_MAX_RPM,
     PRIMARY_POOL_SIZE,
     RATE_LIMIT_COOLDOWN,
+    NIM_API_BASE,
+    OPENROUTER_API_BASE,
+    OPENCODE_API_BASE,
+    get_primary_model,
 )
 from nim_router.logger import logger
 from nim_router.schemas import ChatCompletionRequest
 from nim_router.catalog import is_banned_model, load_fallback_models
 from nim_router.classifier import is_vision_model, is_vision_request
-from nim_router.client import probe_model, discover_models, call_nvidia_endpoint
+from nim_router.client import probe_model, discover_models, call_provider_endpoint, call_nvidia_endpoint
 
 class ModelRouter:
-    def __init__(self, api_key: str):
-        self.api_key = api_key
+    def __init__(self, api_key: str | list[str], openrouter_key: str = "", opencode_key: str = ""):
+        if isinstance(api_key, list):
+            self.api_keys = [k.strip() for k in api_key if k.strip()]
+        else:
+            self.api_keys = [k.strip() for k in (api_key or "").split(",") if k.strip()]
+        if not self.api_keys:
+            self.api_keys = [""]
+        self.api_key = self.api_keys[0]
+        self.openrouter_key = openrouter_key.strip()
+        self.opencode_key = opencode_key.strip()
+        self.key_index = 0
         self.models: list[dict] = []
         self.model_index = 0
         self._lock = asyncio.Lock()
@@ -31,6 +44,20 @@ class ModelRouter:
         self._in_flight: dict[str, int] = {}
         self._healthy_pool: list[str] = []
         self._pool_updated: float = 0
+
+    def _get_next_api_key(self) -> str:
+        key = self.api_keys[self.key_index % len(self.api_keys)]
+        self.key_index = (self.key_index + 1) % len(self.api_keys)
+        return key
+
+    def _get_provider_info(self, model_id: str) -> tuple[str, str, list[str]]:
+        mid = model_id.lower()
+        if mid.endswith(":free") or "openrouter/" in mid or mid.startswith("openrouter"):
+            return OPENROUTER_API_BASE, self.openrouter_key, [self.openrouter_key] if self.openrouter_key else [""]
+        elif mid.startswith("opencode/") or "opencode" in mid:
+            return OPENCODE_API_BASE, self.opencode_key, [self.opencode_key] if self.opencode_key else [""]
+        else:
+            return NIM_API_BASE, self._get_next_api_key(), self.api_keys
 
     def _get_recent_rpm(self, model_id: str, now: float) -> int:
         cutoff = now - 60.0
@@ -51,10 +78,11 @@ class ModelRouter:
         return is_vision_request(request)
 
     async def _probe_model(self, client: httpx.AsyncClient, model_id: str, sem: asyncio.Semaphore) -> tuple[bool, float]:
-        return await probe_model(self.api_key, client, model_id, sem)
+        base_url, key, _ = self._get_provider_info(model_id)
+        return await probe_model(key, client, model_id, sem, base_url)
 
     async def _discover_models(self) -> list[dict]:
-        return await discover_models(self.api_key, self._latencies)
+        return await discover_models(self.api_keys, self._latencies, self.openrouter_key, self.opencode_key)
 
     def _load_fallback_models(self) -> list[dict]:
         return load_fallback_models(self._latencies)
@@ -74,7 +102,7 @@ class ModelRouter:
 
     def _record_failure(self, model_id: str, status_code: int = 500):
         now = time.time()
-        if status_code == 429:
+        if status_code in (429, 402):
             self._rate_limited_until[model_id] = now + RATE_LIMIT_COOLDOWN
             current = self._latencies.get(model_id, 1.0)
             self._latencies[model_id] = round(current + 2.5, 3)
@@ -175,13 +203,15 @@ class ModelRouter:
                 if tool_capable:
                     candidate_pool = tool_capable
 
-            if requested_model and requested_model.lower() not in ("nim-free", "nim_free", "auto"):
-                if self._is_banned_model(requested_model):
-                    logger.warning(f"Requested model {requested_model} is banned/non-chat; routing to healthy pool.")
+            target_model = requested_model if (requested_model and requested_model.lower() not in ("nim-free", "nim_free", "auto")) else get_primary_model()
+
+            if target_model and target_model.lower() not in ("nim-free", "nim_free", "auto"):
+                if self._is_banned_model(target_model):
+                    logger.warning(f"Target model {target_model} is banned/non-chat; routing to healthy pool.")
                     candidate_ids = candidate_pool
                 else:
-                    other_candidates = [mid for mid in candidate_pool if mid != requested_model]
-                    candidate_ids = [requested_model] + other_candidates
+                    other_candidates = [mid for mid in candidate_pool if mid != target_model]
+                    candidate_ids = [target_model] + other_candidates
             else:
                 candidate_pool.sort(key=lambda mid: (
                     1 if self._rate_limited_until.get(mid, 0) > now else 0,
@@ -219,16 +249,25 @@ class ModelRouter:
             self._record_request_dispatch(selected_id, t0)
             self._in_flight[selected_id] = in_flight_num + 1
             try:
-                response = await self._call_nvidia_endpoint(selected_id, request)
-                elapsed = time.time() - t0
-                self._record_success(selected_id, elapsed)
-                logger.success(f"Request completed successfully via {selected_id} ({elapsed:.3f}s)")
-                return response
+                base_url, _, keys_to_try = self._get_provider_info(selected_id)
+                for k_idx, current_key in enumerate(keys_to_try):
+                    try:
+                        response = await call_provider_endpoint(current_key, selected_id, request, base_url)
+                        elapsed = time.time() - t0
+                        self._record_success(selected_id, elapsed)
+                        logger.success(f"Request completed successfully via {selected_id} ({elapsed:.3f}s)")
+                        return response
+                    except HTTPException as e:
+                        if e.status_code == 429 and k_idx < len(keys_to_try) - 1:
+                            logger.warning(f"Model {selected_id} rate limited on key {current_key[:8]}..., retrying with next API key...")
+                            await asyncio.sleep(0.1)
+                            continue
+                        raise
             except HTTPException as e:
                 last_error = e
                 self._record_failure(selected_id, status_code=e.status_code)
-                if e.status_code == 429:
-                    logger.warning(f"Model {selected_id} returned 429 (Rate Limited), backing off 0.15s and failing over...")
+                if e.status_code in (429, 402):
+                    logger.warning(f"Model {selected_id} returned status {e.status_code} (Rate Limited/Billing), backing off and failing over...")
                     await asyncio.sleep(0.15)
                 elif e.status_code in (400, 422, 500, 502, 503, 504):
                     logger.warning(f"Model {selected_id} failed with status {e.status_code} ({e.detail}), failing over...")
@@ -250,8 +289,10 @@ class ModelRouter:
             detail=f"All {len(tried_models)} candidate NIM models failed or are temporarily rate-limited. Last error: {detail_msg}"
         )
 
-    async def _call_nvidia_endpoint(self, model_id: str, request: ChatCompletionRequest) -> Response:
-        return await call_nvidia_endpoint(self.api_key, model_id, request)
+    async def _call_nvidia_endpoint(self, model_id: str, request: ChatCompletionRequest, api_key: str = None) -> Response:
+        base_url, key, _ = self._get_provider_info(model_id)
+        selected_key = api_key or key
+        return await call_provider_endpoint(selected_key, model_id, request, base_url)
 
     async def handle_request(self, request: Request) -> Response:
         try:

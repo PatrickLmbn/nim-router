@@ -67,14 +67,29 @@ if not exist .env (
     if exist .env.example (
         copy .env.example .env >nul
         echo [✓] Created .env from .env.example
+        echo.
+        echo === Multi-Provider API Key Setup ===
+        set /p KEY1="Enter Primary NVIDIA API Key #1 (Recommended): "
+        set /p KEY2="Enter Secondary NVIDIA API Key #2 (Optional - press Enter to skip): "
+        set /p OR_KEY="Enter OpenRouter API Key (Optional - press Enter to skip): "
+        set /p OPENCODE_KEY="Enter OpenCode API Key (Optional - press Enter to skip): "
         
-        set /p USER_KEY="Enter your NVIDIA API Key (leave empty to configure later in .env): "
-        if not "!USER_KEY!"=="" (
-            powershell -Command "(Get-Content .env) -replace '^NVIDIA_API_KEY=.*', 'NVIDIA_API_KEY=!USER_KEY!' | Set-Content .env"
-            echo [✓] NVIDIA_API_KEY saved to .env
-        ) else (
-            echo [!] Remember to set your NVIDIA_API_KEY in .env before running.
+        set KEYS=
+        if not "!KEY1!"=="" set KEYS=!KEY1!
+        if not "!KEY2!"=="" (
+            if not "!KEYS!"=="" (set KEYS=!KEYS!,!KEY2!) else (set KEYS=!KEY2!)
         )
+
+        if not "!KEYS!"=="" (
+            powershell -Command "(Get-Content .env) -replace '^NVIDIA_API_KEYS=.*', 'NVIDIA_API_KEYS=!KEYS!' | Set-Content .env"
+        )
+        if not "!OR_KEY!"=="" (
+            powershell -Command "(Get-Content .env) -replace '^OPENROUTER_API_KEY=.*', 'OPENROUTER_API_KEY=!OR_KEY!' | Set-Content .env"
+        )
+        if not "!OPENCODE_KEY!"=="" (
+            powershell -Command "(Get-Content .env) -replace '^OPENCODE_API_KEY=.*', 'OPENCODE_API_KEY=!OPENCODE_KEY!' | Set-Content .env"
+        )
+        echo [✓] Saved configured provider API key(s) to .env
     )
 ) else (
     echo [✓] .env file already exists.

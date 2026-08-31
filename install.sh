@@ -159,23 +159,63 @@ if [ ! -f .env ]; then
         cp .env.example .env
         echo -e "${GREEN}[✓] Created .env from .env.example.${NC}"
         
-        read -r -p "Enter your NVIDIA API Key (leave empty to configure later): " user_api_key
-        if [ -n "$user_api_key" ]; then
-            if grep -q "NVIDIA_API_KEY=" .env; then
-                sed -i "s/^NVIDIA_API_KEY=.*/NVIDIA_API_KEY=$user_api_key/" .env
-            else
-                echo "NVIDIA_API_KEY=$user_api_key" >> .env
-            fi
-            echo -e "${GREEN}[✓] NVIDIA_API_KEY saved to .env${NC}"
-        else
-            echo -e "${YELLOW}[!] Please remember to set your NVIDIA_API_KEY in .env before running.${NC}"
+        echo -e "${BOLD}=== Multi-Provider API Key Setup ===${NC}"
+        read -r -p "Enter Primary NVIDIA API Key #1 (Recommended): " key1
+        read -r -p "Enter Secondary NVIDIA API Key #2 (Optional - press Enter to skip): " key2
+        read -r -p "Enter OpenRouter API Key (Optional - press Enter to skip): " or_key
+        read -r -p "Enter OpenCode API Key (Optional - press Enter to skip): " opencode_key
+
+        keys_combined=""
+        [ -n "$key1" ] && keys_combined="$key1"
+        if [ -n "$key2" ]; then
+            [ -n "$keys_combined" ] && keys_combined="$keys_combined,$key2" || keys_combined="$key2"
         fi
+
+        if [ -n "$keys_combined" ]; then
+            if grep -q "NVIDIA_API_KEYS=" .env; then
+                sed -i "s/^NVIDIA_API_KEYS=.*/NVIDIA_API_KEYS=$keys_combined/" .env
+            else
+                echo "NVIDIA_API_KEYS=$keys_combined" >> .env
+            fi
+        fi
+
+        if [ -n "$or_key" ]; then
+            if grep -q "OPENROUTER_API_KEY=" .env; then
+                sed -i "s/^OPENROUTER_API_KEY=.*/OPENROUTER_API_KEY=$or_key/" .env
+            else
+                echo "OPENROUTER_API_KEY=$or_key" >> .env
+            fi
+        fi
+
+        if [ -n "$opencode_key" ]; then
+            if grep -q "OPENCODE_API_KEY=" .env; then
+                sed -i "s/^OPENCODE_API_KEY=.*/OPENCODE_API_KEY=$opencode_key/" .env
+            else
+                echo "OPENCODE_API_KEY=$opencode_key" >> .env
+            fi
+        fi
+
+        echo -e "${GREEN}[✓] Saved configured provider API key(s) to .env${NC}"
     fi
 else
     echo -e "${GREEN}[✓] .env file already exists.${NC}"
 fi
 
-# 5. PM2 Setup & Background Execution
+# 5. CLI Binary Installation
+echo ""
+mkdir -p "$HOME/.local/bin"
+cat << EOF > "$HOME/.local/bin/nim-router"
+#!/usr/bin/env bash
+if [ -f "$DIR/.venv/bin/python" ]; then
+    exec "$DIR/.venv/bin/python" "$DIR/nim-router.py" "\$@"
+else
+    exec python3 "$DIR/nim-router.py" "\$@"
+fi
+EOF
+chmod +x "$DIR/nim-router" "$HOME/.local/bin/nim-router" 2>/dev/null || true
+echo -e "${GREEN}[✓] Installed 'nim-router' CLI command to ~/.local/bin/nim-router.${NC}"
+
+# 6. PM2 Setup & Background Execution
 echo ""
 if command -v pm2 &> /dev/null; then
     echo -e "${GREEN}[✓] PM2 is installed on your system.${NC}"
@@ -193,7 +233,7 @@ if command -v pm2 &> /dev/null; then
         echo -e "${GREEN}[✓] nim-router started in background with PM2.${NC}"
         echo "Use 'pm2 logs nim-router' to view logs or 'pm2 stop nim-router' to stop."
     else
-        echo -e "${GREEN}Setup complete!${NC} You can start the server anytime with: python nim-router.py"
+        echo -e "${GREEN}Setup complete!${NC} You can start the server anytime with: nim-router or python nim-router.py"
     fi
 else
     read -r -p "Do you want to install PM2 to run nim-router in the background? (y/N): " install_pm2
@@ -218,10 +258,10 @@ else
             fi
         else
             echo -e "${YELLOW}[WARNING] npm was not found. Please install Node.js / npm first to install PM2.${NC}"
-            echo "You can still run the router directly with: python nim-router.py"
+            echo "You can still run the router directly with: nim-router or python nim-router.py"
         fi
     else
-        echo -e "${GREEN}Setup complete!${NC} You can start the router with: python nim-router.py"
+        echo -e "${GREEN}Setup complete!${NC} You can start the router with: nim-router or python nim-router.py"
     fi
 fi
 
