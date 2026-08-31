@@ -45,6 +45,7 @@ def show_help():
     print("  \033[1;32mmodels, list, select\033[0m   Interactively choose primary priority model.")
     print("  \033[1;32mprobe, scan\033[0m            Run live probing scan across all enabled providers.")
     print("  \033[1;32mconnect, keys, config\033[0m  Interactively add or update provider API keys.")
+    print("  \033[1;32mrestart, reload\033[0m        Restart background server process via PM2.")
     print("  \033[1;32mlogs, log\033[0m              Stream live nim-router server logs.")
     print("  \033[1;32mhelp, -h, --help\033[0m       Show CLI help documentation and exit.\n")
     print("\033[1;33mDefault (no argument):\033[0m")
@@ -53,6 +54,7 @@ def show_help():
     print("  nim-router models       Select primary model priority")
     print("  nim-router probe        Probe endpoints and refresh active model pool")
     print("  nim-router connect      Set or update API credentials")
+    print("  nim-router restart      Restart background server process")
     print("  nim-router logs         View live background server logs")
     print("  nim-router --help       Show help documentation\n")
 
@@ -65,6 +67,17 @@ def show_logs():
             subprocess.run([pm2_bin, "logs", "nim-router"])
     else:
         print("\033[91mPM2 is not installed on this system. Install PM2 via 'npm install -g pm2'.\033[0m")
+
+def restart_server():
+    pm2_bin = shutil.which("pm2")
+    if pm2_bin:
+        res = subprocess.run([pm2_bin, "restart", "nim-router", "--update-env"])
+        if res.returncode == 0:
+            print("\n\033[1;32m[✓] Live nim-router server process restarted via PM2!\033[0m")
+        else:
+            print("\n\033[91mFailed to restart nim-router via PM2. Please check if process is running in PM2.\033[0m")
+    else:
+        print("\033[91mPM2 is not installed on this system.\033[0m")
 
 async def async_probe_models():
     nvidia_keys = get_nvidia_keys()

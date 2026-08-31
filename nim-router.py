@@ -23,6 +23,9 @@ if __name__ == "__main__":
             elif cmd in ("connect", "keys", "key", "config"):
                 from nim_router.cli import connect_api_keys
                 connect_api_keys()
+            elif cmd in ("restart", "reload"):
+                from nim_router.cli import restart_server
+                restart_server()
             elif cmd in ("logs", "log"):
                 from nim_router.cli import show_logs
                 show_logs()
