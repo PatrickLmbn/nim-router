@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
 set -e
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$DIR"
+if [ ! -f "nim-router.py" ]; then
+    INSTALL_DIR="$HOME/nim-router"
+    if [ ! -d "$INSTALL_DIR" ]; then
+        git clone https://github.com/PatrickLmbn/nim-router.git "$INSTALL_DIR"
+    fi
+    cd "$INSTALL_DIR"
+    DIR="$INSTALL_DIR"
+else
+    DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    cd "$DIR"
+fi
 
 BOLD="\033[1m"
 GREEN="\033[0;32m"
@@ -169,6 +178,10 @@ if [ ! -f .env ]; then
         echo ""
         read -r -s -p "Enter Secondary NVIDIA API Key #2 (Optional - press Enter to skip): " key2
         echo ""
+        read -r -s -p "Enter Groq Free API Key (Optional - press Enter to skip): " groq_key
+        echo ""
+        read -r -s -p "Enter Cerebras Free API Key (Optional - press Enter to skip): " cerebras_key
+        echo ""
         read -r -s -p "Enter OpenRouter API Key (Optional - press Enter to skip): " or_key
         echo ""
         read -r -s -p "Enter OpenCode API Key (Optional - press Enter to skip): " opencode_key
@@ -185,6 +198,22 @@ if [ ! -f .env ]; then
                 sed -i "s/^NVIDIA_API_KEYS=.*/NVIDIA_API_KEYS=$keys_combined/" .env
             else
                 echo "NVIDIA_API_KEYS=$keys_combined" >> .env
+            fi
+        fi
+
+        if [ -n "$groq_key" ]; then
+            if grep -q "GROQ_API_KEYS=" .env; then
+                sed -i "s/^GROQ_API_KEYS=.*/GROQ_API_KEYS=$groq_key/" .env
+            else
+                echo "GROQ_API_KEYS=$groq_key" >> .env
+            fi
+        fi
+
+        if [ -n "$cerebras_key" ]; then
+            if grep -q "CEREBRAS_API_KEYS=" .env; then
+                sed -i "s/^CEREBRAS_API_KEYS=.*/CEREBRAS_API_KEYS=$cerebras_key/" .env
+            else
+                echo "CEREBRAS_API_KEYS=$cerebras_key" >> .env
             fi
         fi
 

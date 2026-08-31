@@ -6,6 +6,8 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)),
 NIM_API_BASE = "https://integrate.api.nvidia.com/v1"
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 OPENCODE_API_BASE = "https://opencode.ai/zen/v1"
+GROQ_API_BASE = "https://api.groq.com/openai/v1"
+CEREBRAS_API_BASE = "https://api.cerebras.ai/v1"
 
 HEALTH_REFRESH_INTERVAL = 180
 RATE_LIMIT_COOLDOWN = 30
@@ -24,6 +26,14 @@ def get_openrouter_key() -> str:
 
 def get_opencode_key() -> str:
     return os.getenv("OPENCODE_API_KEY", "").strip()
+
+def get_groq_keys() -> list[str]:
+    raw_keys = os.getenv("GROQ_API_KEYS", "") or os.getenv("GROQ_API_KEY", "")
+    return [k.strip() for k in raw_keys.split(",") if k.strip()]
+
+def get_cerebras_keys() -> list[str]:
+    raw_keys = os.getenv("CEREBRAS_API_KEYS", "") or os.getenv("CEREBRAS_API_KEY", "")
+    return [k.strip() for k in raw_keys.split(",") if k.strip()]
 
 def get_primary_model() -> str:
     return os.getenv("PRIMARY_MODEL", "").strip() or os.getenv("MODEL", "nim-free").strip()

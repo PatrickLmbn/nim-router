@@ -15,6 +15,8 @@ from nim_router.config import (
     NIM_API_BASE,
     OPENROUTER_API_BASE,
     OPENCODE_API_BASE,
+    GROQ_API_BASE,
+    CEREBRAS_API_BASE,
     get_primary_model,
 )
 from nim_router.logger import logger
@@ -22,13 +24,17 @@ from nim_router.schemas import ChatCompletionRequest
 from nim_router.catalog import is_banned_model, load_fallback_models
 from nim_router.classifier import (
     is_vision_model,
+    is_coding_model,
+    is_reasoning_model,
+    is_moe_model,
+    is_chat_model,
     is_vision_request,
     estimate_token_count,
 )
 from nim_router.client import probe_model, discover_models, call_provider_endpoint, call_nvidia_endpoint
 
 class ModelRouter:
-    def __init__(self, api_key: str | list[str], openrouter_key: str = "", opencode_key: str = ""):
+    def __init__(self, api_key: str | list[str], openrouter_key: str = "", opencode_key: str = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = ""):
         if isinstance(api_key, list):
             self.api_keys = [k.strip() for k in api_key if k.strip()]
         else:
@@ -36,9 +42,23 @@ class ModelRouter:
         if not self.api_keys:
             self.api_keys = [""]
         self.api_key = self.api_keys[0]
+
         self.openrouter_key = openrouter_key.strip()
         self.opencode_key = opencode_key.strip()
+
+        if isinstance(groq_keys, list):
+            self.groq_keys = [k.strip() for k in groq_keys if k.strip()]
+        else:
+            self.groq_keys = [k.strip() for k in (groq_keys or "").split(",") if k.strip()]
+
+        if isinstance(cerebras_keys, list):
+            self.cerebras_keys = [k.strip() for k in cerebras_keys if k.strip()]
+        else:
+            self.cerebras_keys = [k.strip() for k in (cerebras_keys or "").split(",") if k.strip()]
+
         self.key_index = 0
+        self.groq_key_index = 0
+        self.cerebras_key_index = 0
         self.models: list[dict] = []
         self.model_index = 0
         self._lock = asyncio.Lock()
@@ -60,7 +80,7 @@ class ModelRouter:
 
     def _get_provider_name(self, model_id: str) -> str:
         mid_clean = model_id
-        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] "):
+        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[Category] "):
             if mid_clean.startswith(prefix):
                 mid_clean = mid_clean[len(prefix):].strip()
 
@@ -69,8 +89,12 @@ class ModelRouter:
         mid = mid_clean.lower()
         if mid.endswith(":free") or "openrouter/" in mid or mid.startswith("openrouter"):
             return "OpenRouter"
-        elif mid.startswith("opencode/") or "opencode" in mid or mid.endswith("-free") or any(k in mid for k in ("claude-", "gpt-", "gemini-", "codestral")):
+        elif mid.startswith("opencode/") or "opencode" in mid or mid.endswith("-free"):
             return "OpenCode"
+        elif any(k in mid for k in ("llama3-", "mixtral-8x7b", "gemma2-", "groq", "versatile", "instant", "specdec", "orpheus", "allam", "compound")):
+            return "Groq"
+        elif "cerebras" in mid or "llama3.1" in mid or "csk" in mid:
+            return "Cerebras"
         else:
             return "NVIDIA"
 
@@ -80,6 +104,16 @@ class ModelRouter:
             return OPENROUTER_API_BASE, self.openrouter_key, [self.openrouter_key] if self.openrouter_key else [""]
         elif provider == "OpenCode":
             return OPENCODE_API_BASE, self.opencode_key, [self.opencode_key] if self.opencode_key else [""]
+        elif provider == "Groq":
+            keys = self.groq_keys if self.groq_keys else [""]
+            rotated = keys[self.groq_key_index:] + keys[:self.groq_key_index]
+            self.groq_key_index = (self.groq_key_index + 1) % len(keys)
+            return GROQ_API_BASE, rotated[0], rotated
+        elif provider == "Cerebras":
+            keys = self.cerebras_keys if self.cerebras_keys else [""]
+            rotated = keys[self.cerebras_key_index:] + keys[:self.cerebras_key_index]
+            self.cerebras_key_index = (self.cerebras_key_index + 1) % len(keys)
+            return CEREBRAS_API_BASE, rotated[0], rotated
         else:
             rotated_keys = self.api_keys[self.key_index:] + self.api_keys[:self.key_index]
             self.key_index = (self.key_index + 1) % len(self.api_keys)
@@ -108,7 +142,14 @@ class ModelRouter:
         return await probe_model(key, client, model_id, sem, base_url)
 
     async def _discover_models(self) -> list[dict]:
-        discovered = await discover_models(self.api_keys, self._latencies, self.openrouter_key, self.opencode_key)
+        discovered = await discover_models(
+            self.api_keys,
+            self._latencies,
+            self.openrouter_key,
+            self.opencode_key,
+            self.groq_keys,
+            self.cerebras_keys
+        )
         for m in discovered:
             mid = m.get("id")
             if mid and "provider" in m:
@@ -212,10 +253,12 @@ class ModelRouter:
             nvidia_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "NVIDIA")
             or_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "OpenRouter")
             oc_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "OpenCode")
+            groq_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "Groq")
+            cerebras_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "Cerebras")
 
             logger.success(
                 f"nim-router initialized instantly with {len(self._healthy_pool)} working models in pool "
-                f"(NVIDIA: {nvidia_count}, OpenRouter: {or_count}, OpenCode: {oc_count})"
+                f"(NVIDIA: {nvidia_count}, OpenRouter: {or_count}, OpenCode: {oc_count}, Groq: {groq_count}, Cerebras: {cerebras_count})"
             )
         asyncio.create_task(self.refresh_models())
 
@@ -260,6 +303,24 @@ class ModelRouter:
                 self._pool_updated = now
                 asyncio.create_task(self.refresh_models())
 
+            requested_model = (request.model or "").strip()
+            for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[Category] "):
+                if requested_model.startswith(prefix):
+                    requested_model = requested_model[len(prefix):].strip()
+
+            req_lower = requested_model.lower()
+            category_target = None
+            if req_lower in ("nim-coding", "coding", "code"):
+                category_target = "coding"
+            elif req_lower in ("nim-reasoning", "reasoning", "reason"):
+                category_target = "reasoning"
+            elif req_lower in ("nim-vision", "vision", "multimodal"):
+                category_target = "vision"
+            elif req_lower in ("nim-moe", "moe", "mixture-of-experts"):
+                category_target = "moe"
+            elif req_lower in ("nim-chat", "chat", "conversation"):
+                category_target = "chat"
+
             candidate_pool = list(self._healthy_pool)
             if not candidate_pool:
                 self.models = self._load_fallback_models()
@@ -269,50 +330,42 @@ class ModelRouter:
                         self._model_providers[mid] = self._get_provider_name(mid)
                 candidate_pool = [m.get("id") for m in self.models if m.get("id")]
 
-            requested_model = (request.model or "").strip()
-            for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] "):
-                if requested_model.startswith(prefix):
-                    requested_model = requested_model[len(prefix):].strip()
+            is_vision = self._is_vision_request(request)
 
-            if candidate_pool:
-                fast_candidates = [mid for mid in candidate_pool if self._latencies.get(mid, 0.0) <= MAX_LATENCY_THRESHOLD]
-                if fast_candidates:
-                    candidate_pool = fast_candidates
-
-            est_tokens = estimate_token_count(request)
-
-            if est_tokens > 16000:
-                large_ctx_models = [mid for mid in candidate_pool if any(k in mid.lower() for k in ("31b", "90b", "120b", "550b", "glm-5", "deepseek"))]
-                if large_ctx_models:
-                    candidate_pool = large_ctx_models
-                    logger.info(f"Large prompt detected ({est_tokens} tokens): isolated pool to large-context models.")
-
-            if self._is_vision_request(request):
+            if is_vision:
                 vision_capable = [mid for mid in candidate_pool if self._is_vision_model(mid)]
                 if not vision_capable:
                     all_ids = [m.get("id") for m in self.models if m.get("id")]
                     vision_capable = [mid for mid in all_ids if self._is_vision_model(mid)]
+                if vision_capable:
+                    other_candidates = [mid for mid in candidate_pool if mid not in vision_capable]
+                    candidate_pool = vision_capable + other_candidates
+                    logger.info(f"Vision payload detected: overriding target to {len(vision_capable)} vision-capable models first.")
+                target_model = "nim-free"
+            elif category_target:
+                if category_target == "coding":
+                    cat_filtered = [mid for mid in candidate_pool if is_coding_model(mid)]
+                elif category_target == "reasoning":
+                    cat_filtered = [mid for mid in candidate_pool if is_reasoning_model(mid)]
+                elif category_target == "vision":
+                    cat_filtered = [mid for mid in candidate_pool if is_vision_model(mid)]
+                elif category_target == "moe":
+                    cat_filtered = [mid for mid in candidate_pool if is_moe_model(mid)]
+                elif category_target == "chat":
+                    cat_filtered = [mid for mid in candidate_pool if is_chat_model(mid)]
+                else:
+                    cat_filtered = candidate_pool
 
-                if not vision_capable:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Image/multimodal input detected in request, but no vision-capable models are available."
-                    )
-                candidate_pool = vision_capable
-                logger.info(f"Vision request detected: isolated pool to {len(candidate_pool)} vision models: {candidate_pool}")
+                if cat_filtered:
+                    other_candidates = [mid for mid in candidate_pool if mid not in cat_filtered]
+                    candidate_pool = cat_filtered + other_candidates
+                    logger.info(f"Purpose category '{category_target}' selected: prioritized {len(cat_filtered)} {category_target} models first.")
+                target_model = "nim-free"
+            else:
+                target_model = requested_model if (requested_model and requested_model.lower() not in ("nim-free", "nim_free", "auto")) else get_primary_model()
 
-            if request.tools:
-                tool_incompatible = ["safety", "guard", "translate", "ising-calibration", "topic-control"]
-                tool_capable = [
-                    mid for mid in candidate_pool
-                    if not any(k in mid.lower() for k in tool_incompatible)
-                ]
-                if tool_capable:
-                    candidate_pool = tool_capable
-
-            target_model = requested_model if (requested_model and requested_model.lower() not in ("nim-free", "nim_free", "auto")) else get_primary_model()
-
-            if target_model and target_model.lower() not in ("nim-free", "nim_free", "auto"):
+            if target_model and target_model.lower() not in ("nim-free", "nim_free", "auto") and not is_vision:
+                request.model = target_model
                 if self._is_banned_model(target_model):
                     logger.warning(f"Target model {target_model} is banned/non-chat; routing to healthy pool.")
                     candidate_ids = candidate_pool
@@ -320,6 +373,30 @@ class ModelRouter:
                     other_candidates = [mid for mid in candidate_pool if mid != target_model]
                     candidate_ids = [target_model] + other_candidates
             else:
+                if candidate_pool:
+                    fast_candidates = [mid for mid in candidate_pool if self._latencies.get(mid, 0.0) <= MAX_LATENCY_THRESHOLD]
+                    if fast_candidates:
+                        non_fast = [mid for mid in candidate_pool if mid not in fast_candidates]
+                        candidate_pool = fast_candidates + non_fast
+
+                est_tokens = estimate_token_count(request)
+
+                if est_tokens > 16000:
+                    large_ctx_models = [mid for mid in candidate_pool if any(k in mid.lower() for k in ("31b", "90b", "120b", "550b", "glm-5", "deepseek"))]
+                    if large_ctx_models:
+                        non_large = [mid for mid in candidate_pool if mid not in large_ctx_models]
+                        candidate_pool = large_ctx_models + non_large
+                        logger.info(f"Large prompt detected ({est_tokens} tokens): isolated pool to large-context models.")
+
+                if request.tools and not is_vision:
+                    tool_incompatible = ["safety", "guard", "translate", "ising-calibration", "topic-control"]
+                    tool_capable = [
+                        mid for mid in candidate_pool
+                        if not any(k in mid.lower() for k in tool_incompatible)
+                    ]
+                    if tool_capable:
+                        candidate_pool = tool_capable
+
                 def sort_candidates(mid: str):
                     throttled = 1 if self._rate_limited_until.get(mid, 0) > now else 0
                     rpm_over = 1 if self._get_recent_rpm(mid, now) >= MODEL_MAX_RPM else 0
@@ -333,15 +410,18 @@ class ModelRouter:
 
                     return (throttled, rpm_over, busy, in_flight_count, -perf_score)
 
-                candidate_pool.sort(key=sort_candidates)
-                top_size = min(PRIMARY_POOL_SIZE, len(candidate_pool))
-                if top_size > 0:
-                    top_pool = candidate_pool[:top_size]
-                    standby_pool = candidate_pool[top_size:]
-                    start_idx = self.model_index % len(top_pool)
-                    self.model_index = (self.model_index + 1) % len(top_pool)
-                    ordered_top = [top_pool[(start_idx + i) % len(top_pool)] for i in range(len(top_pool))]
-                    candidate_ids = ordered_top + standby_pool
+                if not category_target and not is_vision:
+                    candidate_pool.sort(key=sort_candidates)
+                    top_size = min(PRIMARY_POOL_SIZE, len(candidate_pool))
+                    if top_size > 0:
+                        top_pool = candidate_pool[:top_size]
+                        standby_pool = candidate_pool[top_size:]
+                        start_idx = self.model_index % len(top_pool)
+                        self.model_index = (self.model_index + 1) % len(top_pool)
+                        ordered_top = [top_pool[(start_idx + i) % len(top_pool)] for i in range(len(top_pool))]
+                        candidate_ids = ordered_top + standby_pool
+                    else:
+                        candidate_ids = candidate_pool
                 else:
                     candidate_ids = candidate_pool
 
@@ -367,14 +447,15 @@ class ModelRouter:
                 base_url, _, keys_to_try = self._get_provider_info(selected_id)
                 for k_idx, current_key in enumerate(keys_to_try):
                     try:
+                        request.model = selected_id
                         response = await call_provider_endpoint(current_key, selected_id, request, base_url)
                         elapsed = time.time() - t0
                         self._record_success(selected_id, elapsed)
                         logger.success(f"Request completed successfully via {provider} :: {selected_id} ({elapsed:.3f}s)")
                         return response
                     except HTTPException as e:
-                        if e.status_code == 429 and k_idx < len(keys_to_try) - 1:
-                            logger.warning(f"Model {provider} :: {selected_id} rate limited on key {current_key[:8]}..., retrying with next API key...")
+                        if e.status_code in (429, 400, 404, 500, 502, 503) and k_idx < len(keys_to_try) - 1:
+                            logger.warning(f"Model {provider} :: {selected_id} error {e.status_code} on key {current_key[:8]}..., retrying next API key...")
                             await asyncio.sleep(0.1)
                             continue
                         raise
@@ -385,6 +466,8 @@ class ModelRouter:
                     logger.warning(f"Model {provider} :: {selected_id} returned status {e.status_code} (Rate Limited/Billing), backing off and failing over...")
                 elif e.status_code == 404:
                     logger.warning(f"Model {provider} :: {selected_id} returned 404 (Not Found), removing from pool and failing over...")
+                elif e.status_code in (400, 500, 502, 503):
+                    logger.warning(f"Model {provider} :: {selected_id} returned status {e.status_code} (Unsupported/Server Error), failing over to next candidate...")
                 else:
                     logger.warning(f"Model {provider} :: {selected_id} returned status {e.status_code}, failing over...")
             except Exception as e:

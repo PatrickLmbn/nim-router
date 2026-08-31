@@ -4,7 +4,13 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
 
-from nim_router.config import get_nvidia_keys, get_openrouter_key, get_opencode_key
+from nim_router.config import (
+    get_nvidia_keys,
+    get_openrouter_key,
+    get_opencode_key,
+    get_groq_keys,
+    get_cerebras_keys,
+)
 from nim_router.engine import ModelRouter
 from nim_router.logger import logger
 
@@ -16,11 +22,19 @@ async def lifespan(app: FastAPI):
     nvidia_keys = get_nvidia_keys()
     openrouter_key = get_openrouter_key()
     opencode_key = get_opencode_key()
+    groq_keys = get_groq_keys()
+    cerebras_keys = get_cerebras_keys()
 
-    if not nvidia_keys and not openrouter_key and not opencode_key:
-        logger.warning("No API keys found in environment (.env). Please configure NVIDIA_API_KEYS, OPENROUTER_API_KEY, or OPENCODE_API_KEY.")
+    if not nvidia_keys and not openrouter_key and not opencode_key and not groq_keys and not cerebras_keys:
+        logger.warning("No API keys found in environment (.env). Please configure NVIDIA_API_KEYS, OPENROUTER_API_KEY, GROQ_API_KEY, or CEREBRAS_API_KEY.")
 
-    _router_instance = ModelRouter(api_key=nvidia_keys, openrouter_key=openrouter_key, opencode_key=opencode_key)
+    _router_instance = ModelRouter(
+        api_key=nvidia_keys,
+        openrouter_key=openrouter_key,
+        opencode_key=opencode_key,
+        groq_keys=groq_keys,
+        cerebras_keys=cerebras_keys
+    )
     await _router_instance.initialize()
     yield
     logger.info("nim-router shutting down")
@@ -42,17 +56,38 @@ def create_app() -> FastAPI:
         if not _router_instance:
             return {"error": "Router not initialized"}
 
-        data = [{"id": "nim-free", "object": "model", "owned_by": "nim-router"}]
+        categories = [
+            ("nim-free", "nim-router"),
+            ("nim-coding", "nim-router"),
+            ("nim-reasoning", "nim-router"),
+            ("nim-vision", "nim-router"),
+            ("nim-moe", "nim-router"),
+            ("nim-chat", "nim-router"),
+        ]
+
+        data = []
+        added_ids = set()
+
+        for cat_id, owner in categories:
+            added_ids.add(cat_id)
+            data.append({"id": cat_id, "object": "model", "owned_by": owner})
 
         nvidia_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "NVIDIA"])
+        groq_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "Groq"])
+        cerebras_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "Cerebras"])
         openrouter_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "OpenRouter"])
         opencode_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "OpenCode"])
 
-        for provider_name, model_group in [("NVIDIA", nvidia_models), ("OpenRouter", openrouter_models), ("OpenCode", opencode_models)]:
+        for provider_name, model_group in [
+            ("NVIDIA", nvidia_models),
+            ("Groq", groq_models),
+            ("Cerebras", cerebras_models),
+            ("OpenRouter", openrouter_models),
+            ("OpenCode", opencode_models)
+        ]:
             for mid in model_group:
-                display_id = f"[{provider_name}] {mid}"
-                data.append({"id": display_id, "object": "model", "owned_by": provider_name.lower()})
-                if mid != display_id:
+                if mid not in added_ids and " " not in mid:
+                    added_ids.add(mid)
                     data.append({"id": mid, "object": "model", "owned_by": provider_name.lower()})
 
         return {"object": "list", "data": data}
@@ -60,8 +95,8 @@ def create_app() -> FastAPI:
     @app.get("/v1/models/{model_id:path}")
     @app.get("/models/{model_id:path}")
     async def get_model(model_id: str):
-        clean_id = model_id
-        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] "):
+        clean_id = model_id.strip()
+        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[Category] "):
             if clean_id.startswith(prefix):
                 clean_id = clean_id[len(prefix):].strip()
         provider = _router_instance._get_provider_name(clean_id) if _router_instance else "nim-router"
@@ -72,17 +107,38 @@ def create_app() -> FastAPI:
         if not _router_instance:
             return {"models": []}
 
-        tags = [{"name": "nim-free", "model": "nim-free", "modified_at": "2026-08-30T00:00:00Z", "size": 0}]
+        categories = [
+            "nim-free",
+            "nim-coding",
+            "nim-reasoning",
+            "nim-vision",
+            "nim-moe",
+            "nim-chat",
+        ]
+
+        tags = []
+        added_names = set()
+
+        for cat_name in categories:
+            added_names.add(cat_name)
+            tags.append({"name": cat_name, "model": cat_name, "modified_at": "2026-08-30T00:00:00Z", "size": 0})
 
         nvidia_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "NVIDIA"])
+        groq_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "Groq"])
+        cerebras_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "Cerebras"])
         openrouter_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "OpenRouter"])
         opencode_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "OpenCode"])
 
-        for provider_name, model_group in [("NVIDIA", nvidia_models), ("OpenRouter", openrouter_models), ("OpenCode", opencode_models)]:
+        for provider_name, model_group in [
+            ("NVIDIA", nvidia_models),
+            ("Groq", groq_models),
+            ("Cerebras", cerebras_models),
+            ("OpenRouter", openrouter_models),
+            ("OpenCode", opencode_models)
+        ]:
             for mid in model_group:
-                display_id = f"[{provider_name}] {mid}"
-                tags.append({"name": display_id, "model": display_id, "modified_at": "2026-08-30T00:00:00Z", "size": 0})
-                if mid != display_id:
+                if mid not in added_names and " " not in mid:
+                    added_names.add(mid)
                     tags.append({"name": mid, "model": mid, "modified_at": "2026-08-30T00:00:00Z", "size": 0})
 
         return {"models": tags}

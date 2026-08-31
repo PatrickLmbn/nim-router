@@ -6,7 +6,13 @@ import httpx
 from fastapi import HTTPException, Response
 from fastapi.responses import StreamingResponse
 
-from nim_router.config import NIM_API_BASE, OPENROUTER_API_BASE, OPENCODE_API_BASE
+from nim_router.config import (
+    NIM_API_BASE,
+    OPENROUTER_API_BASE,
+    OPENCODE_API_BASE,
+    GROQ_API_BASE,
+    CEREBRAS_API_BASE,
+)
 from nim_router.logger import logger
 from nim_router.schemas import ChatCompletionRequest
 from nim_router.catalog import is_banned_model, load_fallback_models
@@ -45,8 +51,11 @@ async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, se
         except Exception:
             return False, 999.0
 
-async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_key: str = "", opencode_key: str = "") -> list[dict]:
+async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_key: str = "", opencode_key: str = "", groq_keys: list[str] | str = "", cerebras_keys: list[str] | str = "") -> list[dict]:
     primary_nvidia_key = api_keys[0] if isinstance(api_keys, list) and api_keys else (api_keys if isinstance(api_keys, str) else "")
+    primary_groq_key = groq_keys[0] if isinstance(groq_keys, list) and groq_keys else (groq_keys if isinstance(groq_keys, str) else "")
+    primary_cerebras_key = cerebras_keys[0] if isinstance(cerebras_keys, list) and cerebras_keys else (cerebras_keys if isinstance(cerebras_keys, str) else "")
+
     all_discovered = []
     candidates_to_probe = []
 
@@ -107,6 +116,46 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                         candidates_to_probe.append((opencode_key, m_copy, OPENCODE_API_BASE))
         except Exception as e:
             logger.error(f"OpenCode discovery failed: {e}")
+
+    if primary_groq_key:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(
+                    f"{GROQ_API_BASE}/models",
+                    headers={"Authorization": f"Bearer {primary_groq_key}"},
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    groq_models = [
+                        m for m in data.get("data", [])
+                        if m.get("id") and not is_banned_model(m.get("id")) and "whisper" not in m.get("id", "").lower()
+                    ]
+                    for m in groq_models:
+                        m_copy = dict(m)
+                        m_copy["provider"] = "Groq"
+                        candidates_to_probe.append((primary_groq_key, m_copy, GROQ_API_BASE))
+        except Exception as e:
+            logger.error(f"Groq model discovery failed: {e}")
+
+    if primary_cerebras_key:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(
+                    f"{CEREBRAS_API_BASE}/models",
+                    headers={"Authorization": f"Bearer {primary_cerebras_key}"},
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    cerebras_models = [
+                        m for m in data.get("data", [])
+                        if m.get("id") and not is_banned_model(m.get("id"))
+                    ]
+                    for m in cerebras_models:
+                        m_copy = dict(m)
+                        m_copy["provider"] = "Cerebras"
+                        candidates_to_probe.append((primary_cerebras_key, m_copy, CEREBRAS_API_BASE))
+        except Exception as e:
+            logger.error(f"Cerebras model discovery failed: {e}")
 
     if candidates_to_probe:
         total_probes = len(candidates_to_probe)

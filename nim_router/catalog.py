@@ -83,12 +83,21 @@ def load_fallback_models(latencies_dict: dict) -> list[dict]:
             try:
                 with open(path, "r") as f:
                     data = json.load(f)
-                working = [mid for mid in data.get("working_models", []) if not is_banned_model(mid)]
-                if working:
-                    logger.info(f"Loaded {len(working)} working models from {path}")
-                    for i, mid in enumerate(working):
-                        latencies_dict[mid] = 0.3 + (i * 0.05)
-                    return [{"id": mid} for mid in working]
+                working = data.get("working_models", [])
+                result = []
+                for item in working:
+                    if isinstance(item, dict):
+                        mid = item.get("id")
+                        if mid and not is_banned_model(mid):
+                            result.append(item)
+                            latencies_dict[mid] = 0.3 + (len(result) * 0.05)
+                    elif isinstance(item, str):
+                        if not is_banned_model(item):
+                            result.append({"id": item})
+                            latencies_dict[item] = 0.3 + (len(result) * 0.05)
+                if result:
+                    logger.info(f"Loaded {len(result)} working models from {path}")
+                    return result
             except Exception as e:
                 logger.warning(f"Failed to read {path}: {e}")
 
@@ -109,4 +118,4 @@ def load_fallback_models(latencies_dict: dict) -> list[dict]:
     clean_fallback = [mid for mid in fallback_list if not is_banned_model(mid)]
     for i, mid in enumerate(clean_fallback):
         latencies_dict[mid] = 0.3 + (i * 0.05)
-    return [{"id": mid} for mid in clean_fallback]
+    return [{"id": mid, "provider": "NVIDIA"} for mid in clean_fallback]
