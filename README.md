@@ -15,6 +15,7 @@ A lightweight, OpenAI-compatible proxy router that aggregates, load-balances, an
 - **Interactive Model Selection CLI (`nim-router models`)**: Easily view and set your primary priority model interactively (with optional live probing scan).
 - **Standalone Endpoint Probing CLI (`nim-router probe`)**: Perform full multi-provider live latency probing scans anytime.
 - **Interactive Key Setup CLI (`nim-router connect`)**: Add or update API keys anytime without editing files manually.
+- **Stream Live Server Logs CLI (`nim-router logs`)**: Stream live PM2 background server logs directly in terminal.
 - **CLI Command Help (`nim-router --help`)**: Comprehensive built-in documentation for all CLI commands.
 - **Multi-Account API Key Rotation**: Rotate up to 3 NVIDIA API keys to multiply rate limits and bypass account-level throttling.
 - **Multimodal & Vision Support**: Automatically isolates and routes image payloads (`image_url`, base64) to vision-capable models.
@@ -96,7 +97,13 @@ nim-router connect
 - Shows masked current key status.
 - Automatically saves to `.env` and refreshes the live router server.
 
-### **4. Command Help (`nim-router --help`)**
+### **4. Stream Server Logs (`nim-router logs`)**
+```bash
+nim-router logs
+```
+- Streams live background server logs from PM2 directly in terminal.
+
+### **5. Command Help (`nim-router --help`)**
 ```bash
 nim-router --help
 ```
@@ -116,9 +123,3 @@ curl -X POST http://localhost:11435/v1/chat/completions \
     "messages": [{"role": "user", "content": "Explain quantum computing in one sentence."}]
   }'
 ```
-
----
-
-## License
-
-MIT License.
