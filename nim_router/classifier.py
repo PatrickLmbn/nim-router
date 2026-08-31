@@ -33,3 +33,17 @@ def is_vision_request(request: ChatCompletionRequest) -> bool:
             ):
                 return True
     return False
+
+def estimate_token_count(request: ChatCompletionRequest) -> int:
+    total_chars = 0
+    for msg in request.messages:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            total_chars += len(content)
+        elif isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    total_chars += len(item.get("text", ""))
+    return int(total_chars / 3.5)
