@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$PROJECT_DIR/.venv/bin/python" ]; then
+    exec "$PROJECT_DIR/.venv/bin/python" "$PROJECT_DIR/nim-router.py" "$@"
+else
+    exec python3 "$PROJECT_DIR/nim-router.py" "$@"
+fi

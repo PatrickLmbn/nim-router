@@ -6,23 +6,27 @@ import httpx
 from fastapi import HTTPException, Response
 from fastapi.responses import StreamingResponse
 
-from nim_router.config import NIM_API_BASE
+from nim_router.config import NIM_API_BASE, OPENROUTER_API_BASE, OPENCODE_API_BASE
 from nim_router.logger import logger
 from nim_router.schemas import ChatCompletionRequest
 from nim_router.catalog import is_banned_model, load_fallback_models
 
-async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, sem: asyncio.Semaphore) -> tuple[bool, float]:
+async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, sem: asyncio.Semaphore, base_url: str = NIM_API_BASE) -> tuple[bool, float]:
     if is_banned_model(model_id):
         return False, 999.0
     async with sem:
         t0 = time.time()
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        if "openrouter.ai" in base_url:
+            headers["HTTP-Referer"] = "https://github.com/patricklmbn/nim-router"
+            headers["X-Title"] = "NIM Router"
         try:
             resp = await client.post(
-                f"{NIM_API_BASE}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json"
-                },
+                f"{base_url.rstrip('/')}/chat/completions",
+                headers=headers,
                 json={
                     "model": model_id,
                     "messages": [{"role": "user", "content": "hi"}],
@@ -41,84 +45,113 @@ async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, se
         except Exception:
             return False, 999.0
 
-async def discover_models(api_key: str, latencies_dict: dict) -> list[dict]:
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(
-                f"{NIM_API_BASE}/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
-            if response.status_code != 200:
-                logger.warning(f"Model discovery returned {response.status_code}")
-                return load_fallback_models(latencies_dict)
+async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_key: str = "", opencode_key: str = "") -> list[dict]:
+    primary_nvidia_key = api_keys[0] if isinstance(api_keys, list) and api_keys else (api_keys if isinstance(api_keys, str) else "")
+    all_discovered = []
 
-            data = response.json()
-            all_models = data.get("data", [])
-            logger.info(f"Discovered {len(all_models)} total models from NVIDIA API. Filtering non-chat/banned models...")
+    if primary_nvidia_key:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(
+                    f"{NIM_API_BASE}/models",
+                    headers={"Authorization": f"Bearer {primary_nvidia_key}"},
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    all_models = data.get("data", [])
+                    logger.info(f"Discovered {len(all_models)} total models from NVIDIA API.")
 
-            sem = asyncio.Semaphore(10)
-            valid_models = [
-                m for m in all_models
-                if m.get("id") and not is_banned_model(m.get("id"))
-            ]
-            total_probes = len(valid_models)
-            completed_count = 0
-            lock = asyncio.Lock()
+                    sem = asyncio.Semaphore(10)
+                    valid_models = [
+                        m for m in all_models
+                        if m.get("id") and not is_banned_model(m.get("id"))
+                    ]
+                    total_probes = len(valid_models)
+                    completed_count = 0
+                    lock = asyncio.Lock()
 
-            async def probe_with_progress(m_obj):
-                nonlocal completed_count
-                mid = m_obj.get("id", "")
-                ok, latency = await probe_model(api_key, client, mid, sem)
-                async with lock:
-                    completed_count += 1
-                    pct = int((completed_count / total_probes) * 100) if total_probes else 100
-                    bar_len = 30
-                    filled = int((completed_count / total_probes) * bar_len) if total_probes else bar_len
-                    filled_bar = "=" * filled
-                    empty_bar = "-" * (bar_len - filled)
-                    sys.stdout.write(f"\r\033[1;36mProbing models:\033[0m \033[90m[\033[1;32m{filled_bar}\033[90m{empty_bar}]\033[0m \033[1;37m{completed_count}/{total_probes}\033[0m \033[1;33m({pct}%)\033[0m")
+                    async def probe_with_progress(m_obj):
+                        nonlocal completed_count
+                        mid = m_obj.get("id", "")
+                        ok, latency = await probe_model(primary_nvidia_key, client, mid, sem, NIM_API_BASE)
+                        async with lock:
+                            completed_count += 1
+                            pct = int((completed_count / total_probes) * 100) if total_probes else 100
+                            bar_len = 30
+                            filled = int((completed_count / total_probes) * bar_len) if total_probes else bar_len
+                            filled_bar = "=" * filled
+                            empty_bar = "-" * (bar_len - filled)
+                            sys.stdout.write(f"\r\033[1;36mProbing NVIDIA models:\033[0m \033[90m[\033[1;32m{filled_bar}\033[90m{empty_bar}]\033[0m \033[1;37m{completed_count}/{total_probes}\033[0m \033[1;33m({pct}%)\033[0m")
+                            sys.stdout.flush()
+
+                        return m_obj, ok, latency
+
+                    probe_results = await asyncio.gather(*[probe_with_progress(m) for m in valid_models])
+                    sys.stdout.write("\n")
                     sys.stdout.flush()
 
-                return m_obj, ok, latency
+                    for m, ok, latency in probe_results:
+                        mid = m.get("id")
+                        if ok and mid:
+                            latencies_dict[mid] = latency
+                            all_discovered.append(m)
+        except Exception as e:
+            logger.error(f"NVIDIA model discovery failed: {e}")
 
-            probe_results = await asyncio.gather(*[probe_with_progress(m) for m in valid_models])
-            sys.stdout.write("\n")
-            sys.stdout.flush()
+    if not all_discovered and not openrouter_key and not opencode_key:
+        all_discovered = load_fallback_models(latencies_dict)
 
-            accessible_models = []
-            for m, ok, latency in probe_results:
-                mid = m.get("id")
-                if ok and mid:
-                    latencies_dict[mid] = latency
-                    accessible_models.append(m)
+    if openrouter_key:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(
+                    f"{OPENROUTER_API_BASE}/models",
+                    headers={"Authorization": f"Bearer {openrouter_key}"},
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    or_models = [m for m in data.get("data", []) if m.get("id", "").endswith(":free")]
+                    logger.info(f"Discovered {len(or_models)} free models from OpenRouter API.")
+                    for m in or_models:
+                        mid = m.get("id")
+                        if mid and mid not in latencies_dict:
+                            latencies_dict[mid] = 0.85
+                            all_discovered.append(m)
+        except Exception as e:
+            logger.error(f"OpenRouter discovery failed: {e}")
 
-            accessible_models.sort(key=lambda m: latencies_dict.get(m.get("id", ""), 999.0))
+    if opencode_key:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(
+                    f"{OPENCODE_API_BASE}/models",
+                    headers={"Authorization": f"Bearer {opencode_key}"},
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    oc_models = [m for m in data.get("data", []) if not is_banned_model(m.get("id", ""))]
+                    logger.info(f"Discovered {len(oc_models)} models from OpenCode API.")
+                    for m in oc_models:
+                        mid = m.get("id")
+                        if mid and mid not in latencies_dict:
+                            latencies_dict[mid] = 0.4
+                            all_discovered.append(m)
+        except Exception as e:
+            logger.error(f"OpenCode discovery failed: {e}")
 
-            logger.success(
-                f"Probe complete: {len(accessible_models)} working chat models found (filtered out non-working & banned models)"
-            )
-            top_3 = accessible_models[:3]
-            logger.info("Top-3 Priority Models (Lowest Latency):")
-            for rank, m in enumerate(top_3, 1):
-                mid = m.get("id", "")
-                logger.info(f"  {rank}. {mid} ({latencies_dict.get(mid, 0.0):.3f}s)")
+    all_discovered.sort(key=lambda m: latencies_dict.get(m.get("id", ""), 999.0))
+    logger.success(f"Multi-provider model discovery complete: {len(all_discovered)} active models in pool.")
+    return all_discovered
 
-            for m in accessible_models[3:]:
-                mid = m.get("id", "")
-                logger.info(f"  - Standby Model: {mid} ({latencies_dict.get(mid, 0.0):.3f}s)")
-
-            return accessible_models
-
-    except Exception as e:
-        logger.error(f"Model discovery failed: {e}, falling back to verified working list")
-        return load_fallback_models(latencies_dict)
-
-async def call_nvidia_endpoint(api_key: str, model_id: str, request: ChatCompletionRequest) -> Response:
-    url = f"{NIM_API_BASE}/chat/completions"
+async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompletionRequest, base_url: str = NIM_API_BASE) -> Response:
+    url = f"{base_url.rstrip('/')}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    if "openrouter.ai" in base_url:
+        headers["HTTP-Referer"] = "https://github.com/patricklmbn/nim-router"
+        headers["X-Title"] = "NIM Router"
 
     sanitized_messages = []
     for msg in request.messages:
@@ -229,7 +262,7 @@ async def call_nvidia_endpoint(api_key: str, model_id: str, request: ChatComplet
 
                 return Response(content=response.text, media_type="application/json", status_code=200)
             elif response.status_code in (429, 500, 502, 503, 504):
-                raise HTTPException(status_code=response.status_code, detail=f"NVIDIA API error: {response.status_code}")
+                raise HTTPException(status_code=response.status_code, detail=f"API error: {response.status_code}")
             elif response.status_code == 404:
                 raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
             else:
@@ -240,12 +273,15 @@ async def call_nvidia_endpoint(api_key: str, model_id: str, request: ChatComplet
                     detail = response.text
                 raise HTTPException(status_code=response.status_code, detail=detail)
         except httpx.RequestError as e:
-            logger.error(f"Request error calling NVIDIA API for {model_id}: {e}")
+            logger.error(f"Request error calling API for {model_id}: {e}")
             raise HTTPException(status_code=502, detail=str(e))
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Failed to call NVIDIA API for {model_id}: {e}")
+            logger.error(f"Failed to call API for {model_id}: {e}")
             raise HTTPException(status_code=502, detail=str(e))
         finally:
             await client.aclose()
+
+async def call_nvidia_endpoint(api_key: str, model_id: str, request: ChatCompletionRequest) -> Response:
+    return await call_provider_endpoint(api_key, model_id, request, NIM_API_BASE)
