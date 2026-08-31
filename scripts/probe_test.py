@@ -1,9 +1,11 @@
 import asyncio
 import os
+import json
 import httpx
 from dotenv import load_dotenv
 
-load_dotenv(dotenv_path="/home/peanut/Desktop/hermes/nim-router/.env")
+env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+load_dotenv(dotenv_path=env_path)
 api_key = os.getenv("NVIDIA_API_KEY")
 
 async def test_models():
@@ -16,20 +18,20 @@ async def test_models():
         if resp.status_code != 200:
             print(resp.text)
             return
-        
+
         data = resp.json()
         models = data.get("data", [])
         print(f"Total models returned by API: {len(models)}")
-        
+
         all_ids = [m.get("id") for m in models if m.get("id")]
         print(f"Sample model IDs: {all_ids[:20]}")
-        
+
         print("\nTesting chat completions on models...")
         working_models = []
         not_working = []
-        
+
         semaphore = asyncio.Semaphore(10)
-        
+
         async def probe(model_id):
             async with semaphore:
                 try:
@@ -57,7 +59,7 @@ async def test_models():
 
         tasks = [probe(mid) for mid in all_ids]
         await asyncio.gather(*tasks)
-        
+
         working_list = sorted([m[0] for m in working_models])
         non_working_list = sorted([m[0] for m in not_working])
 
@@ -73,7 +75,6 @@ async def test_models():
         for m, status, note in sorted(not_working, key=lambda x: (str(x[1]), x[0])):
             print(f"  - {m:<45} [Status: {status}]")
 
-
         print("\n" + "=" * 70)
         print("PYTHON LIST FORMAT FOR COPY/PASTE OR ROUTER INTEGRATION")
         print("=" * 70)
@@ -87,8 +88,7 @@ async def test_models():
             print(f'    "{m}",')
         print("]")
 
-        import json
-        output_file = os.path.join(os.path.dirname(__file__), "models_status.json")
+        output_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "models_status.json")
         with open(output_file, "w") as f:
             json.dump({
                 "total_models": len(all_ids),
@@ -103,5 +103,3 @@ async def test_models():
 
 if __name__ == "__main__":
     asyncio.run(test_models())
-
-
