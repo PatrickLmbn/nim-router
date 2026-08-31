@@ -1,3 +1,14 @@
+```text
+ ________   ___  _____ ______   
+|\   ___  \|\  \|\   _ \  _   \  
+\ \  \\ \  \ \  \ \  \\\__\ \  \ 
+ \ \  \\ \  \ \  \ \  \\|__| \  \ 
+  \ \  \\ \  \ \  \ \  \    \ \  \ 
+   \ \__\ \__\ \__\ \__\    \ \__\
+    \|__| \|__|\|__|\|__|     \|__|
+            R O U T E R
+```
+
 # Universal Multi-Provider Free Model Router
 
 A lightweight, OpenAI-compatible proxy router that aggregates, load-balances, and fails over across **NVIDIA NIM Free Tier**, **OpenRouter Free Tier**, and **OpenCode API**. It turns free tier AI endpoints into a single, high-availability, ultra-low latency API endpoint with dynamic latency ranking, account key rotation, and zero-downtime cross-provider failover.
@@ -14,6 +25,7 @@ A lightweight, OpenAI-compatible proxy router that aggregates, load-balances, an
   - **OpenCode API** (`OPENCODE_API_KEY`)
 - **Primary Model Priority with Free Fallback**: Set any discovered free model as your primary priority model. If it encounters rate limits (`429`), out-of-credits (`402`), or server errors (`5xx`), `nimrouter` automatically fails over to the lowest-latency free models across providers with zero downtime.
 - **Unified Virtual Model (`nim-free` / `auto`)**: Send requests to a single model identifier that automatically load-balances across all healthy free models ranked by real-time latency, generation speed, and reliability.
+- **Maximum Latency Threshold Filtering (`MAX_LATENCY_THRESHOLD=3.0`s)**: Restricts active pool to endpoints responding in under 3.0 seconds, automatically filtering out congested/overloaded server endpoints.
 - **Dynamic EMA Reliability Scoring (0.05–1.0)**: Tracks real-time model stability over time using Exponential Moving Average (EMA) scoring to downweight unstable endpoints smoothly.
 - **Tokens-Per-Second (TPS) Speed Ranking**: Measures actual text generation throughput (tokens/second) to rank fast-generating endpoints first.
 - **Large Context Window Matching**: Automatically detects large prompts (>16,000 tokens) and isolates the pool to 128k+ context models to prevent context-limit errors.
@@ -47,7 +59,7 @@ Client Request (model: "nim-free" or "auto")
                                        │
                                        ▼
                        [Route to Highest Ranked Free Model]
-               (Combined Latency + TPS Speed + EMA Reliability)
+               (Combined Latency + TPS Speed + EMA Reliability + <3.0s Threshold)
 ```
 
 ---
@@ -84,61 +96,33 @@ You can control `nimrouter` directly from your terminal:
 ```bash
 nimrouter models
 ```
-- Asks user whether to run live probing scan first (Recommended, optional).
-- Displays provider-categorized terminal menu (`--- NVIDIA NIM Models ---`, `--- OpenRouter Free Models ---`, `--- OpenCode Models ---`).
-- Select your primary model or choose `[0] nim-free` for auto free pool rotation.
 
 ### **2. Probe Endpoints (`nimrouter probe`)**
 ```bash
 nimrouter probe
 ```
-- Performs a live probing scan across all configured provider endpoints (NVIDIA, OpenRouter, OpenCode).
-- Saves discovered working models to `config/models_status.json`.
-- Refreshes the active pool of the live running `nimrouter` server process.
 
 ### **3. Configure API Keys (`nimrouter connect`)**
 ```bash
 nimrouter connect
 ```
-- Interactive step-by-step prompts for NVIDIA, OpenRouter, and OpenCode API keys.
-- Shows masked current key status.
-- Automatically saves to `.env` and refreshes the live router server.
 
 ### **4. Restart Server (`nimrouter restart`)**
 ```bash
 nimrouter restart
 ```
-- Restarts the background `nimrouter` server process via PM2.
 
 ### **5. Stop Server (`nimrouter stop`)**
 ```bash
 nimrouter stop
 ```
-- Stops the background `nimrouter` server process via PM2.
 
 ### **6. Stream Server Logs (`nimrouter logs`)**
 ```bash
 nimrouter logs
 ```
-- Streams live background server logs from PM2 directly in terminal.
 
 ### **7. Command Help (`nimrouter --help`)**
 ```bash
 nimrouter --help
-```
-- Displays built-in CLI command menu and usage examples.
-
----
-
-## Quick API Example
-
-### 1. Standard Request (Auto Free Pool Rotation)
-```bash
-curl -X POST http://localhost:11435/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer local" \
-  -d '{
-    "model": "nim-free",
-    "messages": [{"role": "user", "content": "Explain quantum computing in one sentence."}]
-  }'
 ```

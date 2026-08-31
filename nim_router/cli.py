@@ -10,6 +10,17 @@ import httpx
 from nim_router.config import get_nvidia_keys, get_openrouter_key, get_opencode_key, get_primary_model
 from nim_router.engine import ModelRouter
 
+NIM_BANNER = """\033[1;36m
+ ________   ___  _____ ______   
+|\   ___  \|\  \|\   _ \  _   \  
+\ \  \\\\ \  \ \  \ \  \\\\\__\ \  \ 
+ \ \  \\\\ \  \ \  \ \  \\|__| \  \ 
+  \ \  \\\\ \  \ \  \ \  \    \ \  \ 
+   \ \__\ \__\ \__\ \__\    \ \__\
+    \|__| \|__|\|__|\|__|     \|__|
+            \033[1;37mR O U T E R\033[1;36m
+\033[0m"""
+
 def get_provider_name(m_obj: dict | str) -> str:
     if isinstance(m_obj, dict):
         if "provider" in m_obj:
@@ -37,9 +48,7 @@ def save_working_models(model_ids: list[str]):
         pass
 
 def show_help():
-    print("\033[1;36m===================================================\033[0m")
-    print("\033[1;37m   NIM Router CLI - Command Reference       \033[0m")
-    print("\033[1;36m===================================================\033[0m\n")
+    print(NIM_BANNER)
     print("\033[1;33mUsage:\033[0m nimrouter [command]\n")
     print("\033[1;33mAvailable Commands:\033[0m")
     print("  \033[1;32mmodels, list, select\033[0m   Interactively choose primary priority model.")
@@ -97,9 +106,8 @@ async def async_probe_models():
     openrouter_key = get_openrouter_key()
     opencode_key = get_opencode_key()
 
-    print("\033[1;36m===================================================\033[0m")
-    print("\033[1;37m   NIM Router - Endpoint Probing Scan       \033[0m")
-    print("\033[1;36m===================================================\033[0m\n")
+    print(NIM_BANNER)
+    print("\033[1;37m   Endpoint Probing Scan       \033[0m\n")
 
     print("\033[90mStarting live multi-provider endpoint probing scan...\033[0m")
     router = ModelRouter(api_key=nvidia_keys, openrouter_key=openrouter_key, opencode_key=opencode_key)
@@ -128,9 +136,8 @@ async def interactive_model_selector():
     openrouter_key = get_openrouter_key()
     opencode_key = get_opencode_key()
 
-    print("\033[1;36m===================================================\033[0m")
-    print("\033[1;37m   NIM Router - Model Priority Selector      \033[0m")
-    print("\033[1;36m===================================================\033[0m\n")
+    print(NIM_BANNER)
+    print("\033[1;37m   Model Priority Selector      \033[0m\n")
 
     current_primary = get_primary_model()
     print(f"Current Primary Model: \033[1;32m{current_primary}\033[0m\n")
@@ -246,9 +253,8 @@ async def interactive_model_selector():
         pass
 
 async def async_connect_api_keys():
-    print("\033[1;36m===================================================\033[0m")
-    print("\033[1;37m   NIM Router - Multi-Provider Key Config   \033[0m")
-    print("\033[1;36m===================================================\033[0m\n")
+    print(NIM_BANNER)
+    print("\033[1;37m   Multi-Provider Key Config   \033[0m\n")
 
     current_nvidia = get_nvidia_keys()
     current_or = get_openrouter_key()
