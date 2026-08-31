@@ -211,9 +211,7 @@ fi
 EOF
 cp "$HOME/.local/bin/nimrouter" "$HOME/.local/bin/nim-router"
 chmod +x "$DIR/nim-router.py" "$HOME/.local/bin/nimrouter" "$HOME/.local/bin/nim-router" 2>/dev/null || true
-sudo ln -sf "$HOME/.local/bin/nimrouter" /usr/local/bin/nimrouter 2>/dev/null || true
-sudo ln -sf "$HOME/.local/bin/nim-router" /usr/local/bin/nim-router 2>/dev/null || true
-echo -e "${GREEN}[✓] Installed 'nimrouter' CLI command globally to ~/.local/bin/nimrouter.${NC}"
+echo -e "${GREEN}[✓] Installed 'nimrouter' CLI command to ~/.local/bin/nimrouter.${NC}"
 
 echo ""
 if command -v pm2 &> /dev/null; then
