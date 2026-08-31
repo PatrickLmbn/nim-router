@@ -87,8 +87,9 @@ def show_help():
     print("\033[1;33mUsage:\033[0m nim [command]\n")
     print("\033[1;33mAvailable Commands:\033[0m")
     print("  \033[1;32mmodels, list, select\033[0m   Interactively choose primary priority model.")
+    print("  \033[1;32mkeys\033[0m                   Manage or add multiple API keys per provider.")
+    print("  \033[1;32mconnect, config\033[0m        Interactively set primary provider API keys.")
     print("  \033[1;32mprobe, scan\033[0m            Run live probing scan across all enabled providers.")
-    print("  \033[1;32mconnect, keys, config\033[0m  Interactively add or update provider API keys.")
     print("  \033[1;32mrestart, reload\033[0m        Restart background server process via PM2.")
     print("  \033[1;32mstop\033[0m                   Stop background server process via PM2.")
     print("  \033[1;32mlogs, log\033[0m              Stream live nim server logs.")
@@ -97,8 +98,9 @@ def show_help():
     print("  Starts the nim OpenAI-compatible proxy server (Port 11435).\n")
     print("\033[1;33mExamples:\033[0m")
     print("  nim models       Select primary model priority")
+    print("  nim keys         Manage multiple keys per provider")
+    print("  nim connect      Set primary provider credentials")
     print("  nim probe        Probe endpoints and refresh active model pool")
-    print("  nim connect      Set or update API credentials")
     print("  nim restart      Restart background server process")
     print("  nim stop         Stop background server process")
     print("  nim logs         View live background server logs")
@@ -342,7 +344,7 @@ async def interactive_model_selector():
 
 async def async_connect_api_keys():
     print(get_rainbow_banner())
-    print("\033[1;37m   Multi-Provider Key Config   \033[0m\n")
+    print("\033[1;37m   Multi-Provider Key Setup    \033[0m\n")
 
     current_nvidia = get_nvidia_keys()
     current_or = get_openrouter_key()
@@ -357,16 +359,15 @@ async def async_connect_api_keys():
     groq_disp = ", ".join([mask(k) for k in current_groq]) if current_groq else "(Not set)"
     cerebras_disp = ", ".join([mask(k) for k in current_cerebras]) if current_cerebras else "(Not set)"
 
-    print(f"Current NVIDIA Keys:   \033[1;33m{nv_disp}\033[0m")
-    print(f"Current Groq Keys:     \033[1;33m{groq_disp}\033[0m")
-    print(f"Current Cerebras Keys: \033[1;33m{cerebras_disp}\033[0m")
+    print(f"Current NVIDIA Key:    \033[1;33m{nv_disp}\033[0m")
+    print(f"Current Groq Key:      \033[1;33m{groq_disp}\033[0m")
+    print(f"Current Cerebras Key:  \033[1;33m{cerebras_disp}\033[0m")
     print(f"Current OpenRouter Key:\033[1;33m{mask(current_or)}\033[0m")
     print(f"Current OpenCode Key:  \033[1;33m{mask(current_oc)}\033[0m\n")
 
     print("\033[90mEnter new API keys (inputs hidden, press Enter to keep current value):\033[0m\n")
     try:
-        k1 = getpass.getpass("Primary NVIDIA API Key #1: ").strip()
-        k2 = getpass.getpass("Secondary NVIDIA API Key #2 (Optional): ").strip()
+        k1 = getpass.getpass("NVIDIA API Key: ").strip()
         groq_k = getpass.getpass("Groq Free API Key (Optional): ").strip()
         cerebras_k = getpass.getpass("Cerebras Free API Key (Optional): ").strip()
         or_key = getpass.getpass("OpenRouter API Key (Optional): ").strip()
@@ -375,18 +376,7 @@ async def async_connect_api_keys():
         print("\n\033[90mOperation cancelled.\033[0m")
         sys.exit(0)
 
-    keys_combined = []
-    if k1:
-        keys_combined.append(k1)
-    elif current_nvidia:
-        keys_combined.append(current_nvidia[0])
-
-    if k2:
-        keys_combined.append(k2)
-    elif len(current_nvidia) > 1:
-        keys_combined.append(current_nvidia[1])
-
-    final_nvidia = ",".join(keys_combined)
+    final_nvidia = k1 if k1 else ",".join(current_nvidia)
     final_or = or_key if or_key else current_or
     final_oc = oc_key if oc_key else current_oc
     final_groq = groq_k if groq_k else ",".join(current_groq)
@@ -423,6 +413,7 @@ async def async_connect_api_keys():
             f.write(f"{k}={v}\n")
 
     print("\n\033[1;32m[✓] Saved API keys to .env file!\033[0m")
+    print("\033[90m(Tip: Use 'nim keys' to add or manage multiple keys per provider)\033[0m")
 
     try:
         port = int(env_vars.get("PORT", 11435))
@@ -430,6 +421,114 @@ async def async_connect_api_keys():
             r = await client.post(f"http://127.0.0.1:{port}/refresh")
             if r.status_code == 200:
                 print("\033[1;32m[✓] Live nim server refreshed with new keys.\033[0m")
+    except Exception:
+        pass
+
+async def async_manage_provider_keys():
+    print(get_rainbow_banner())
+    print("\033[1;37m   Multi-Key Provider Manager   \033[0m\n")
+
+    current_nvidia = get_nvidia_keys()
+    current_groq = get_groq_keys()
+    current_cerebras = get_cerebras_keys()
+    current_or = get_openrouter_key()
+    current_oc = get_opencode_key()
+
+    def mask_list(keys: list[str]) -> str:
+        if not keys:
+            return "(Not set)"
+        return ", ".join([f"{k[:8]}...{k[-4:]}" if len(k) > 12 else k for k in keys])
+
+    print("\033[1;33mSelect Provider to Add or Manage Keys:\033[0m\n")
+    print(f"  \033[1;32m[1]\033[0m NVIDIA NIM     \033[90m({len(current_nvidia)} keys: {mask_list(current_nvidia)})\033[0m")
+    print(f"  \033[1;32m[2]\033[0m Groq LPU      \033[90m({len(current_groq)} keys: {mask_list(current_groq)})\033[0m")
+    print(f"  \033[1;32m[3]\033[0m Cerebras      \033[90m({len(current_cerebras)} keys: {mask_list(current_cerebras)})\033[0m")
+    print(f"  \033[1;32m[4]\033[0m OpenRouter    \033[90m(Key: {mask_list([current_or] if current_or else [])})\033[0m")
+    print(f"  \033[1;32m[5]\033[0m OpenCode      \033[90m(Key: {mask_list([current_oc] if current_oc else [])})\033[0m\n")
+
+    try:
+        choice = input("\033[1;36mSelect provider number [1-5]: \033[0m").strip()
+        if not choice:
+            return
+        prov_num = int(choice)
+    except (KeyboardInterrupt, EOFError):
+        print("\n\033[90mOperation cancelled.\033[0m")
+        sys.exit(0)
+    except ValueError:
+        print("\033[91mInvalid selection.\033[0m")
+        return
+
+    provider_env_keys = {
+        1: ("NVIDIA_API_KEYS", "NVIDIA NIM", current_nvidia),
+        2: ("GROQ_API_KEYS", "Groq LPU", current_groq),
+        3: ("CEREBRAS_API_KEYS", "Cerebras", current_cerebras),
+        4: ("OPENROUTER_API_KEY", "OpenRouter", [current_or] if current_or else []),
+        5: ("OPENCODE_API_KEY", "OpenCode", [current_oc] if current_oc else []),
+    }
+
+    if prov_num not in provider_env_keys:
+        print("\033[91mInvalid provider choice.\033[0m")
+        return
+
+    env_var_name, prov_label, existing_keys = provider_env_keys[prov_num]
+
+    print(f"\n\033[1;36mConfiguring keys for {prov_label}\033[0m")
+    if existing_keys:
+        print(f"Current Keys: \033[1;33m{', '.join(existing_keys)}\033[0m\n")
+    else:
+        print("Current Keys: \033[1;33m(None)\033[0m\n")
+
+    print("\033[90mOptions:\033[0m")
+    print("  - Enter a new key (or multiple comma-separated keys) to add/update")
+    print("  - Type \033[1;31mclear\033[0m to remove all keys for this provider")
+    print("  - Press \033[1;37mEnter\033[0m to keep current keys unchanged\n")
+
+    try:
+        new_val = getpass.getpass(f"Enter {prov_label} Key(s): ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print("\n\033[90mOperation cancelled.\033[0m")
+        sys.exit(0)
+
+    if not new_val:
+        print("\033[90mNo changes made.\033[0m")
+        return
+
+    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    env_vars = {}
+    if os.path.exists(env_path):
+        with open(env_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line and "=" in line and not line.startswith("#"):
+                    parts = line.split("=", 1)
+                    env_vars[parts[0].strip()] = parts[1].strip()
+
+    if new_val.lower() == "clear":
+        env_vars.pop(env_var_name, None)
+        print(f"\033[1;32m[✓] Cleared all API keys for {prov_label}.\033[0m")
+    else:
+        new_keys_list = [k.strip() for k in new_val.split(",") if k.strip()]
+        if prov_num in (1, 2, 3):
+            combined_keys = []
+            for k in existing_keys + new_keys_list:
+                if k and k not in combined_keys:
+                    combined_keys.append(k)
+            env_vars[env_var_name] = ",".join(combined_keys)
+            print(f"\033[1;32m[✓] Updated {prov_label} keys: {len(combined_keys)} total key(s) configured.\033[0m")
+        else:
+            env_vars[env_var_name] = new_keys_list[0] if new_keys_list else ""
+            print(f"\033[1;32m[✓] Updated {prov_label} key successfully.\033[0m")
+
+    with open(env_path, "w") as f:
+        for k, v in env_vars.items():
+            f.write(f"{k}={v}\n")
+
+    try:
+        port = int(env_vars.get("PORT", 11435))
+        async with httpx.AsyncClient(timeout=3) as client:
+            r = await client.post(f"http://127.0.0.1:{port}/refresh")
+            if r.status_code == 200:
+                print("\033[1;32m[✓] Live nim server refreshed with updated keys.\033[0m")
     except Exception:
         pass
 
@@ -448,6 +547,9 @@ def probe_active_models():
 
 def connect_api_keys():
     safe_run(async_connect_api_keys())
+
+def manage_keys():
+    safe_run(async_manage_provider_keys())
 
 def main():
     safe_run(interactive_model_selector())

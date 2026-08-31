@@ -174,9 +174,7 @@ if [ ! -f .env ]; then
         echo -e "${GREEN}[✓] Created .env from .env.example.${NC}"
         
         echo -e "${BOLD}=== Multi-Provider API Key Setup (Inputs Hidden) ===${NC}"
-        read -r -s -p "Enter Primary NVIDIA API Key #1 (Recommended): " key1
-        echo ""
-        read -r -s -p "Enter Secondary NVIDIA API Key #2 (Optional - press Enter to skip): " key2
+        read -r -s -p "Enter NVIDIA API Key (Recommended): " key1
         echo ""
         read -r -s -p "Enter Groq Free API Key (Optional - press Enter to skip): " groq_key
         echo ""
@@ -187,17 +185,11 @@ if [ ! -f .env ]; then
         read -r -s -p "Enter OpenCode API Key (Optional - press Enter to skip): " opencode_key
         echo ""
 
-        keys_combined=""
-        [ -n "$key1" ] && keys_combined="$key1"
-        if [ -n "$key2" ]; then
-            [ -n "$keys_combined" ] && keys_combined="$keys_combined,$key2" || keys_combined="$key2"
-        fi
-
-        if [ -n "$keys_combined" ]; then
+        if [ -n "$key1" ]; then
             if grep -q "NVIDIA_API_KEYS=" .env; then
-                sed -i "s/^NVIDIA_API_KEYS=.*/NVIDIA_API_KEYS=$keys_combined/" .env
+                sed -i "s/^NVIDIA_API_KEYS=.*/NVIDIA_API_KEYS=$key1/" .env
             else
-                echo "NVIDIA_API_KEYS=$keys_combined" >> .env
+                echo "NVIDIA_API_KEYS=$key1" >> .env
             fi
         fi
 
@@ -234,6 +226,7 @@ if [ ! -f .env ]; then
         fi
 
         echo -e "${GREEN}[✓] Saved configured provider API key(s) to .env${NC}"
+        echo -e "${YELLOW}(Tip: Use 'nim keys' anytime to manage or add multiple keys per provider!)${NC}"
     fi
 else
     echo -e "${GREEN}[✓] .env file already exists.${NC}"

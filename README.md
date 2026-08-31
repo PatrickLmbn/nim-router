@@ -34,16 +34,16 @@ git clone https://github.com/PatrickLmbn/nim-router.git && cd nim-router && inst
 git clone https://github.com/PatrickLmbn/nim-router.git; cd nim-router; .\install.bat
 ```
 
-> **Note**: The installer interactively prompts for your **NVIDIA API Keys**, **Groq API Key**, **Cerebras API Key**, **OpenRouter API Key**, and **OpenCode API Key**.
+> **Note**: The installer interactively prompts for your **NVIDIA API Key**, **Groq API Key**, **Cerebras API Key**, **OpenRouter API Key**, and **OpenCode API Key**. Use `nim keys` anytime to add multiple keys per provider for key rotation!
 
 ---
 
 ## Features
 
 - **Universal Free Multi-Provider Support**:
-  - **NVIDIA NIM Free Tier** (`NVIDIA_API_KEY`)
-  - **Groq LPU Free Tier** (`GROQ_API_KEY` - 500+ tokens/sec)
-  - **Cerebras Wafer-Scale Free Tier** (`CEREBRAS_API_KEY` - 1800+ tokens/sec)
+  - **NVIDIA NIM Free Tier** (`NVIDIA_API_KEYS` / `NVIDIA_API_KEY`)
+  - **Groq LPU Free Tier** (`GROQ_API_KEYS` / `GROQ_API_KEY` - 500+ tokens/sec)
+  - **Cerebras Wafer-Scale Free Tier** (`CEREBRAS_API_KEYS` / `CEREBRAS_API_KEY` - 1800+ tokens/sec)
   - **OpenRouter Free Tier** (`OPENROUTER_API_KEY` - automatically pools all `:free` models)
   - **OpenCode API** (`OPENCODE_API_KEY`)
 - **Purpose-Based Virtual Category Models**: Select specialized virtual model categories directly in your agent or harness:
@@ -59,7 +59,7 @@ git clone https://github.com/PatrickLmbn/nim-router.git; cd nim-router; .\instal
   - **Maximum Latency Threshold Filtering (`MAX_LATENCY_THRESHOLD=3.0`s)**: Restricts active pool to endpoints responding in under 3.0 seconds, automatically filtering out congested/overloaded server endpoints.
   - **Dynamic EMA Reliability Scoring (0.05–1.0)**: Tracks real-time model stability over time using Exponential Moving Average (EMA) scoring to downweight unstable endpoints smoothly.
   - **Tokens-Per-Second (TPS) Speed Ranking**: Measures actual text generation throughput (tokens/second) to rank fast-generating endpoints first.
-  - **Multi-Account API Key Round-Robin**: Automatically rotates requests across multiple configured provider API keys to multiply rate limits and bypass account throttling.
+  - **Multi-Account API Key Round-Robin (`nim keys`)**: Interactively configure and rotate requests across multiple API keys per provider to multiply rate limits.
   - **Large Context Window Matching**: Automatically detects large prompts (>16,000 tokens) and isolates the pool to 128k+ context models.
   - **Tool-Calling Compatibility**: Isolates tool-enabled requests to models supporting function calling.
   - **Real-Time Token Streaming (SSE)**: Full Server-Sent Events support for streaming responses in interactive applications and AI coding assistants.
@@ -166,32 +166,39 @@ print()
 nim models
 ```
 
-### **2. Probe Endpoints (`nim probe`)**
+### **2. Manage Multiple Keys Per Provider (`nim keys`)**
+```bash
+nim keys
+```
+Interactively select a provider (NVIDIA, Groq, Cerebras, OpenRouter, OpenCode) to view current keys and add/append additional API keys for round-robin rotation.
+
+### **3. Configure API Credentials (`nim connect`)**
+```bash
+nim connect
+```
+Interactively set single primary API keys for each provider.
+
+### **4. Probe Endpoints (`nim probe`)**
 ```bash
 nim probe
 ```
 
-### **3. Configure API Keys (`nim connect`)**
-```bash
-nim connect
-```
-
-### **4. Restart Server (`nim restart`)**
+### **5. Restart Server (`nim restart`)**
 ```bash
 nim restart
 ```
 
-### **5. Stop Server (`nim stop`)**
+### **6. Stop Server (`nim stop`)**
 ```bash
 nim stop
 ```
 
-### **6. Stream Server Logs (`nim logs`)**
+### **7. Stream Server Logs (`nim logs`)**
 ```bash
 nim logs
 ```
 
-### **7. Command Help (`nim --help`)**
+### **8. Command Help (`nim --help`)**
 ```bash
 nim --help
 ```

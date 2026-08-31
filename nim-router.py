@@ -20,7 +20,10 @@ if __name__ == "__main__":
             elif cmd in ("probe", "scan"):
                 from nim_router.cli import probe_active_models
                 probe_active_models()
-            elif cmd in ("connect", "keys", "key", "config"):
+            elif cmd in ("keys", "key"):
+                from nim_router.cli import manage_keys
+                manage_keys()
+            elif cmd in ("connect", "config"):
                 from nim_router.cli import connect_api_keys
                 connect_api_keys()
             elif cmd in ("restart", "reload"):

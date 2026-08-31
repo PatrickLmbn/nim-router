@@ -1,122 +1,114 @@
 @echo off
 setlocal enabledelayedexpansion
 
-cd /d "%~dp0"
-
-echo ===================================
-echo   NIM Router Windows Setup
-echo ===================================
-echo.
-
-:: 1. Detect Python
-set PYTHON_CMD=
-where python >nul 2>nul
-if %errorlevel% equ 0 (
-    set PYTHON_CMD=python
-) else (
-    where py >nul 2>nul
-    if %errorlevel% equ 0 (
-        set PYTHON_CMD=py -3
+if not exist nim-router.py (
+    set "INSTALL_DIR=%USERPROFILE%\nim-router"
+    if not exist "!INSTALL_DIR!" (
+        git clone https://github.com/PatrickLmbn/nim-router.git "!INSTALL_DIR!"
     )
+    cd /d "!INSTALL_DIR!"
 )
 
-if "%PYTHON_CMD%"=="" (
-    echo [ERROR] Python is not installed or not added to PATH.
-    echo.
-    echo Please install Python 3.8+ from https://www.python.org/downloads/
-    echo (Make sure to check "Add python.exe to PATH" during installation)
-    echo.
-    echo Or install via Windows Package Manager:
-    echo   winget install Python.Python.3.11
-    echo.
-    pause
+echo.
+echo  ________   ___  _____ ______   
+echo ^|\   ___  ^|\  ^|\   _ \  _   \  
+echo \ \  \\ \  \ \  \ \  \\\__\ \  \ 
+echo  \ \  \\ \  \ \  \ \  \\|__| \  \ 
+echo   \ \  \\ \  \ \  \ \  \    \ \  \ 
+echo    \ \__\ \__\ \__\ \__\    \ \__\
+echo     \|__| \|__|\|__|\|__|     \|__|
+echo             R O U T E R
+echo.
+echo === Universal Multi-Provider Free Model Router ===
+echo.
+
+where python >nul 2>nul
+if %errorlevel% neq 0 (
+    echo [ERROR] Python is not installed or not in PATH.
+    echo Please download and install Python 3.8+ from https://www.python.org/
     exit /b 1
 )
 
-for /f "delims=" %%v in ('%PYTHON_CMD% --version 2^>^&1') do echo [✓] Found %%v
-
-:: 2. Install Dependencies
-echo.
-echo Installing Python dependencies...
-%PYTHON_CMD% -m pip install -r requirements.txt
+python -c "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)" >nul 2>nul
 if %errorlevel% neq 0 (
-    echo.
-    echo [!] Standard pip install failed. Creating virtual environment (.venv)...
-    %PYTHON_CMD% -m venv .venv
-    if %errorlevel% neq 0 (
-        echo [ERROR] Failed to create virtual environment.
-        pause
-        exit /b 1
-    )
-    call .venv\Scripts\activate.bat
-    python -m pip install --upgrade pip
-    python -m pip install -r requirements.txt
-    if %errorlevel% neq 0 (
-        echo [ERROR] Failed to install dependencies in virtual environment.
-        pause
-        exit /b 1
-    )
-    echo [✓] Dependencies installed in .venv
-) else (
-    echo [✓] Dependencies installed successfully.
+    echo [ERROR] Python version must be 3.8 or higher.
+    exit /b 1
 )
 
-:: 3. Configure .env
+echo [✓] Python found.
+
+echo.
+echo Installing Python dependencies...
+python -m pip install -r requirements.txt
+python -m pip install -e . >nul 2>nul
+
 echo.
 if not exist .env (
     if exist .env.example (
         copy .env.example .env >nul
-        echo [✓] Created .env from .env.example
+        echo [✓] Created .env from .env.example.
         echo.
         echo === Multi-Provider API Key Setup ===
-        set /p KEY1="Enter Primary NVIDIA API Key #1 (Recommended): "
-        set /p KEY2="Enter Secondary NVIDIA API Key #2 (Optional - press Enter to skip): "
-        set /p OR_KEY="Enter OpenRouter API Key (Optional - press Enter to skip): "
-        set /p OPENCODE_KEY="Enter OpenCode API Key (Optional - press Enter to skip): "
+        set /p key1="Enter NVIDIA API Key (Recommended): "
+        set /p groq_key="Enter Groq Free API Key (Optional): "
+        set /p cerebras_key="Enter Cerebras Free API Key (Optional): "
+        set /p or_key="Enter OpenRouter API Key (Optional): "
+        set /p opencode_key="Enter OpenCode API Key (Optional): "
         
-        set KEYS=
-        if not "!KEY1!"=="" set KEYS=!KEY1!
-        if not "!KEY2!"=="" (
-            if not "!KEYS!"=="" (set KEYS=!KEYS!,!KEY2!) else (set KEYS=!KEY2!)
+        if not "!key1!"=="" (
+            echo NVIDIA_API_KEYS=!key1! >> .env
         )
-
-        if not "!KEYS!"=="" (
-            powershell -Command "(Get-Content .env) -replace '^NVIDIA_API_KEYS=.*', 'NVIDIA_API_KEYS=!KEYS!' | Set-Content .env"
+        if not "!groq_key!"=="" (
+            echo GROQ_API_KEYS=!groq_key! >> .env
         )
-        if not "!OR_KEY!"=="" (
-            powershell -Command "(Get-Content .env) -replace '^OPENROUTER_API_KEY=.*', 'OPENROUTER_API_KEY=!OR_KEY!' | Set-Content .env"
+        if not "!cerebras_key!"=="" (
+            echo CEREBRAS_API_KEYS=!cerebras_key! >> .env
         )
-        if not "!OPENCODE_KEY!"=="" (
-            powershell -Command "(Get-Content .env) -replace '^OPENCODE_API_KEY=.*', 'OPENCODE_API_KEY=!OPENCODE_KEY!' | Set-Content .env"
+        if not "!or_key!"=="" (
+            echo OPENROUTER_API_KEY=!or_key! >> .env
         )
-        echo [✓] Saved configured provider API key(s) to .env
+        if not "!opencode_key!"=="" (
+            echo OPENCODE_API_KEY=!opencode_key! >> .env
+        )
+        echo [✓] Saved API keys to .env
+        echo (Tip: Use 'nim keys' anytime to manage or add multiple keys per provider!)
     )
 ) else (
     echo [✓] .env file already exists.
 )
 
-:: 4. Background service / PM2 options
+echo.
+set "BIN_DIR=%USERPROFILE%\AppData\Local\Microsoft\WindowsApps"
+if not exist "!BIN_DIR!" (
+    mkdir "!BIN_DIR!"
+)
+
+set "CUR_DIR=%CD%"
+(
+    echo @echo off
+    echo python "%CUR_DIR%\nim-router.py" %%*
+) > "!BIN_DIR!\nim.bat"
+(
+    echo @echo off
+    echo python "%CUR_DIR%\nim-router.py" %%*
+) > "!BIN_DIR!\nimrouter.bat"
+
+echo [✓] Installed 'nim' CLI command to !BIN_DIR!\nim.bat
+
 echo.
 where pm2 >nul 2>nul
 if %errorlevel% equ 0 (
     echo [✓] PM2 is installed on your system.
-    set /p START_PM2="Do you want to start nim-router with PM2 now? (y/N): "
-    if /i "!START_PM2!"=="y" (
-        pm2 start ecosystem.config.js
+    set /p start_pm2="Do you want to start nim-router in the background with PM2 now? (y/N): "
+    if /i "!start_pm2!"=="y" (
+        pm2 start nim-router.py --name nim-router --interpreter python
         echo [✓] nim-router started in background with PM2.
-        echo Use 'pm2 logs nim-router' to view logs or 'pm2 stop nim-router' to stop.
+        echo Use 'nim logs' to view logs or 'nim stop' to stop.
     ) else (
-        echo Setup complete! You can start the server anytime with: python nim-router.py
+        echo Setup complete! You can start the server anytime with: nim
     )
 ) else (
-    echo Setup complete!
-    echo To start the router in the foreground:
-    echo   python nim-router.py
-    echo.
-    echo (Optional) To run in background with PM2, install Node.js then run:
-    echo   npm install -g pm2
-    echo   pm2 start ecosystem.config.js
+    echo Setup complete! You can start the router with: nim
 )
 
-echo.
-pause
+endlocal
