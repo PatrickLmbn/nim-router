@@ -2,6 +2,8 @@ import asyncio
 import getpass
 import json
 import os
+import shutil
+import subprocess
 import sys
 import httpx
 
@@ -36,13 +38,14 @@ def save_working_models(model_ids: list[str]):
 
 def show_help():
     print("\033[1;36m===================================================\033[0m")
-    print("\033[1;37m   NVIDIA NIM Router CLI - Command Reference       \033[0m")
+    print("\033[1;37m   NIM Router CLI - Command Reference       \033[0m")
     print("\033[1;36m===================================================\033[0m\n")
     print("\033[1;33mUsage:\033[0m nim-router [command]\n")
     print("\033[1;33mAvailable Commands:\033[0m")
     print("  \033[1;32mmodels, list, select\033[0m   Interactively choose primary priority model.")
     print("  \033[1;32mprobe, scan\033[0m            Run live probing scan across all enabled providers.")
     print("  \033[1;32mconnect, keys, config\033[0m  Interactively add or update provider API keys.")
+    print("  \033[1;32mlogs, log\033[0m              Stream live nim-router server logs.")
     print("  \033[1;32mhelp, -h, --help\033[0m       Show CLI help documentation and exit.\n")
     print("\033[1;33mDefault (no argument):\033[0m")
     print("  Starts the nim-router OpenAI-compatible proxy server (Port 11435).\n")
@@ -50,7 +53,18 @@ def show_help():
     print("  nim-router models       Select primary model priority")
     print("  nim-router probe        Probe endpoints and refresh active model pool")
     print("  nim-router connect      Set or update API credentials")
+    print("  nim-router logs         View live background server logs")
     print("  nim-router --help       Show help documentation\n")
+
+def show_logs():
+    pm2_bin = shutil.which("pm2")
+    if pm2_bin:
+        try:
+            os.execvp(pm2_bin, [pm2_bin, "logs", "nim-router"])
+        except Exception:
+            subprocess.run([pm2_bin, "logs", "nim-router"])
+    else:
+        print("\033[91mPM2 is not installed on this system. Install PM2 via 'npm install -g pm2'.\033[0m")
 
 async def async_probe_models():
     nvidia_keys = get_nvidia_keys()
