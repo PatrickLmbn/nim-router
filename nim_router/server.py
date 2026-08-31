@@ -43,33 +43,78 @@ def create_app() -> FastAPI:
     async def list_models():
         if not _router_instance:
             return {"error": "Router not initialized"}
-        model_list = [m.get("id") for m in _router_instance.models if m.get("id")]
-        all_ids = ["nim-free"] + model_list
-        return {
-            "object": "list",
-            "data": [
-                {"id": mid, "object": "model", "owned_by": "nvidia-nim"}
-                for mid in all_ids
-            ]
-        }
+
+        data = [{"id": "nim-free", "object": "model", "owned_by": "nim-router"}]
+
+        nvidia_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "NVIDIA"])
+        openrouter_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "OpenRouter"])
+        opencode_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "OpenCode"])
+
+        for provider_name, model_group in [("NVIDIA", nvidia_models), ("OpenRouter", openrouter_models), ("OpenCode", opencode_models)]:
+            for mid in model_group:
+                display_id = f"[{provider_name}] {mid}"
+                data.append({"id": display_id, "object": "model", "owned_by": provider_name.lower()})
+                if mid != display_id:
+                    data.append({"id": mid, "object": "model", "owned_by": provider_name.lower()})
+
+        return {"object": "list", "data": data}
 
     @app.get("/v1/models/{model_id:path}")
     @app.get("/models/{model_id:path}")
     async def get_model(model_id: str):
-        return {"id": model_id, "object": "model", "owned_by": "nvidia-nim"}
+        clean_id = model_id
+        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] "):
+            if clean_id.startswith(prefix):
+                clean_id = clean_id[len(prefix):].strip()
+        provider = _router_instance._get_provider_name(clean_id) if _router_instance else "nim-router"
+        return {"id": model_id, "object": "model", "owned_by": provider.lower()}
 
     @app.get("/api/tags")
     async def get_tags():
         if not _router_instance:
             return {"models": []}
-        model_list = [m.get("id") for m in _router_instance.models if m.get("id")]
-        all_ids = ["nim-free"] + model_list
+
+        tags = [{"name": "nim-free", "model": "nim-free", "modified_at": "2026-08-30T00:00:00Z", "size": 0}]
+
+        nvidia_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "NVIDIA"])
+        openrouter_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "OpenRouter"])
+        opencode_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "OpenCode"])
+
+        for provider_name, model_group in [("NVIDIA", nvidia_models), ("OpenRouter", openrouter_models), ("OpenCode", opencode_models)]:
+            for mid in model_group:
+                display_id = f"[{provider_name}] {mid}"
+                tags.append({"name": display_id, "model": display_id, "modified_at": "2026-08-30T00:00:00Z", "size": 0})
+                if mid != display_id:
+                    tags.append({"name": mid, "model": mid, "modified_at": "2026-08-30T00:00:00Z", "size": 0})
+
+        return {"models": tags}
+
+    @app.post("/api/show")
+    @app.post("/show")
+    async def show_model_details(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        model_name = body.get("name") or body.get("model") or "nim-free"
         return {
-            "models": [
-                {"name": mid, "model": mid, "modified_at": "2026-08-30T00:00:00Z", "size": 0}
-                for mid in all_ids
-            ]
+            "modelfile": f"# nim-router virtual model\nFROM {model_name}",
+            "parameters": "stop \"<|im_end|>\"",
+            "template": "{{ .System }}\n{{ .Prompt }}",
+            "details": {
+                "parent_model": "",
+                "format": "gguf",
+                "family": "llama",
+                "families": ["llama"],
+                "parameter_size": "70B",
+                "quantization_level": "Q4_K_M"
+            },
+            "model_info": {}
         }
+
+    @app.get("/api/ps")
+    async def get_running_ps():
+        return {"models": []}
 
     @app.get("/api/version")
     async def get_version():

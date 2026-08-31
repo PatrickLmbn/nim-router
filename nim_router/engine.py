@@ -52,9 +52,14 @@ class ModelRouter:
         return key
 
     def _get_provider_name(self, model_id: str) -> str:
-        if model_id in self._model_providers:
-            return self._model_providers[model_id]
-        mid = model_id.lower()
+        mid_clean = model_id
+        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] "):
+            if mid_clean.startswith(prefix):
+                mid_clean = mid_clean[len(prefix):].strip()
+
+        if mid_clean in self._model_providers:
+            return self._model_providers[mid_clean]
+        mid = mid_clean.lower()
         if mid.endswith(":free") or "openrouter/" in mid or mid.startswith("openrouter"):
             return "OpenRouter"
         elif mid.startswith("opencode/") or "opencode" in mid or mid.endswith("-free") or any(k in mid for k in ("claude-", "gpt-", "gemini-", "codestral")):
@@ -235,6 +240,9 @@ class ModelRouter:
                 candidate_pool = [m.get("id") for m in self.models if m.get("id")]
 
             requested_model = (request.model or "").strip()
+            for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] "):
+                if requested_model.startswith(prefix):
+                    requested_model = requested_model[len(prefix):].strip()
 
             if self._is_vision_request(request):
                 vision_capable = [mid for mid in candidate_pool if self._is_vision_model(mid)]
