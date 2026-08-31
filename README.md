@@ -78,6 +78,95 @@ Client Request
 
 ---
 
+## Connecting to AI Agents & Harnesses
+
+The router exposes a standard OpenAI-compatible API base URL (`http://localhost:11435/v1`).
+
+Because your real API keys are loaded securely by the router from `.env`, your client applications only connect locally to the router and do not need your real key. You can use `"local"` as the API key in all client configurations.
+
+### 1. Hermes Agent (Recommended)
+
+**Option A: Interactive CLI Setup**
+You can configure NIM Router interactively using the `hermes model` command:
+```bash
+hermes model
+```
+Choose **Custom Endpoint** and follow the prompts:
+- **Base URL**: `http://localhost:11435/v1`
+- **Model**: `nim-free`
+- **API Key**: `local` (optional)
+
+**Option B: Manual Configuration (`~/.hermes/config.yaml`)**
+Add the provider directly to `~/.hermes/config.yaml`:
+```yaml
+providers:
+  nim-router:
+    base_url: "http://localhost:11435/v1"
+    model: "nim-free"
+    api_key: "local"
+```
+
+### 2. OpenCode
+Add the `nim-router` provider directly to your `~/.config/opencode/opencode.json` (or `opencode.jsonc`):
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "providers": {
+    "nim-router": {
+      "npm": "@ai-sdk/openai",
+      "name": "nim-router",
+      "options": {
+        "baseURL": "http://localhost:11435/v1",
+        "apiKey": "local"
+      },
+      "models": {
+        "nim-free": {
+          "name": "nim-free",
+          "displayName": "NIM Free Router",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+### 3. Coding Harnesses (Aider, Cline, Continue.dev)
+Configure your assistant or harness to use local custom OpenAI endpoints:
+```json
+{
+  "model": "nim-free",
+  "apiBase": "http://localhost:11435/v1",
+  "apiKey": "local"
+}
+```
+
+### 4. OpenAI Python SDK
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:11435/v1",
+    api_key="local"
+)
+
+response = client.chat.completions.create(
+    model="nim-free",
+    messages=[{"role": "user", "content": "Hello!"}],
+    stream=True
+)
+
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+print()
+```
+
+---
+
 ## CLI Usage (`nim`)
 
 ### **1. Set Primary Priority Model (`nim models`)**
