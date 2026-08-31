@@ -1,75 +1,50 @@
-# NVIDIA NIM Free Model Router
+# Universal Multi-Provider Free Model Router
 
-A lightweight, OpenAI-compatible proxy router that aggregates and load-balances across all free NVIDIA NIM endpoints. It transforms NVIDIA's free model tier into a single, high-availability, low-latency API endpoint with dynamic latency-based routing and automatic multi-tier failover.
-
----
-
-## Why NIM Router?
-
-NVIDIA offers powerful free models on [build.nvidia.com](https://build.nvidia.com), but using them directly in production or agentic workflows introduces challenges:
-- **Rate Limits (`429`)**: Individual free models quickly run out of request quota during heavy use.
-- **Inconsistent Availability**: Endpoints can change, become deprecated (`404`), or experience temporary server outages (`5xx`).
-- **Variable Latencies**: Response times vary significantly across models depending on server load.
-
-**NIM Router solves this** by acting as an intelligent reverse proxy. Point your agents, coding assistants, or applications to `http://localhost:11435/v1` with model `nim-free`, and the router handles model discovery, latency ranking, load distribution, and multi-tier failover automatically.
+A lightweight, OpenAI-compatible proxy router that aggregates, load-balances, and fails over across **NVIDIA NIM**, **OpenRouter Free Tier**, and **OpenCode API**. It turns free and paid AI endpoints into a single, high-availability, ultra-low latency API endpoint with dynamic latency ranking, account key rotation, and zero-downtime cross-provider failover.
 
 ---
 
-## How It Works
+## Features
+
+- **Universal Multi-Provider Support**:
+  - **NVIDIA NIM Free Tier** (`NVIDIA_API_KEYS` / `NVIDIA_API_KEY`)
+  - **OpenRouter Free Tier** (`OPENROUTER_API_KEY` - automatically pools all `:free` models)
+  - **OpenCode API** (`OPENCODE_API_KEY`)
+- **Primary Model Priority with Free Fallback**: Set any model (free or paid) as your primary priority model. If it encounters rate limits (`429`), out-of-credits (`402`), or server errors (`5xx`), `nim-router` automatically fails over to the lowest-latency free models across providers with zero downtime.
+- **Unified Virtual Model (`nim-free` / `auto`)**: Send requests to a single model identifier that automatically load-balances across all healthy free models ranked by real-time latency.
+- **Interactive Model Selection CLI (`nim-router models`)**: Easily view and set your primary priority model interactively from any terminal.
+- **Multi-Account API Key Rotation**: Rotate up to 3 NVIDIA API keys to multiply rate limits and bypass account-level throttling.
+- **Multimodal & Vision Support**: Automatically isolates and routes image payloads (`image_url`, base64) to vision-capable models.
+- **Tool-Calling Compatibility**: Isolates tool-enabled requests to models supporting function calling.
+- **Real-Time Token Streaming (SSE)**: Full Server-Sent Events support for streaming responses in interactive applications and AI coding assistants.
+
+---
+
+## Core Architecture
 
 ```text
-Client Request (model: "nim-free")
+Client Request (model: "nim-free" or "auto")
         │
         ▼
-[Discover models from NVIDIA API]
-        │
-        ▼
-[Minimal-scale probe to verify healthy endpoints]
-        │
-        ▼
-[Rank by latency & select Top-3 priority tier]
-        │
-        ▼
-[Route request to lowest-latency model] ──► Forward to NVIDIA NIM
-        │
-        ▼
-     ┌──────┴──────┐
-     ▼             ▼
-  200 OK       400/422/429/5xx Error
-     │             │
-     ▼             ▼
-[Return stream] [Failover to next fastest model]
-                    (up to 3 attempts)
+[Primary Model Configured?]
+   ├── YES ──► Try Primary Model (e.g., anthropic/claude-3.5-sonnet, meta/llama-3.3-70b-instruct)
+   │               │
+   │               ├── 200 OK ──► Return Stream / Response
+   │               └── 402/429/5xx ──► [Failover to Free Pool]
+   │
+   └── NO / Fallback ──► [Discover & Rank Healthy Models]
+                            (NVIDIA NIM + OpenRouter Free + OpenCode)
+                                       │
+                                       ▼
+                       [Route to Lowest-Latency Model]
 ```
-
----
-
-## Core Capabilities
-
-- **Unified Virtual Model (`nim-free`)**: Send requests to a single model identifier that automatically rotates across all healthy free models.
-- **Lowest-Latency Priority Routing**: Continuously measures and ranks model response times, prioritizing the 3 fastest responding models for incoming requests.
-- **Adaptive Real-Time Latency Tracking (EMA)**: Dynamically recalculates moving average latency scores on live requests to adapt to changing server loads.
-- **Zero-Downtime Automatic Failover**: Instantly catches HTTP `400`, `422`, `429`, and `5xx` errors and retries the request across alternate healthy models without dropping the connection.
-- **Real-Time Token Streaming (SSE)**: Full Server-Sent Events support for streaming responses in interactive applications and agent interfaces.
-- **Multimodal & Vision Routing**: Automatically detects image payloads (`image_url`, base64 data URIs) and routes to vision-capable models (e.g., Llama 3.2 Vision, Nemotron Omni).
-- **Agent & Tool-Calling Compatibility**: Automatically isolates and routes tool-enabled requests to models with structured function-calling capabilities.
-- **Message Normalization**: Automatically sanitizes empty or reasoning-only assistant message contents to prevent schema validation errors.
-
----
-
-## Comparison to Alternatives
-
-| Solution | Model Selection | Failover | Scope | Setup |
-| :--- | :--- | :--- | :--- | :--- |
-| **NIM Free Router** | **Lowest-Latency (Top-3 Tier)** | **Automatic (Multi-tier)** | NVIDIA NIM Free Tier | Local proxy (`python` / `pm2`) |
-| OpenRouter `openrouter/free` | Remote load balancing | Automatic | 20+ hosted providers | Third-party cloud service |
-| Manual model switching | Manual | None | Single model | Config change per model failure |
 
 ---
 
 ## Quick Start
 
 ### 1. Automated Setup (Recommended)
+
 Run the installation script for your operating system:
 
 **Linux / macOS / WSL:**
@@ -85,49 +60,50 @@ git clone https://github.com/patricklmbn/nim-router.git
 cd nim-router
 install.bat
 ```
-*(Or simply double-click `install.bat` in File Explorer)*
 
+> The installer interactively prompts for your **NVIDIA API Keys**, **OpenRouter API Key**, and **OpenCode API Key**.
 
-### 2. Manual Installation
-If you prefer manual setup:
+---
+
+## CLI Usage (`nim-router`)
+
+You can control `nim-router` directly from your terminal:
+
+### **Set Primary Priority Model**
 ```bash
-pip install -r requirements.txt
-cp .env.example .env
+nim-router models
 ```
-Configure your settings in `.env`:
-```env
-NVIDIA_API_KEY=your_api_key
-PORT=11435
-MODEL=nim-free
-```
-> Obtain a free API key directly from [build.nvidia.com](https://build.nvidia.com/).
+- Scans all configured providers.
+- Displays a clean numbered terminal menu of active models.
+- Select your primary model or select `[0] nim-free` for automatic free pool rotation.
+- Automatically updates `.env` and refreshes the live router server.
 
-### 3. Starting the Server
+---
 
-**Option A: Foreground Execution**
+## Quick API Example
+
+### 1. Standard Request (Auto Free Pool Rotation)
 ```bash
-python nim-router.py
+curl -X POST http://localhost:11435/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer local" \
+  -d '{
+    "model": "nim-free",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "temperature": 0.7
+  }'
 ```
 
-**Option B: Background Execution via PM2**
+### 2. Direct Custom Model Request (With Free Fallback)
 ```bash
-pm2 start ecosystem.config.js
-pm2 logs nim-router     # View live logs
-pm2 stop nim-router     # Stop server
-pm2 restart nim-router  # Restart server
-```
-
-### 4. Uninstallation
-To cleanly stop background processes, remove virtual environments, and clean up configuration files:
-
-**Linux / macOS / WSL:**
-```bash
-bash uninstall.sh
-```
-
-**Windows:**
-```cmd
-uninstall.bat
+curl -X POST http://localhost:11435/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer local" \
+  -d '{
+    "model": "anthropic/claude-3.5-sonnet",
+    "messages": [{"role": "user", "content": "Write a python script"}],
+    "stream": true
+  }'
 ```
 
 ---
@@ -136,22 +112,7 @@ uninstall.bat
 
 The router exposes a standard OpenAI-compatible API base URL (`http://localhost:11435/v1`).
 
-Because your real `NVIDIA_API_KEY` is loaded securely by the router from `.env`, your client applications only connect locally to the router and do not need your real key. You can use `"local"` as the API key in all client configurations.
-
-### 1. Hermes Agent (Recommended)
-
-**Option A: Interactive CLI Setup**
-You can configure NIM Router interactively using the `hermes model` command:
-```bash
-hermes model
-```
-Choose **Custom Endpoint** and follow the prompts:
-- **Base URL**: `http://localhost:11435/v1`
-- **Model**: `nim-free`
-- **API Key**: `local` (optional)
-
-**Option B: Manual Configuration (`~/.hermes/config.yaml`)**
-Add the provider directly to `~/.hermes/config.yaml`:
+### 1. Hermes Agent
 ```yaml
 providers:
   nim-router:
@@ -161,7 +122,6 @@ providers:
 ```
 
 ### 2. Coding Harnesses (Aider, Cline, Continue.dev)
-Configure your assistant or harness to use local custom OpenAI endpoints:
 ```json
 {
   "api_base": "http://localhost:11435/v1",
@@ -195,27 +155,17 @@ for chunk in response:
 print()
 ```
 
-### 4. cURL
-```bash
-curl -X POST http://localhost:11435/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer local" \
-  -d '{
-    "model": "nim-free",
-    "messages": [{"role": "user", "content": "Hello!"}],
-    "temperature": 0.7
-  }'
-```
-
 ---
 
-## Configuration Options
+## Environment Configuration (`.env`)
 
-| Variable | Default | Description |
+| Variable | Description | Default |
 | :--- | :--- | :--- |
-| `NVIDIA_API_KEY` | *(Required)* | Your NVIDIA NIM API key from build.nvidia.com |
-| `PORT` | `11435` | Local port the proxy server listens on |
-| `MODEL` | `nim-free` | Default virtual model alias for automatic routing |
+| `NVIDIA_API_KEYS` | Comma-separated list of NVIDIA NIM API keys (up to 3 for rotation) | `""` |
+| `OPENROUTER_API_KEY` | OpenRouter API key for `:free` models | `""` |
+| `OPENCODE_API_KEY` | OpenCode API key | `""` |
+| `PRIMARY_MODEL` | Primary model preference (e.g. `anthropic/claude-3.5-sonnet`, `meta/llama-3.3-70b-instruct`) | `nim-free` |
+| `PORT` | Local port for proxy server | `11435` |
 
 ---
 
@@ -224,19 +174,15 @@ curl -X POST http://localhost:11435/v1/chat/completions \
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
 | `/v1/chat/completions` | `POST` | OpenAI-compatible chat completion endpoint (supports streaming) |
-| `/v1/models` | `GET` | Returns list of currently active models in the healthy pool |
-| `/health` | `GET` | Health check endpoint reporting pool size and server status |
+| `/v1/models` | `GET` | Returns list of currently active models across all providers |
+| `/health` | `GET` | Health check endpoint reporting active pool size |
 | `/refresh` | `POST` | Triggers immediate re-discovery and probing of model endpoints |
 
 ---
 
 ## Diagnostics & Testing
 
-- **Full Model Diagnostics**: Test all 80+ endpoints and generate a status report:
-  ```bash
-  python tests/probe_test.py
-  ```
-- **Benchmark Round-Robin**: Test completion responses and failover behavior:
-  ```bash
-  python tests/benchmark.py
-  ```
+Run unit test suite:
+```bash
+python3 -m unittest discover -s tests -p "test_*.py"
+```
