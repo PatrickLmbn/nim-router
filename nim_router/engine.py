@@ -176,11 +176,11 @@ class ModelRouter:
 
     async def initialize(self):
         async with self._lock:
-            self.models = await self._discover_models()
+            self.models = self._load_fallback_models()
             for m in self.models:
                 mid = m.get("id")
-                if mid and "provider" in m:
-                    self._model_providers[mid] = m["provider"]
+                if mid:
+                    self._model_providers[mid] = self._get_provider_name(mid)
             self._healthy_pool = self._build_healthy_pool()
             self._pool_updated = time.time()
 
@@ -189,13 +189,14 @@ class ModelRouter:
             oc_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "OpenCode")
 
             logger.success(
-                f"nim-router started with {len(self._healthy_pool)} working models in active pool "
+                f"nim-router initialized instantly with {len(self._healthy_pool)} working models in pool "
                 f"(NVIDIA: {nvidia_count}, OpenRouter: {or_count}, OpenCode: {oc_count})"
             )
+            asyncio.create_task(self.refresh_models())
 
     async def refresh_models(self):
         async with self._lock:
-            logger.info("Refreshing model catalog and latency probes across providers...")
+            logger.info("Refreshing model catalog and latency probes across providers in background...")
             new_models = await self._discover_models()
             if new_models:
                 self.models = new_models
@@ -221,22 +222,26 @@ class ModelRouter:
     async def _route_request(self, request: ChatCompletionRequest, raw_request: Request = None) -> Response:
         now = time.time()
         async with self._lock:
-            if not self.models or (now - self._pool_updated > HEALTH_REFRESH_INTERVAL):
-                self.models = await self._discover_models()
+            if not self.models:
+                self.models = self._load_fallback_models()
                 for m in self.models:
                     mid = m.get("id")
-                    if mid and "provider" in m:
-                        self._model_providers[mid] = m["provider"]
+                    if mid:
+                        self._model_providers[mid] = self._get_provider_name(mid)
                 self._healthy_pool = self._build_healthy_pool()
                 self._pool_updated = time.time()
+
+            if now - self._pool_updated > HEALTH_REFRESH_INTERVAL:
+                self._pool_updated = now
+                asyncio.create_task(self.refresh_models())
 
             candidate_pool = list(self._healthy_pool)
             if not candidate_pool:
                 self.models = self._load_fallback_models()
                 for m in self.models:
                     mid = m.get("id")
-                    if mid and "provider" in m:
-                        self._model_providers[mid] = m["provider"]
+                    if mid:
+                        self._model_providers[mid] = self._get_provider_name(mid)
                 candidate_pool = [m.get("id") for m in self.models if m.get("id")]
 
             requested_model = (request.model or "").strip()

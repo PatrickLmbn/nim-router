@@ -21,9 +21,7 @@ async def lifespan(app: FastAPI):
         logger.warning("No API keys found in environment (.env). Please configure NVIDIA_API_KEYS, OPENROUTER_API_KEY, or OPENCODE_API_KEY.")
 
     _router_instance = ModelRouter(api_key=nvidia_keys, openrouter_key=openrouter_key, opencode_key=opencode_key)
-    _router_instance.models = await _router_instance._discover_models()
-    _router_instance._healthy_pool = _router_instance._build_healthy_pool()
-    logger.success(f"nim-router started with {len(_router_instance.models)} working models in active pool")
+    await _router_instance.initialize()
     yield
     logger.info("nim-router shutting down")
 
@@ -129,8 +127,7 @@ def create_app() -> FastAPI:
     async def refresh_models():
         if not _router_instance:
             raise HTTPException(status_code=500, detail="Router not initialized")
-        _router_instance.models = await _router_instance._discover_models()
-        _router_instance._healthy_pool = _router_instance._build_healthy_pool()
+        await _router_instance.refresh_models()
         return {
             "message": "Models refreshed successfully",
             "working_models": len(_router_instance.models),
