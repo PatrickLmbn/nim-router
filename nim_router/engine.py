@@ -216,13 +216,13 @@ class ModelRouter:
                 f"nim-router initialized instantly with {len(self._healthy_pool)} working models in pool "
                 f"(NVIDIA: {nvidia_count}, OpenRouter: {or_count}, OpenCode: {oc_count})"
             )
-            asyncio.create_task(self.refresh_models())
+        asyncio.create_task(self.refresh_models())
 
     async def refresh_models(self):
-        async with self._lock:
-            logger.info("Refreshing model catalog and latency probes across providers in background...")
-            new_models = await self._discover_models()
-            if new_models:
+        logger.info("Refreshing model catalog and latency probes across providers in background...")
+        new_models = await self._discover_models()
+        if new_models:
+            async with self._lock:
                 self.models = new_models
                 for m in self.models:
                     mid = m.get("id")
