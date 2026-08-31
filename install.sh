@@ -222,6 +222,17 @@ fi
 EOF
 cp "$HOME/.local/bin/nimrouter" "$HOME/.local/bin/nim-router"
 chmod +x "$DIR/nim-router.py" "$HOME/.local/bin/nimrouter" "$HOME/.local/bin/nim-router" 2>/dev/null || true
+
+if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    export PATH="$HOME/.local/bin:$PATH"
+    if [ -f "$HOME/.zshrc" ] && ! grep -q '\.local/bin' "$HOME/.zshrc"; then
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
+    fi
+    if [ -f "$HOME/.bashrc" ] && ! grep -q '\.local/bin' "$HOME/.bashrc"; then
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+    fi
+fi
+
 echo -e "${GREEN}[✓] Installed 'nimrouter' CLI command to ~/.local/bin/nimrouter.${NC}"
 
 echo ""

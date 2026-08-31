@@ -10,16 +10,29 @@ import httpx
 from nim_router.config import get_nvidia_keys, get_openrouter_key, get_opencode_key, get_primary_model
 from nim_router.engine import ModelRouter
 
-NIM_BANNER = """\033[1;36m
- ________   ___  _____ ______   
-|\   ___  \|\  \|\   _ \  _   \  
-\ \  \\\\ \  \ \  \ \  \\\\\__\ \  \ 
- \ \  \\\\ \  \ \  \ \  \\|__| \  \ 
-  \ \  \\\\ \  \ \  \ \  \    \ \  \ 
-   \ \__\ \__\ \__\ \__\    \ \__\
-    \|__| \|__|\|__|\|__|     \|__|
-            \033[1;37mR O U T E R\033[1;36m
-\033[0m"""
+def get_rainbow_banner() -> str:
+    banner_lines = [
+        r" ________   ___  _____ ______   ",
+        r"|\   ___  \|\  \|\   _ \  _   \  ",
+        r"\ \  \\ \  \ \  \ \  \\\__\ \  \ ",
+        r" \ \  \\ \  \ \  \ \  \\|__| \  \\",
+        r"  \ \  \\ \  \ \  \ \  \    \ \  \\",
+        r"   \ \__\ \__\ \__\ \__\    \ \__\\",
+        r"    \|__| \|__|\|__|\|__|     \|__|",
+        r"            R O U T E R"
+    ]
+    colors = [
+        "\033[38;5;196m",
+        "\033[38;5;208m",
+        "\033[38;5;220m",
+        "\033[38;5;118m",
+        "\033[38;5;45m",
+        "\033[38;5;129m",
+        "\033[38;5;201m",
+        "\033[1;37m",
+    ]
+    lines = [f"{c}{line}\033[0m" for c, line in zip(colors, banner_lines)]
+    return "\n".join(lines) + "\n"
 
 def get_provider_name(m_obj: dict | str) -> str:
     if isinstance(m_obj, dict):
@@ -48,7 +61,7 @@ def save_working_models(model_ids: list[str]):
         pass
 
 def show_help():
-    print(NIM_BANNER)
+    print(get_rainbow_banner())
     print("\033[1;33mUsage:\033[0m nimrouter [command]\n")
     print("\033[1;33mAvailable Commands:\033[0m")
     print("  \033[1;32mmodels, list, select\033[0m   Interactively choose primary priority model.")
@@ -70,6 +83,7 @@ def show_help():
     print("  nimrouter --help       Show help documentation\n")
 
 def show_logs():
+    print(get_rainbow_banner())
     pm2_bin = shutil.which("pm2")
     if pm2_bin:
         try:
@@ -80,24 +94,26 @@ def show_logs():
         print("\033[91mPM2 is not installed on this system. Install PM2 via 'npm install -g pm2'.\033[0m")
 
 def restart_server():
+    print(get_rainbow_banner())
     pm2_bin = shutil.which("pm2")
     if pm2_bin:
         res = subprocess.run([pm2_bin, "restart", "nim-router", "--update-env"])
         if res.returncode == 0:
-            print("\n\033[1;32m[✓] Live nim-router server process restarted via PM2!\033[0m")
+            print("\n\033[1;32m[✓] Live nimrouter server process restarted via PM2!\033[0m")
         else:
-            print("\n\033[91mFailed to restart nim-router via PM2. Please check if process is running in PM2.\033[0m")
+            print("\n\033[91mFailed to restart nimrouter via PM2. Please check if process is running in PM2.\033[0m")
     else:
         print("\033[91mPM2 is not installed on this system.\033[0m")
 
 def stop_server():
+    print(get_rainbow_banner())
     pm2_bin = shutil.which("pm2")
     if pm2_bin:
         res = subprocess.run([pm2_bin, "stop", "nim-router"])
         if res.returncode == 0:
-            print("\n\033[1;32m[✓] Stopped nim-router server process via PM2.\033[0m")
+            print("\n\033[1;32m[✓] Stopped nimrouter server process via PM2.\033[0m")
         else:
-            print("\n\033[91mFailed to stop nim-router via PM2. Please check if process is running in PM2.\033[0m")
+            print("\n\033[91mFailed to stop nimrouter via PM2. Please check if process is running in PM2.\033[0m")
     else:
         print("\033[91mPM2 is not installed on this system.\033[0m")
 
@@ -106,7 +122,7 @@ async def async_probe_models():
     openrouter_key = get_openrouter_key()
     opencode_key = get_opencode_key()
 
-    print(NIM_BANNER)
+    print(get_rainbow_banner())
     print("\033[1;37m   Endpoint Probing Scan       \033[0m\n")
 
     print("\033[90mStarting live multi-provider endpoint probing scan...\033[0m")
@@ -127,7 +143,7 @@ async def async_probe_models():
         async with httpx.AsyncClient(timeout=3) as client:
             r = await client.post(f"http://127.0.0.1:{port}/refresh")
             if r.status_code == 200:
-                print("\033[1;32m[✓] Live nim-router server refreshed with new active pool.\033[0m")
+                print("\033[1;32m[✓] Live nimrouter server refreshed with new active pool.\033[0m")
     except Exception:
         pass
 
@@ -136,7 +152,7 @@ async def interactive_model_selector():
     openrouter_key = get_openrouter_key()
     opencode_key = get_opencode_key()
 
-    print(NIM_BANNER)
+    print(get_rainbow_banner())
     print("\033[1;37m   Model Priority Selector      \033[0m\n")
 
     current_primary = get_primary_model()
@@ -248,12 +264,12 @@ async def interactive_model_selector():
         async with httpx.AsyncClient(timeout=3) as client:
             r = await client.post(f"http://127.0.0.1:{port}/refresh")
             if r.status_code == 200:
-                print("\033[1;32m[✓] Live nim-router server refreshed successfully.\033[0m")
+                print("\033[1;32m[✓] Live nimrouter server refreshed successfully.\033[0m")
     except Exception:
         pass
 
 async def async_connect_api_keys():
-    print(NIM_BANNER)
+    print(get_rainbow_banner())
     print("\033[1;37m   Multi-Provider Key Config   \033[0m\n")
 
     current_nvidia = get_nvidia_keys()
@@ -326,7 +342,7 @@ async def async_connect_api_keys():
         async with httpx.AsyncClient(timeout=3) as client:
             r = await client.post(f"http://127.0.0.1:{port}/refresh")
             if r.status_code == 200:
-                print("\033[1;32m[✓] Live nim-router server refreshed with new keys.\033[0m")
+                print("\033[1;32m[✓] Live nimrouter server refreshed with new keys.\033[0m")
     except Exception:
         pass
 
