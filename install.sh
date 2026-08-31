@@ -4,7 +4,6 @@ set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 
-# Color formatting
 BOLD="\033[1m"
 GREEN="\033[0;32m"
 YELLOW="\033[0;33m"
@@ -13,7 +12,6 @@ NC="\033[0m"
 
 echo -e "${BOLD}=== NVIDIA NIM Router Installer ===${NC}\n"
 
-# 1. Check Python installation
 PYTHON_BIN=""
 if command -v python3 &> /dev/null; then
     PYTHON_BIN="python3"
@@ -58,7 +56,6 @@ fi
 
 echo -e "${GREEN}[✓] Python found:${NC} $($PYTHON_BIN --version)"
 
-# 2. Check and Install pip
 PIP_AVAILABLE=false
 if $PYTHON_BIN -m pip --version &> /dev/null; then
     PIP_AVAILABLE=true
@@ -115,12 +112,10 @@ if [ "$PIP_AVAILABLE" = false ]; then
     fi
 fi
 
-# 3. Install Python Dependencies
 echo ""
 echo "Installing Python dependencies..."
 INSTALL_SUCCESS=false
 
-# Try standard pip install first
 if $PYTHON_BIN -m pip install -r requirements.txt 2>/dev/null; then
     INSTALL_SUCCESS=true
 elif command -v pip3 &> /dev/null && pip3 install -r requirements.txt 2>/dev/null; then
@@ -129,7 +124,6 @@ elif command -v pip &> /dev/null && pip install -r requirements.txt 2>/dev/null;
     INSTALL_SUCCESS=true
 fi
 
-# If direct install failed (e.g. externally-managed-environment PEP 668), fallback to virtual environment (.venv)
 if [ "$INSTALL_SUCCESS" = false ]; then
     echo -e "${YELLOW}[!] Direct pip install failed (e.g. system-managed environment). Setting up virtual environment (.venv)...${NC}"
     
@@ -141,7 +135,6 @@ if [ "$INSTALL_SUCCESS" = false ]; then
         }
     fi
     
-    # Activate virtual environment
     # shellcheck disable=SC1091
     source .venv/bin/activate
     python -m pip install --upgrade pip
@@ -152,18 +145,21 @@ else
     echo -e "${GREEN}[✓] Dependencies installed successfully.${NC}"
 fi
 
-# 4. Configure .env file
 echo ""
 if [ ! -f .env ]; then
     if [ -f .env.example ]; then
         cp .env.example .env
         echo -e "${GREEN}[✓] Created .env from .env.example.${NC}"
         
-        echo -e "${BOLD}=== Multi-Provider API Key Setup ===${NC}"
-        read -r -p "Enter Primary NVIDIA API Key #1 (Recommended): " key1
-        read -r -p "Enter Secondary NVIDIA API Key #2 (Optional - press Enter to skip): " key2
-        read -r -p "Enter OpenRouter API Key (Optional - press Enter to skip): " or_key
-        read -r -p "Enter OpenCode API Key (Optional - press Enter to skip): " opencode_key
+        echo -e "${BOLD}=== Multi-Provider API Key Setup (Inputs Hidden) ===${NC}"
+        read -r -s -p "Enter Primary NVIDIA API Key #1 (Recommended): " key1
+        echo ""
+        read -r -s -p "Enter Secondary NVIDIA API Key #2 (Optional - press Enter to skip): " key2
+        echo ""
+        read -r -s -p "Enter OpenRouter API Key (Optional - press Enter to skip): " or_key
+        echo ""
+        read -r -s -p "Enter OpenCode API Key (Optional - press Enter to skip): " opencode_key
+        echo ""
 
         keys_combined=""
         [ -n "$key1" ] && keys_combined="$key1"
@@ -201,7 +197,6 @@ else
     echo -e "${GREEN}[✓] .env file already exists.${NC}"
 fi
 
-# 5. CLI Binary Installation
 echo ""
 mkdir -p "$HOME/.local/bin"
 cat << EOF > "$HOME/.local/bin/nim-router"
@@ -215,7 +210,6 @@ EOF
 chmod +x "$DIR/nim-router" "$HOME/.local/bin/nim-router" 2>/dev/null || true
 echo -e "${GREEN}[✓] Installed 'nim-router' CLI command to ~/.local/bin/nim-router.${NC}"
 
-# 6. PM2 Setup & Background Execution
 echo ""
 if command -v pm2 &> /dev/null; then
     echo -e "${GREEN}[✓] PM2 is installed on your system.${NC}"
@@ -264,4 +258,3 @@ else
         echo -e "${GREEN}Setup complete!${NC} You can start the router with: nim-router or python nim-router.py"
     fi
 fi
-

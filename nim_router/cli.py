@@ -1,4 +1,5 @@
 import asyncio
+import getpass
 import json
 import os
 import sys
@@ -221,11 +222,11 @@ async def async_connect_api_keys():
     print(f"Current OpenRouter Key: \033[1;33m{mask(current_or)}\033[0m")
     print(f"Current OpenCode Key:   \033[1;33m{mask(current_oc)}\033[0m\n")
 
-    print("\033[90mEnter new API keys (press Enter to keep current value):\033[0m\n")
-    k1 = input("Primary NVIDIA API Key #1: ").strip()
-    k2 = input("Secondary NVIDIA API Key #2 (Optional): ").strip()
-    or_key = input("OpenRouter API Key (Optional): ").strip()
-    oc_key = input("OpenCode API Key (Optional): ").strip()
+    print("\033[90mEnter new API keys (inputs hidden, press Enter to keep current value):\033[0m\n")
+    k1 = getpass.getpass("Primary NVIDIA API Key #1: ").strip()
+    k2 = getpass.getpass("Secondary NVIDIA API Key #2 (Optional): ").strip()
+    or_key = getpass.getpass("OpenRouter API Key (Optional): ").strip()
+    oc_key = getpass.getpass("OpenCode API Key (Optional): ").strip()
 
     keys_combined = []
     if k1:
