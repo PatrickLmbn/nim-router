@@ -106,35 +106,7 @@ providers:
     api_key: "local"
 ```
 
-### 2. OpenCode
-Add the `nim-router` provider directly to your `~/.config/opencode/opencode.json` (or `opencode.jsonc`):
-```jsonc
-{
-  "$schema": "https://opencode.ai/config.json",
-  "providers": {
-    "nim-router": {
-      "npm": "@ai-sdk/openai",
-      "name": "nim-router",
-      "options": {
-        "baseURL": "http://localhost:11435/v1",
-        "apiKey": "local"
-      },
-      "models": {
-        "nim-free": {
-          "name": "nim-free",
-          "displayName": "NIM Free Router",
-          "limit": {
-            "context": 128000,
-            "output": 8192
-          }
-        }
-      }
-    }
-  }
-}
-```
-
-### 3. Coding Harnesses (Aider, Cline, Continue.dev)
+### 2. Coding Harnesses (Aider, Cline, Continue.dev)
 Configure your assistant or harness to use local custom OpenAI endpoints:
 ```json
 {
@@ -144,7 +116,7 @@ Configure your assistant or harness to use local custom OpenAI endpoints:
 }
 ```
 
-### 4. OpenAI Python SDK
+### 3. OpenAI Python SDK
 ```python
 from openai import OpenAI
 
