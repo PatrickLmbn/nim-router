@@ -45,7 +45,6 @@ git clone https://github.com/PatrickLmbn/nim-router.git; cd nim-router; .\instal
   - **OpenRouter Free Tier** (`OPENROUTER_API_KEY` - automatically pools all `:free` models)
   - **OpenCode API** (`OPENCODE_API_KEY`)
 - **Primary Model Priority with Free Fallback**: Set any discovered free model as your primary priority model. If it encounters rate limits (`429`), out-of-credits (`402`), or server errors (`5xx`), `nim` automatically fails over to the lowest-latency free models across providers with zero downtime.
-- **Unified Virtual Model (`nim-free` / `auto`)**: Send requests to `nim-free` or `auto` that automatically load-balances across all healthy free models ranked by real-time latency, generation speed, and reliability.
 - **Maximum Latency Threshold Filtering (`MAX_LATENCY_THRESHOLD=3.0`s)**: Restricts active pool to endpoints responding in under 3.0 seconds, automatically filtering out congested/overloaded server endpoints.
 - **Dynamic EMA Reliability Scoring (0.05–1.0)**: Tracks real-time model stability over time using Exponential Moving Average (EMA) scoring to downweight unstable endpoints smoothly.
 - **Tokens-Per-Second (TPS) Speed Ranking**: Measures actual text generation throughput (tokens/second) to rank fast-generating endpoints first.
@@ -66,7 +65,7 @@ git clone https://github.com/PatrickLmbn/nim-router.git; cd nim-router; .\instal
 ## Core Architecture
 
 ```text
-Client Request (model: "nim-free" or "auto")
+Client Request
         │
         ▼
 [Primary Model Configured?]
