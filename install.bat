@@ -4,7 +4,7 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 echo ===================================
-echo   NVIDIA NIM Router Windows Setup
+echo   NIM Router Windows Setup
 echo ===================================
 echo.
 

@@ -10,7 +10,7 @@ YELLOW="\033[0;33m"
 RED="\033[0;31m"
 NC="\033[0m"
 
-echo -e "${BOLD}=== NVIDIA NIM Router Uninstaller ===${NC}\n"
+echo -e "${BOLD}=== NIM Router Uninstaller ===${NC}\n"
 
 if command -v pm2 &> /dev/null; then
     if pm2 list | grep -q "nim-router"; then

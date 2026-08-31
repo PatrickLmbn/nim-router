@@ -72,7 +72,7 @@ async def async_probe_models():
     opencode_key = get_opencode_key()
 
     print("\033[1;36m===================================================\033[0m")
-    print("\033[1;37m   NVIDIA NIM Router - Endpoint Probing Scan       \033[0m")
+    print("\033[1;37m   NIM Router - Endpoint Probing Scan       \033[0m")
     print("\033[1;36m===================================================\033[0m\n")
 
     print("\033[90mStarting live multi-provider endpoint probing scan...\033[0m")
@@ -103,7 +103,7 @@ async def interactive_model_selector():
     opencode_key = get_opencode_key()
 
     print("\033[1;36m===================================================\033[0m")
-    print("\033[1;37m   NVIDIA NIM Router - Model Priority Selector      \033[0m")
+    print("\033[1;37m   NIM Router - Model Priority Selector      \033[0m")
     print("\033[1;36m===================================================\033[0m\n")
 
     current_primary = get_primary_model()
@@ -221,7 +221,7 @@ async def interactive_model_selector():
 
 async def async_connect_api_keys():
     print("\033[1;36m===================================================\033[0m")
-    print("\033[1;37m   NVIDIA NIM Router - Multi-Provider Key Config   \033[0m")
+    print("\033[1;37m   NIM Router - Multi-Provider Key Config   \033[0m")
     print("\033[1;36m===================================================\033[0m\n")
 
     current_nvidia = get_nvidia_keys()

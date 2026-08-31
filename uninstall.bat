@@ -5,7 +5,7 @@ cd /d "%~dp0"
 set "DIR=%~dp0"
 
 echo =====================================
-echo   NVIDIA NIM Router Uninstaller
+echo   NIM Router Uninstaller
 echo =====================================
 echo.
 

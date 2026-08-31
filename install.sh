@@ -10,7 +10,7 @@ YELLOW="\033[0;33m"
 RED="\033[0;31m"
 NC="\033[0m"
 
-echo -e "${BOLD}=== NVIDIA NIM Router Installer ===${NC}\n"
+echo -e "${BOLD}=== NIM Router Installer ===${NC}\n"
 
 PYTHON_BIN=""
 if command -v python3 &> /dev/null; then
