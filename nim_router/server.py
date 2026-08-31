@@ -26,7 +26,7 @@ async def lifespan(app: FastAPI):
     logger.info("nim-router shutting down")
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="NVIDIA NIM Free Router", lifespan=lifespan)
+    app = FastAPI(title="NIM Router", lifespan=lifespan)
 
     @app.get("/health")
     async def health_check():
