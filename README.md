@@ -15,6 +15,29 @@ A lightweight, OpenAI-compatible proxy router that aggregates, load-balances, an
 
 ---
 
+## Quick Start (Recommended Installation)
+
+Run the single-line command for your operating system / terminal:
+
+### **Linux / macOS / Git Bash / WSL (Recommended)**:
+```bash
+git clone https://github.com/PatrickLmbn/nim-router.git && cd nim-router && bash install.sh
+```
+
+### **Windows Command Prompt (`cmd.exe`)**:
+```cmd
+git clone https://github.com/PatrickLmbn/nim-router.git && cd nim-router && install.bat
+```
+
+### **Windows PowerShell**:
+```powershell
+git clone https://github.com/PatrickLmbn/nim-router.git; cd nim-router; .\install.bat
+```
+
+> **Note**: The installer interactively prompts for your **NVIDIA API Keys**, **OpenRouter API Key**, and **OpenCode API Key**.
+
+---
+
 ## Features
 
 - **Universal Free Multi-Provider Support**:
@@ -40,17 +63,24 @@ A lightweight, OpenAI-compatible proxy router that aggregates, load-balances, an
 
 ---
 
-## Quick Start
+## Core Architecture
 
-### 1. Automated Setup (Recommended)
-
-Run the installation script for your operating system:
-
-**Linux / macOS / WSL:**
-```bash
-git clone https://github.com/patricklmbn/nim-router.git
-cd nim-router
-bash install.sh
+```text
+Client Request (model: "nim-free" or "auto")
+        │
+        ▼
+[Primary Model Configured?]
+   ├── YES ──► Try Primary Free Model (e.g., openai/gpt-oss-120b, meta/llama-3.3-70b-instruct)
+   │               │
+   │               ├── 200 OK ──► Return Stream / Response
+   │               └── 402/429/5xx ──► [Failover to Free Pool]
+   │
+   └── NO / Fallback ──► [Discover & Rank Healthy Free Models]
+                            (NVIDIA NIM + OpenRouter Free + OpenCode)
+                                       │
+                                       ▼
+                       [Route to Highest Ranked Free Model]
+               (Combined Latency + TPS Speed + EMA Reliability + <3.0s Threshold)
 ```
 
 ---
