@@ -7,7 +7,13 @@ import subprocess
 import sys
 import httpx
 
-from nim_router.config import get_nvidia_keys, get_openrouter_key, get_opencode_key, get_primary_model
+from nim_router.config import (
+    get_nvidia_keys,
+    get_openrouter_key,
+    get_opencode_key,
+    get_primary_model,
+    get_virtual_model_name,
+)
 from nim_router.engine import ModelRouter
 
 def get_rainbow_banner() -> str:
@@ -65,6 +71,7 @@ def show_help():
     print("\033[1;33mUsage:\033[0m nimrouter [command]\n")
     print("\033[1;33mAvailable Commands:\033[0m")
     print("  \033[1;32mmodels, list, select\033[0m   Interactively choose primary priority model.")
+    print("  \033[1;32mname, rename, alias\033[0m    Set custom virtual model name (default: nim-free).")
     print("  \033[1;32mprobe, scan\033[0m            Run live probing scan across all enabled providers.")
     print("  \033[1;32mconnect, keys, config\033[0m  Interactively add or update provider API keys.")
     print("  \033[1;32mrestart, reload\033[0m        Restart background server process via PM2.")
@@ -75,6 +82,7 @@ def show_help():
     print("  Starts the nimrouter OpenAI-compatible proxy server (Port 11435).\n")
     print("\033[1;33mExamples:\033[0m")
     print("  nimrouter models       Select primary model priority")
+    print("  nimrouter name         Change virtual model name (e.g. nim-free)")
     print("  nimrouter probe        Probe endpoints and refresh active model pool")
     print("  nimrouter connect      Set or update API credentials")
     print("  nimrouter restart      Restart background server process")
@@ -117,6 +125,49 @@ def stop_server():
     else:
         print("\033[91mPM2 is not installed on this system.\033[0m")
 
+async def async_set_virtual_model_name():
+    print(get_rainbow_banner())
+    print("\033[1;37m   Virtual Model Name Config   \033[0m\n")
+
+    current_name = get_virtual_model_name()
+    print(f"Current Virtual Model Name: \033[1;32m{current_name}\033[0m\n")
+
+    try:
+        new_name = input("\033[1;36mEnter custom virtual model name (Press Enter to keep current, default: nim-free): \033[0m").strip()
+    except (KeyboardInterrupt, EOFError):
+        print("\n\033[90mOperation cancelled.\033[0m")
+        sys.exit(0)
+
+    if not new_name:
+        new_name = current_name if current_name else "nim-free"
+
+    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    env_vars = {}
+    if os.path.exists(env_path):
+        with open(env_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line and "=" in line and not line.startswith("#"):
+                    parts = line.split("=", 1)
+                    env_vars[parts[0].strip()] = parts[1].strip()
+
+    env_vars["VIRTUAL_MODEL_NAME"] = new_name
+
+    with open(env_path, "w") as f:
+        for k, v in env_vars.items():
+            f.write(f"{k}={v}\n")
+
+    print(f"\n\033[1;32m[✓] Virtual model name updated to: {new_name}\033[0m")
+
+    try:
+        port = int(env_vars.get("PORT", 11435))
+        async with httpx.AsyncClient(timeout=3) as client:
+            r = await client.post(f"http://127.0.0.1:{port}/refresh")
+            if r.status_code == 200:
+                print("\033[1;32m[✓] Live nimrouter server refreshed with new model name.\033[0m")
+    except Exception:
+        pass
+
 async def async_probe_models():
     nvidia_keys = get_nvidia_keys()
     openrouter_key = get_openrouter_key()
@@ -156,6 +207,7 @@ async def interactive_model_selector():
     print("\033[1;37m   Model Priority Selector      \033[0m\n")
 
     current_primary = get_primary_model()
+    v_name = get_virtual_model_name()
     print(f"Current Primary Model: \033[1;32m{current_primary}\033[0m\n")
 
     try:
@@ -189,7 +241,7 @@ async def interactive_model_selector():
     counter = 1
 
     print("\n\033[1;33mAvailable Models:\033[0m\n")
-    print("  \033[1;32m[0]\033[0m nim-free (Auto-rotate across all free models by lowest latency)\n")
+    print(f"  \033[1;32m[0]\033[0m {v_name} (Auto-rotate across all free models by lowest latency)\n")
 
     if nvidia_models:
         print("\033[1;36m--- NVIDIA NIM Models ---\033[0m")
@@ -224,7 +276,7 @@ async def interactive_model_selector():
             return
         idx = int(choice)
         if idx == 0:
-            selected_model = "nim-free"
+            selected_model = v_name
         elif 1 <= idx <= len(all_ordered):
             selected_model = all_ordered[idx - 1]
         else:
@@ -355,6 +407,9 @@ def safe_run(coro):
 
 def select_primary_model():
     safe_run(interactive_model_selector())
+
+def set_virtual_model_name():
+    safe_run(async_set_virtual_model_name())
 
 def probe_active_models():
     safe_run(async_probe_models())
