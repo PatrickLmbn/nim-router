@@ -17,9 +17,6 @@ if __name__ == "__main__":
             if cmd in ("models", "list", "select"):
                 from nim_router.cli import select_primary_model
                 select_primary_model()
-            elif cmd in ("name", "rename", "alias"):
-                from nim_router.cli import set_virtual_model_name
-                set_virtual_model_name()
             elif cmd in ("probe", "scan"):
                 from nim_router.cli import probe_active_models
                 probe_active_models()

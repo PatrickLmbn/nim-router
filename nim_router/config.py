@@ -28,8 +28,5 @@ def get_opencode_key() -> str:
 def get_primary_model() -> str:
     return os.getenv("PRIMARY_MODEL", "").strip() or os.getenv("MODEL", "nim-free").strip()
 
-def get_virtual_model_name() -> str:
-    return os.getenv("VIRTUAL_MODEL_NAME", "").strip() or os.getenv("PRIMARY_MODEL", "").strip() or "nim-free"
-
 def get_api_keys() -> list[str]:
     return get_nvidia_keys()

@@ -164,9 +164,7 @@ if [ ! -f .env ]; then
         cp .env.example .env
         echo -e "${GREEN}[✓] Created .env from .env.example.${NC}"
         
-        echo -e "${BOLD}=== Multi-Provider API Key & Virtual Model Setup ===${NC}"
-        read -r -p "Enter custom virtual model name (Press Enter for default: nim-free): " v_model_input
-        echo ""
+        echo -e "${BOLD}=== Multi-Provider API Key Setup (Inputs Hidden) ===${NC}"
         read -r -s -p "Enter Primary NVIDIA API Key #1 (Recommended): " key1
         echo ""
         read -r -s -p "Enter Secondary NVIDIA API Key #2 (Optional - press Enter to skip): " key2
@@ -175,13 +173,6 @@ if [ ! -f .env ]; then
         echo ""
         read -r -s -p "Enter OpenCode API Key (Optional - press Enter to skip): " opencode_key
         echo ""
-
-        [ -z "$v_model_input" ] && v_model_input="nim-free"
-        if grep -q "VIRTUAL_MODEL_NAME=" .env; then
-            sed -i "s/^VIRTUAL_MODEL_NAME=.*/VIRTUAL_MODEL_NAME=$v_model_input/" .env
-        else
-            echo "VIRTUAL_MODEL_NAME=$v_model_input" >> .env
-        fi
 
         keys_combined=""
         [ -n "$key1" ] && keys_combined="$key1"
@@ -213,7 +204,7 @@ if [ ! -f .env ]; then
             fi
         fi
 
-        echo -e "${GREEN}[✓] Saved configured virtual model name and API key(s) to .env${NC}"
+        echo -e "${GREEN}[✓] Saved configured provider API key(s) to .env${NC}"
     fi
 else
     echo -e "${GREEN}[✓] .env file already exists.${NC}"
@@ -236,7 +227,7 @@ chmod +x "$DIR/nim-router.py" "$HOME/.local/bin/nim" "$HOME/.local/bin/nimrouter
 
 if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
     export PATH="$HOME/.local/bin:$PATH"
-    if [ -f "$HOME/.zshrc" ] && ! grep -q '\.local/bin' "$HOME/.zshrc'; then
+    if [ -f "$HOME/.zshrc" ] && ! grep -q '\.local/bin' "$HOME/.zshrc"; then
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
     fi
     if [ -f "$HOME/.bashrc" ] && ! grep -q '\.local/bin' "$HOME/.bashrc"; then

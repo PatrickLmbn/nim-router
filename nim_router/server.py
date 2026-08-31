@@ -4,7 +4,7 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
 
-from nim_router.config import get_nvidia_keys, get_openrouter_key, get_opencode_key, get_virtual_model_name
+from nim_router.config import get_nvidia_keys, get_openrouter_key, get_opencode_key
 from nim_router.engine import ModelRouter
 from nim_router.logger import logger
 
@@ -42,10 +42,7 @@ def create_app() -> FastAPI:
         if not _router_instance:
             return {"error": "Router not initialized"}
 
-        v_name = get_virtual_model_name()
-        data = [{"id": v_name, "object": "model", "owned_by": "nim-router"}]
-        if v_name != "nim-free":
-            data.append({"id": "nim-free", "object": "model", "owned_by": "nim-router"})
+        data = [{"id": "nim-free", "object": "model", "owned_by": "nim-router"}]
 
         nvidia_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "NVIDIA"])
         openrouter_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "OpenRouter"])
@@ -75,10 +72,7 @@ def create_app() -> FastAPI:
         if not _router_instance:
             return {"models": []}
 
-        v_name = get_virtual_model_name()
-        tags = [{"name": v_name, "model": v_name, "modified_at": "2026-08-30T00:00:00Z", "size": 0}]
-        if v_name != "nim-free":
-            tags.append({"name": "nim-free", "model": "nim-free", "modified_at": "2026-08-30T00:00:00Z", "size": 0})
+        tags = [{"name": "nim-free", "model": "nim-free", "modified_at": "2026-08-30T00:00:00Z", "size": 0}]
 
         nvidia_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "NVIDIA"])
         openrouter_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "OpenRouter"])
@@ -100,8 +94,7 @@ def create_app() -> FastAPI:
             body = await request.json()
         except Exception:
             body = {}
-        v_name = get_virtual_model_name()
-        model_name = body.get("name") or body.get("model") or v_name
+        model_name = body.get("name") or body.get("model") or "nim-free"
         return {
             "modelfile": f"# nim-router virtual model\nFROM {model_name}",
             "parameters": "stop \"<|im_end|>\"",

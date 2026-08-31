@@ -16,7 +16,6 @@ from nim_router.config import (
     OPENROUTER_API_BASE,
     OPENCODE_API_BASE,
     get_primary_model,
-    get_virtual_model_name,
 )
 from nim_router.logger import logger
 from nim_router.schemas import ChatCompletionRequest
@@ -311,10 +310,9 @@ class ModelRouter:
                 if tool_capable:
                     candidate_pool = tool_capable
 
-            v_name = get_virtual_model_name().lower()
-            target_model = requested_model if (requested_model and requested_model.lower() not in ("nim-free", "nim_free", "auto", v_name)) else get_primary_model()
+            target_model = requested_model if (requested_model and requested_model.lower() not in ("nim-free", "nim_free", "auto")) else get_primary_model()
 
-            if target_model and target_model.lower() not in ("nim-free", "nim_free", "auto", v_name):
+            if target_model and target_model.lower() not in ("nim-free", "nim_free", "auto"):
                 if self._is_banned_model(target_model):
                     logger.warning(f"Target model {target_model} is banned/non-chat; routing to healthy pool.")
                     candidate_ids = candidate_pool
