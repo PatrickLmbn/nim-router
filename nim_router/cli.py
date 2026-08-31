@@ -41,11 +41,8 @@ def show_help():
     print("\033[1;33mUsage:\033[0m nim-router [command]\n")
     print("\033[1;33mAvailable Commands:\033[0m")
     print("  \033[1;32mmodels, list, select\033[0m   Interactively choose primary priority model.")
-    print("                         (Asks user whether to run live probing scan first)")
-    print("  \033[1;32mprobe, scan\033[0m            Run live probing scan across all enabled providers")
-    print("                         (NVIDIA, OpenRouter, OpenCode) to update active models.")
-    print("  \033[1;32mconnect, keys, config\033[0m  Interactively add or update provider API keys")
-    print("                         (NVIDIA API keys, OpenRouter key, OpenCode key).")
+    print("  \033[1;32mprobe, scan\033[0m            Run live probing scan across all enabled providers.")
+    print("  \033[1;32mconnect, keys, config\033[0m  Interactively add or update provider API keys.")
     print("  \033[1;32mhelp, -h, --help\033[0m       Show CLI help documentation and exit.\n")
     print("\033[1;33mDefault (no argument):\033[0m")
     print("  Starts the nim-router OpenAI-compatible proxy server (Port 11435).\n")
@@ -101,8 +98,8 @@ async def interactive_model_selector():
     try:
         scan_choice = input("\033[1;36mDo you want to probe/scan endpoints for active working models? [Y/n] (Recommended): \033[0m").strip().lower()
     except (KeyboardInterrupt, EOFError):
-        print("\nOperation cancelled.")
-        return
+        print("\n\033[90mOperation cancelled.\033[0m")
+        sys.exit(0)
 
     should_probe = scan_choice not in ("n", "no")
 
@@ -170,6 +167,9 @@ async def interactive_model_selector():
         else:
             print("\033[91mInvalid selection.\033[0m")
             return
+    except (KeyboardInterrupt, EOFError):
+        print("\n\033[90mOperation cancelled.\033[0m")
+        sys.exit(0)
     except ValueError:
         print("\033[91mInvalid input.\033[0m")
         return
@@ -223,10 +223,14 @@ async def async_connect_api_keys():
     print(f"Current OpenCode Key:   \033[1;33m{mask(current_oc)}\033[0m\n")
 
     print("\033[90mEnter new API keys (inputs hidden, press Enter to keep current value):\033[0m\n")
-    k1 = getpass.getpass("Primary NVIDIA API Key #1: ").strip()
-    k2 = getpass.getpass("Secondary NVIDIA API Key #2 (Optional): ").strip()
-    or_key = getpass.getpass("OpenRouter API Key (Optional): ").strip()
-    oc_key = getpass.getpass("OpenCode API Key (Optional): ").strip()
+    try:
+        k1 = getpass.getpass("Primary NVIDIA API Key #1: ").strip()
+        k2 = getpass.getpass("Secondary NVIDIA API Key #2 (Optional): ").strip()
+        or_key = getpass.getpass("OpenRouter API Key (Optional): ").strip()
+        oc_key = getpass.getpass("OpenCode API Key (Optional): ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print("\n\033[90mOperation cancelled.\033[0m")
+        sys.exit(0)
 
     keys_combined = []
     if k1:
@@ -280,14 +284,21 @@ async def async_connect_api_keys():
     except Exception:
         pass
 
+def safe_run(coro):
+    try:
+        asyncio.run(coro)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        print("\n\033[90mOperation cancelled.\033[0m")
+        sys.exit(0)
+
 def select_primary_model():
-    asyncio.run(interactive_model_selector())
+    safe_run(interactive_model_selector())
 
 def probe_active_models():
-    asyncio.run(async_probe_models())
+    safe_run(async_probe_models())
 
 def connect_api_keys():
-    asyncio.run(async_connect_api_keys())
+    safe_run(async_connect_api_keys())
 
 def main():
-    asyncio.run(interactive_model_selector())
+    safe_run(interactive_model_selector())
