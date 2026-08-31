@@ -25,7 +25,6 @@ async def test_router():
             print(f"   [ERROR] Failed to fetch models: {e}", flush=True)
             return
 
-
         print("\n3. Testing Round-Robin Chat Completions (Sending 6 requests with model='nim-free')...", flush=True)
         for i in range(1, 7):
             prompt = f"Say hello and count to {i}"
@@ -56,4 +55,3 @@ async def test_router():
 
 if __name__ == "__main__":
     asyncio.run(test_router())
-
