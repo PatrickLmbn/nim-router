@@ -4,5 +4,6 @@ __pycache__/
 *.log
 .venv/
 venv/
+config/models_status.json
+config/*.json
 README copy.md
-tests/
