@@ -68,7 +68,7 @@ def save_working_models(model_ids: list[str]):
 
 def show_help():
     print(get_rainbow_banner())
-    print("\033[1;33mUsage:\033[0m nimrouter [command]\n")
+    print("\033[1;33mUsage:\033[0m nim [command]\n")
     print("\033[1;33mAvailable Commands:\033[0m")
     print("  \033[1;32mmodels, list, select\033[0m   Interactively choose primary priority model.")
     print("  \033[1;32mname, rename, alias\033[0m    Set custom virtual model name (default: nim-free).")
@@ -76,19 +76,19 @@ def show_help():
     print("  \033[1;32mconnect, keys, config\033[0m  Interactively add or update provider API keys.")
     print("  \033[1;32mrestart, reload\033[0m        Restart background server process via PM2.")
     print("  \033[1;32mstop\033[0m                   Stop background server process via PM2.")
-    print("  \033[1;32mlogs, log\033[0m              Stream live nimrouter server logs.")
+    print("  \033[1;32mlogs, log\033[0m              Stream live nim server logs.")
     print("  \033[1;32mhelp, -h, --help\033[0m       Show CLI help documentation and exit.\n")
     print("\033[1;33mDefault (no argument):\033[0m")
-    print("  Starts the nimrouter OpenAI-compatible proxy server (Port 11435).\n")
+    print("  Starts the nim OpenAI-compatible proxy server (Port 11435).\n")
     print("\033[1;33mExamples:\033[0m")
-    print("  nimrouter models       Select primary model priority")
-    print("  nimrouter name         Change virtual model name (e.g. nim-free)")
-    print("  nimrouter probe        Probe endpoints and refresh active model pool")
-    print("  nimrouter connect      Set or update API credentials")
-    print("  nimrouter restart      Restart background server process")
-    print("  nimrouter stop         Stop background server process")
-    print("  nimrouter logs         View live background server logs")
-    print("  nimrouter --help       Show help documentation\n")
+    print("  nim models       Select primary model priority")
+    print("  nim name         Change virtual model name (e.g. nim-free)")
+    print("  nim probe        Probe endpoints and refresh active model pool")
+    print("  nim connect      Set or update API credentials")
+    print("  nim restart      Restart background server process")
+    print("  nim stop         Stop background server process")
+    print("  nim logs         View live background server logs")
+    print("  nim --help       Show help documentation\n")
 
 def show_logs():
     print(get_rainbow_banner())
@@ -107,9 +107,9 @@ def restart_server():
     if pm2_bin:
         res = subprocess.run([pm2_bin, "restart", "nim-router", "--update-env"])
         if res.returncode == 0:
-            print("\n\033[1;32m[✓] Live nimrouter server process restarted via PM2!\033[0m")
+            print("\n\033[1;32m[✓] Live nim server process restarted via PM2!\033[0m")
         else:
-            print("\n\033[91mFailed to restart nimrouter via PM2. Please check if process is running in PM2.\033[0m")
+            print("\n\033[91mFailed to restart nim via PM2. Please check if process is running in PM2.\033[0m")
     else:
         print("\033[91mPM2 is not installed on this system.\033[0m")
 
@@ -119,9 +119,9 @@ def stop_server():
     if pm2_bin:
         res = subprocess.run([pm2_bin, "stop", "nim-router"])
         if res.returncode == 0:
-            print("\n\033[1;32m[✓] Stopped nimrouter server process via PM2.\033[0m")
+            print("\n\033[1;32m[✓] Stopped nim server process via PM2.\033[0m")
         else:
-            print("\n\033[91mFailed to stop nimrouter via PM2. Please check if process is running in PM2.\033[0m")
+            print("\n\033[91mFailed to stop nim via PM2. Please check if process is running in PM2.\033[0m")
     else:
         print("\033[91mPM2 is not installed on this system.\033[0m")
 
@@ -164,7 +164,7 @@ async def async_set_virtual_model_name():
         async with httpx.AsyncClient(timeout=3) as client:
             r = await client.post(f"http://127.0.0.1:{port}/refresh")
             if r.status_code == 200:
-                print("\033[1;32m[✓] Live nimrouter server refreshed with new model name.\033[0m")
+                print("\033[1;32m[✓] Live nim server refreshed with new model name.\033[0m")
     except Exception:
         pass
 
@@ -181,7 +181,7 @@ async def async_probe_models():
     models = await router._discover_models()
 
     if not models:
-        print("\033[91mNo working models discovered. Please check your API keys via 'nimrouter connect'.\033[0m")
+        print("\033[91mNo working models discovered. Please check your API keys via 'nim connect'.\033[0m")
         return
 
     model_ids = [m.get("id") for m in models if m.get("id")]
@@ -194,7 +194,7 @@ async def async_probe_models():
         async with httpx.AsyncClient(timeout=3) as client:
             r = await client.post(f"http://127.0.0.1:{port}/refresh")
             if r.status_code == 200:
-                print("\033[1;32m[✓] Live nimrouter server refreshed with new active pool.\033[0m")
+                print("\033[1;32m[✓] Live nim server refreshed with new active pool.\033[0m")
     except Exception:
         pass
 
@@ -316,7 +316,7 @@ async def interactive_model_selector():
         async with httpx.AsyncClient(timeout=3) as client:
             r = await client.post(f"http://127.0.0.1:{port}/refresh")
             if r.status_code == 200:
-                print("\033[1;32m[✓] Live nimrouter server refreshed successfully.\033[0m")
+                print("\033[1;32m[✓] Live nim server refreshed successfully.\033[0m")
     except Exception:
         pass
 
@@ -394,7 +394,7 @@ async def async_connect_api_keys():
         async with httpx.AsyncClient(timeout=3) as client:
             r = await client.post(f"http://127.0.0.1:{port}/refresh")
             if r.status_code == 200:
-                print("\033[1;32m[✓] Live nimrouter server refreshed with new keys.\033[0m")
+                print("\033[1;32m[✓] Live nim server refreshed with new keys.\033[0m")
     except Exception:
         pass
 

@@ -8,6 +8,7 @@ setup(
     py_modules=["nim-router"],
     entry_points={
         "console_scripts": [
+            "nim=nim_router.cli:main",
             "nimrouter=nim_router.cli:main",
             "nim-router=nim_router.cli:main",
         ],
