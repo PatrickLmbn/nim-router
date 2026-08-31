@@ -139,9 +139,11 @@ if [ "$INSTALL_SUCCESS" = false ]; then
     source .venv/bin/activate
     python -m pip install --upgrade pip
     python -m pip install -r requirements.txt
+    python -m pip install -e . 2>/dev/null || true
     INSTALL_SUCCESS=true
     echo -e "${GREEN}[✓] Dependencies installed in virtual environment (.venv).${NC}"
 else
+    $PYTHON_BIN -m pip install -e . 2>/dev/null || true
     echo -e "${GREEN}[✓] Dependencies installed successfully.${NC}"
 fi
 
@@ -199,7 +201,7 @@ fi
 
 echo ""
 mkdir -p "$HOME/.local/bin"
-cat << EOF > "$HOME/.local/bin/nim-router"
+cat << EOF > "$HOME/.local/bin/nimrouter"
 #!/usr/bin/env bash
 if [ -f "$DIR/.venv/bin/python" ]; then
     exec "$DIR/.venv/bin/python" "$DIR/nim-router.py" "\$@"
@@ -207,8 +209,11 @@ else
     exec python3 "$DIR/nim-router.py" "\$@"
 fi
 EOF
-chmod +x "$DIR/nim-router" "$HOME/.local/bin/nim-router" 2>/dev/null || true
-echo -e "${GREEN}[✓] Installed 'nim-router' CLI command to ~/.local/bin/nim-router.${NC}"
+cp "$HOME/.local/bin/nimrouter" "$HOME/.local/bin/nim-router"
+chmod +x "$DIR/nim-router.py" "$HOME/.local/bin/nimrouter" "$HOME/.local/bin/nim-router" 2>/dev/null || true
+sudo ln -sf "$HOME/.local/bin/nimrouter" /usr/local/bin/nimrouter 2>/dev/null || true
+sudo ln -sf "$HOME/.local/bin/nim-router" /usr/local/bin/nim-router 2>/dev/null || true
+echo -e "${GREEN}[✓] Installed 'nimrouter' CLI command globally to ~/.local/bin/nimrouter.${NC}"
 
 echo ""
 if command -v pm2 &> /dev/null; then
@@ -225,9 +230,9 @@ if command -v pm2 &> /dev/null; then
             fi
         fi
         echo -e "${GREEN}[✓] nim-router started in background with PM2.${NC}"
-        echo "Use 'pm2 logs nim-router' to view logs or 'pm2 stop nim-router' to stop."
+        echo "Use 'nimrouter logs' to view logs or 'nimrouter stop' to stop."
     else
-        echo -e "${GREEN}Setup complete!${NC} You can start the server anytime with: nim-router or python nim-router.py"
+        echo -e "${GREEN}Setup complete!${NC} You can start the server anytime with: nimrouter"
     fi
 else
     read -r -p "Do you want to install PM2 to run nim-router in the background? (y/N): " install_pm2
@@ -248,13 +253,13 @@ else
                     fi
                 fi
                 echo -e "${GREEN}[✓] nim-router started in background with PM2.${NC}"
-                echo "Use 'pm2 logs nim-router' to view logs."
+                echo "Use 'nimrouter logs' to view logs."
             fi
         else
             echo -e "${YELLOW}[WARNING] npm was not found. Please install Node.js / npm first to install PM2.${NC}"
-            echo "You can still run the router directly with: nim-router or python nim-router.py"
+            echo "You can still run the router directly with: nimrouter"
         fi
     else
-        echo -e "${GREEN}Setup complete!${NC} You can start the router with: nim-router or python nim-router.py"
+        echo -e "${GREEN}Setup complete!${NC} You can start the router with: nimrouter"
     fi
 fi

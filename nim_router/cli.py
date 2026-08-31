@@ -40,25 +40,25 @@ def show_help():
     print("\033[1;36m===================================================\033[0m")
     print("\033[1;37m   NIM Router CLI - Command Reference       \033[0m")
     print("\033[1;36m===================================================\033[0m\n")
-    print("\033[1;33mUsage:\033[0m nim-router [command]\n")
+    print("\033[1;33mUsage:\033[0m nimrouter [command]\n")
     print("\033[1;33mAvailable Commands:\033[0m")
     print("  \033[1;32mmodels, list, select\033[0m   Interactively choose primary priority model.")
     print("  \033[1;32mprobe, scan\033[0m            Run live probing scan across all enabled providers.")
     print("  \033[1;32mconnect, keys, config\033[0m  Interactively add or update provider API keys.")
     print("  \033[1;32mrestart, reload\033[0m        Restart background server process via PM2.")
     print("  \033[1;32mstop\033[0m                   Stop background server process via PM2.")
-    print("  \033[1;32mlogs, log\033[0m              Stream live nim-router server logs.")
+    print("  \033[1;32mlogs, log\033[0m              Stream live nimrouter server logs.")
     print("  \033[1;32mhelp, -h, --help\033[0m       Show CLI help documentation and exit.\n")
     print("\033[1;33mDefault (no argument):\033[0m")
-    print("  Starts the nim-router OpenAI-compatible proxy server (Port 11435).\n")
+    print("  Starts the nimrouter OpenAI-compatible proxy server (Port 11435).\n")
     print("\033[1;33mExamples:\033[0m")
-    print("  nim-router models       Select primary model priority")
-    print("  nim-router probe        Probe endpoints and refresh active model pool")
-    print("  nim-router connect      Set or update API credentials")
-    print("  nim-router restart      Restart background server process")
-    print("  nim-router stop         Stop background server process")
-    print("  nim-router logs         View live background server logs")
-    print("  nim-router --help       Show help documentation\n")
+    print("  nimrouter models       Select primary model priority")
+    print("  nimrouter probe        Probe endpoints and refresh active model pool")
+    print("  nimrouter connect      Set or update API credentials")
+    print("  nimrouter restart      Restart background server process")
+    print("  nimrouter stop         Stop background server process")
+    print("  nimrouter logs         View live background server logs")
+    print("  nimrouter --help       Show help documentation\n")
 
 def show_logs():
     pm2_bin = shutil.which("pm2")
@@ -106,7 +106,7 @@ async def async_probe_models():
     models = await router._discover_models()
 
     if not models:
-        print("\033[91mNo working models discovered. Please check your API keys via 'nim-router connect'.\033[0m")
+        print("\033[91mNo working models discovered. Please check your API keys via 'nimrouter connect'.\033[0m")
         return
 
     model_ids = [m.get("id") for m in models if m.get("id")]
