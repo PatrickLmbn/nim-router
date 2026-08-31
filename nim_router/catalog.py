@@ -63,10 +63,21 @@ def is_banned_model(model_id: str) -> bool:
 
 def load_fallback_models(latencies_dict: dict) -> list[dict]:
     base_dir = os.path.dirname(os.path.dirname(__file__))
+    status_path = os.path.join(base_dir, "config", "models_status.json")
+    example_path = os.path.join(base_dir, "config", "models_status.example.json")
+
+    if not os.path.exists(status_path) and os.path.exists(example_path):
+        try:
+            os.makedirs(os.path.dirname(status_path), exist_ok=True)
+            with open(example_path, "r") as src, open(status_path, "w") as dst:
+                dst.write(src.read())
+        except Exception:
+            pass
+
     for path in [
-        os.path.join(base_dir, "config", "models_status.json"),
+        status_path,
         os.path.join(base_dir, "tests", "models_status.json"),
-        os.path.join(base_dir, "models_status.json"),
+        example_path,
     ]:
         if os.path.exists(path):
             try:
@@ -93,9 +104,6 @@ def load_fallback_models(latencies_dict: dict) -> list[dict]:
         "meta/muse-glimmer-30b",
         "google/gemma-4-31b-it",
         "minimaxai/minimax-m3",
-        "moonshotai/kimi-k3",
-        "deepseek-ai/deepseek-v4-flash-0731",
-        "deepseek-ai/deepseek-v4-pro-0813",
         "poolside/laguna-xs-2.1",
     ]
     clean_fallback = [mid for mid in fallback_list if not is_banned_model(mid)]

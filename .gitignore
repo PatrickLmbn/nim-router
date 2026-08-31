@@ -5,5 +5,5 @@ __pycache__/
 .venv/
 venv/
 config/models_status.json
-config/*.json
+!config/models_status.example.json
 README copy.md
