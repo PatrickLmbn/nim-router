@@ -19,7 +19,11 @@ from nim_router.config import (
 from nim_router.logger import logger
 from nim_router.schemas import ChatCompletionRequest
 from nim_router.catalog import is_banned_model, load_fallback_models
-from nim_router.classifier import is_vision_model, is_vision_request
+from nim_router.classifier import (
+    is_vision_model,
+    is_vision_request,
+    estimate_token_count,
+)
 from nim_router.client import probe_model, discover_models, call_provider_endpoint, call_nvidia_endpoint
 
 class ModelRouter:
@@ -39,6 +43,8 @@ class ModelRouter:
         self._lock = asyncio.Lock()
         self._health: dict[str, dict] = {}
         self._latencies: dict[str, float] = {}
+        self._tps: dict[str, float] = {}
+        self._reliability: dict[str, float] = {}
         self._rate_limited_until: dict[str, float] = {}
         self._request_history: dict[str, list[float]] = {}
         self._in_flight: dict[str, int] = {}
@@ -74,7 +80,9 @@ class ModelRouter:
         elif provider == "OpenCode":
             return OPENCODE_API_BASE, self.opencode_key, [self.opencode_key] if self.opencode_key else [""]
         else:
-            return NIM_API_BASE, self._get_next_api_key(), self.api_keys
+            rotated_keys = self.api_keys[self.key_index:] + self.api_keys[:self.key_index]
+            self.key_index = (self.key_index + 1) % len(self.api_keys)
+            return NIM_API_BASE, rotated_keys[0], rotated_keys
 
     def _get_recent_rpm(self, model_id: str, now: float) -> int:
         cutoff = now - 60.0
@@ -124,6 +132,9 @@ class ModelRouter:
 
     def _record_failure(self, model_id: str, status_code: int = 500):
         now = time.time()
+        cur_rel = self._reliability.get(model_id, 1.0)
+        self._reliability[model_id] = max(0.05, 0.7 * cur_rel)
+
         if status_code in (429, 402):
             self._rate_limited_until[model_id] = now + RATE_LIMIT_COOLDOWN
             current = self._latencies.get(model_id, 1.0)
@@ -141,16 +152,24 @@ class ModelRouter:
             self._health[model_id]["healthy"] = False
             logger.warning(f"Model {model_id} temporarily marked unhealthy after {self._health[model_id]['failures']} failures")
 
-    def _record_success(self, model_id: str, elapsed: float):
+    def _record_success(self, model_id: str, elapsed: float, token_count: int = 0):
         if model_id in self._health:
             self._health[model_id]["failures"] = 0
             self._health[model_id]["healthy"] = True
         self._rate_limited_until.pop(model_id, None)
 
+        cur_rel = self._reliability.get(model_id, 1.0)
+        self._reliability[model_id] = min(1.0, 0.85 * cur_rel + 0.15)
+
         if model_id in self._latencies:
             self._latencies[model_id] = round(0.7 * self._latencies[model_id] + 0.3 * elapsed, 3)
         else:
             self._latencies[model_id] = round(elapsed, 3)
+
+        if token_count > 0 and elapsed > 0.05:
+            measured_tps = token_count / elapsed
+            cur_tps = self._tps.get(model_id, 40.0)
+            self._tps[model_id] = round(0.7 * cur_tps + 0.3 * measured_tps, 2)
 
     def _build_healthy_pool(self) -> list[str]:
         now = time.time()
@@ -168,8 +187,13 @@ class ModelRouter:
             rpm_over = 1 if self._get_recent_rpm(mid, now) >= MODEL_MAX_RPM else 0
             busy = 1 if self._in_flight.get(mid, 0) >= MODEL_MAX_CONCURRENCY else 0
             in_flight_count = self._in_flight.get(mid, 0)
-            latency = self._latencies.get(mid, 999.0)
-            return (throttled, rpm_over, busy, in_flight_count, latency)
+
+            lat = self._latencies.get(mid, 1.0)
+            rel = self._reliability.get(mid, 1.0)
+            tps = self._tps.get(mid, 40.0)
+            perf_score = (1.0 / max(0.01, lat)) * (rel ** 2) * (1.0 + 0.01 * tps)
+
+            return (throttled, rpm_over, busy, in_flight_count, -perf_score)
 
         healthy.sort(key=sort_key)
         return healthy
@@ -249,6 +273,14 @@ class ModelRouter:
                 if requested_model.startswith(prefix):
                     requested_model = requested_model[len(prefix):].strip()
 
+            est_tokens = estimate_token_count(request)
+
+            if est_tokens > 16000:
+                large_ctx_models = [mid for mid in candidate_pool if any(k in mid.lower() for k in ("31b", "90b", "120b", "550b", "glm-5", "deepseek"))]
+                if large_ctx_models:
+                    candidate_pool = large_ctx_models
+                    logger.info(f"Large prompt detected ({est_tokens} tokens): isolated pool to large-context models.")
+
             if self._is_vision_request(request):
                 vision_capable = [mid for mid in candidate_pool if self._is_vision_model(mid)]
                 if not vision_capable:
@@ -282,13 +314,20 @@ class ModelRouter:
                     other_candidates = [mid for mid in candidate_pool if mid != target_model]
                     candidate_ids = [target_model] + other_candidates
             else:
-                candidate_pool.sort(key=lambda mid: (
-                    1 if self._rate_limited_until.get(mid, 0) > now else 0,
-                    1 if self._get_recent_rpm(mid, now) >= MODEL_MAX_RPM else 0,
-                    1 if self._in_flight.get(mid, 0) >= MODEL_MAX_CONCURRENCY else 0,
-                    self._in_flight.get(mid, 0),
-                    self._latencies.get(mid, 999.0)
-                ))
+                def sort_candidates(mid: str):
+                    throttled = 1 if self._rate_limited_until.get(mid, 0) > now else 0
+                    rpm_over = 1 if self._get_recent_rpm(mid, now) >= MODEL_MAX_RPM else 0
+                    busy = 1 if self._in_flight.get(mid, 0) >= MODEL_MAX_CONCURRENCY else 0
+                    in_flight_count = self._in_flight.get(mid, 0)
+
+                    lat = self._latencies.get(mid, 1.0)
+                    rel = self._reliability.get(mid, 1.0)
+                    tps = self._tps.get(mid, 40.0)
+                    perf_score = (1.0 / max(0.01, lat)) * (rel ** 2) * (1.0 + 0.01 * tps)
+
+                    return (throttled, rpm_over, busy, in_flight_count, -perf_score)
+
+                candidate_pool.sort(key=sort_candidates)
                 top_size = min(PRIMARY_POOL_SIZE, len(candidate_pool))
                 if top_size > 0:
                     top_pool = candidate_pool[:top_size]
