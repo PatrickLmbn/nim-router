@@ -1,22 +1,24 @@
 # Universal Multi-Provider Free Model Router
 
-A lightweight, OpenAI-compatible proxy router that aggregates, load-balances, and fails over across **NVIDIA NIM**, **OpenRouter Free Tier**, and **OpenCode API**. It turns free and paid AI endpoints into a single, high-availability, ultra-low latency API endpoint with dynamic latency ranking, account key rotation, and zero-downtime cross-provider failover.
+A lightweight, OpenAI-compatible proxy router that aggregates, load-balances, and fails over across **NVIDIA NIM Free Tier**, **OpenRouter Free Tier**, and **OpenCode API**. It turns free tier AI endpoints into a single, high-availability, ultra-low latency API endpoint with dynamic latency ranking, account key rotation, and zero-downtime cross-provider failover.
+
+> **Note**: `nim-router` is designed specifically for free-tier model aggregation across providers. It automatically discovers, probes, and load-balances working free models.
 
 ---
 
 ## Features
 
-- **Universal Multi-Provider Support**:
+- **Universal Free Multi-Provider Support**:
   - **NVIDIA NIM Free Tier** (`NVIDIA_API_KEYS` / `NVIDIA_API_KEY`)
   - **OpenRouter Free Tier** (`OPENROUTER_API_KEY` - automatically pools all `:free` models)
   - **OpenCode API** (`OPENCODE_API_KEY`)
-- **Primary Model Priority with Free Fallback**: Set any model (free or paid) as your primary priority model. If it encounters rate limits (`429`), out-of-credits (`402`), or server errors (`5xx`), `nim-router` automatically fails over to the lowest-latency free models across providers with zero downtime.
+- **Primary Model Priority with Free Fallback**: Set any discovered free model as your primary priority model. If it encounters rate limits (`429`), out-of-credits (`402`), or server errors (`5xx`), `nim-router` automatically fails over to the lowest-latency free models across providers with zero downtime.
 - **Unified Virtual Model (`nim-free` / `auto`)**: Send requests to a single model identifier that automatically load-balances across all healthy free models ranked by real-time latency, generation speed, and reliability.
 - **Dynamic EMA Reliability Scoring (0.05–1.0)**: Tracks real-time model stability over time using Exponential Moving Average (EMA) scoring to downweight unstable endpoints smoothly.
 - **Tokens-Per-Second (TPS) Speed Ranking**: Measures actual text generation throughput (tokens/second) to rank fast-generating endpoints first.
 - **Large Context Window Matching**: Automatically detects large prompts (>16,000 tokens) and isolates the pool to 128k+ context models to prevent context-limit errors.
 - **Multi-Account API Key Round-Robin**: Automatically rotates requests across multiple configured NVIDIA API keys to multiply rate limits and bypass account throttling.
-- **Interactive Model Selection CLI (`nim-router models`)**: View and set your primary priority model interactively (with optional live probing scan).
+- **Interactive Model Selection CLI (`nim-router models`)**: View and set your primary priority free model interactively (with optional live probing scan).
 - **Standalone Endpoint Probing CLI (`nim-router probe`)**: Perform full multi-provider live latency probing scans anytime.
 - **Interactive Key Setup CLI (`nim-router connect`)**: Add or update API keys anytime without editing files manually.
 - **Process Management CLI (`nim-router restart` / `nim-router stop`)**: Restart or stop background server processes instantly via PM2.
@@ -35,16 +37,16 @@ Client Request (model: "nim-free" or "auto")
         │
         ▼
 [Primary Model Configured?]
-   ├── YES ──► Try Primary Model (e.g., openai/gpt-oss-120b, meta/llama-3.3-70b-instruct)
+   ├── YES ──► Try Primary Free Model (e.g., openai/gpt-oss-120b, meta/llama-3.3-70b-instruct)
    │               │
    │               ├── 200 OK ──► Return Stream / Response
    │               └── 402/429/5xx ──► [Failover to Free Pool]
    │
-   └── NO / Fallback ──► [Discover & Rank Healthy Models]
+   └── NO / Fallback ──► [Discover & Rank Healthy Free Models]
                             (NVIDIA NIM + OpenRouter Free + OpenCode)
                                        │
                                        ▼
-                       [Route to Highest Ranked Model]
+                       [Route to Highest Ranked Free Model]
                (Combined Latency + TPS Speed + EMA Reliability)
 ```
 
