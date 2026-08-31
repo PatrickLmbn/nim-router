@@ -26,6 +26,9 @@ if __name__ == "__main__":
             elif cmd in ("restart", "reload"):
                 from nim_router.cli import restart_server
                 restart_server()
+            elif cmd in ("stop", "kill", "down"):
+                from nim_router.cli import stop_server
+                stop_server()
             elif cmd in ("logs", "log"):
                 from nim_router.cli import show_logs
                 show_logs()
