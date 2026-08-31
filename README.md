@@ -114,3 +114,37 @@ nim logs
 ```bash
 nim --help
 ```
+
+---
+
+## Testing API Endpoints (`curl`)
+
+### **1. Chat Completion (`/v1/chat/completions`)**
+```bash
+curl http://localhost:11435/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nim-free",
+    "messages": [
+      {"role": "user", "content": "Explain quantum computing in 1 sentence."}
+    ]
+  }'
+```
+
+### **2. Real-Time Token Streaming (`stream: true`)**
+```bash
+curl http://localhost:11435/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "auto",
+    "stream": true,
+    "messages": [
+      {"role": "user", "content": "Write a short poem about coding."}
+    ]
+  }'
+```
+
+### **3. List Available Models (`/v1/models`)**
+```bash
+curl http://localhost:11435/v1/models
+```
