@@ -13,6 +13,7 @@ CACHE_TTL = 180
 PRIMARY_POOL_SIZE = 7
 MODEL_MAX_RPM = 35
 MODEL_MAX_CONCURRENCY = 4
+MAX_LATENCY_THRESHOLD = float(os.getenv("MAX_LATENCY_THRESHOLD", "3.0"))
 
 def get_nvidia_keys() -> list[str]:
     raw_keys = os.getenv("NVIDIA_API_KEYS", "") or os.getenv("NVIDIA_API_KEY", "")

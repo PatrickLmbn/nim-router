@@ -11,6 +11,7 @@ from nim_router.config import (
     MODEL_MAX_RPM,
     PRIMARY_POOL_SIZE,
     RATE_LIMIT_COOLDOWN,
+    MAX_LATENCY_THRESHOLD,
     NIM_API_BASE,
     OPENROUTER_API_BASE,
     OPENCODE_API_BASE,
@@ -272,6 +273,11 @@ class ModelRouter:
             for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] "):
                 if requested_model.startswith(prefix):
                     requested_model = requested_model[len(prefix):].strip()
+
+            if candidate_pool:
+                fast_candidates = [mid for mid in candidate_pool if self._latencies.get(mid, 0.0) <= MAX_LATENCY_THRESHOLD]
+                if fast_candidates:
+                    candidate_pool = fast_candidates
 
             est_tokens = estimate_token_count(request)
 
