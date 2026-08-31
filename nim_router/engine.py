@@ -44,17 +44,29 @@ class ModelRouter:
         self._in_flight: dict[str, int] = {}
         self._healthy_pool: list[str] = []
         self._pool_updated: float = 0
+        self._model_providers: dict[str, str] = {}
 
     def _get_next_api_key(self) -> str:
         key = self.api_keys[self.key_index % len(self.api_keys)]
         self.key_index = (self.key_index + 1) % len(self.api_keys)
         return key
 
-    def _get_provider_info(self, model_id: str) -> tuple[str, str, list[str]]:
+    def _get_provider_name(self, model_id: str) -> str:
+        if model_id in self._model_providers:
+            return self._model_providers[model_id]
         mid = model_id.lower()
         if mid.endswith(":free") or "openrouter/" in mid or mid.startswith("openrouter"):
+            return "OpenRouter"
+        elif mid.startswith("opencode/") or "opencode" in mid or mid.endswith("-free") or any(k in mid for k in ("claude-", "gpt-", "gemini-", "codestral")):
+            return "OpenCode"
+        else:
+            return "NVIDIA"
+
+    def _get_provider_info(self, model_id: str) -> tuple[str, str, list[str]]:
+        provider = self._get_provider_name(model_id)
+        if provider == "OpenRouter":
             return OPENROUTER_API_BASE, self.openrouter_key, [self.openrouter_key] if self.openrouter_key else [""]
-        elif mid.startswith("opencode/") or "opencode" in mid:
+        elif provider == "OpenCode":
             return OPENCODE_API_BASE, self.opencode_key, [self.opencode_key] if self.opencode_key else [""]
         else:
             return NIM_API_BASE, self._get_next_api_key(), self.api_keys
@@ -82,7 +94,12 @@ class ModelRouter:
         return await probe_model(key, client, model_id, sem, base_url)
 
     async def _discover_models(self) -> list[dict]:
-        return await discover_models(self.api_keys, self._latencies, self.openrouter_key, self.opencode_key)
+        discovered = await discover_models(self.api_keys, self._latencies, self.openrouter_key, self.opencode_key)
+        for m in discovered:
+            mid = m.get("id")
+            if mid and "provider" in m:
+                self._model_providers[mid] = m["provider"]
+        return discovered
 
     def _load_fallback_models(self) -> list[dict]:
         return load_fallback_models(self._latencies)
@@ -152,40 +169,79 @@ class ModelRouter:
         healthy.sort(key=sort_key)
         return healthy
 
-    async def _route_request(self, request: ChatCompletionRequest) -> Response:
+    async def initialize(self):
         async with self._lock:
-            if not self.models:
-                self.models = await self._discover_models()
-                if not self.models:
-                    self.models = self._load_fallback_models()
+            self.models = await self._discover_models()
+            for m in self.models:
+                mid = m.get("id")
+                if mid and "provider" in m:
+                    self._model_providers[mid] = m["provider"]
+            self._healthy_pool = self._build_healthy_pool()
+            self._pool_updated = time.time()
 
-            now = time.time()
-            if not self._healthy_pool or (now - self._pool_updated) > CACHE_TTL:
+            nvidia_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "NVIDIA")
+            or_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "OpenRouter")
+            oc_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "OpenCode")
+
+            logger.success(
+                f"nim-router started with {len(self._healthy_pool)} working models in active pool "
+                f"(NVIDIA: {nvidia_count}, OpenRouter: {or_count}, OpenCode: {oc_count})"
+            )
+
+    async def refresh_models(self):
+        async with self._lock:
+            logger.info("Refreshing model catalog and latency probes across providers...")
+            new_models = await self._discover_models()
+            if new_models:
+                self.models = new_models
+                for m in self.models:
+                    mid = m.get("id")
+                    if mid and "provider" in m:
+                        self._model_providers[mid] = m["provider"]
                 self._healthy_pool = self._build_healthy_pool()
-                self._pool_updated = now
-                logger.info(f"Healthy pool updated: {len(self._healthy_pool)} models")
+                self._pool_updated = time.time()
+                logger.success(f"Refreshed pool: {len(self._healthy_pool)} active models available.")
 
-            is_vision = self._is_vision_request(request)
-            requested_model = request.model
+    async def handle_request(self, raw_request: Request) -> Response:
+        try:
+            body = await raw_request.json()
+            chat_req = ChatCompletionRequest(**body)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid chat completions JSON payload: {e}")
+        return await self._route_request(chat_req, raw_request)
 
-            pool = self._healthy_pool if self._healthy_pool else [m.get("id") for m in self.models if m.get("id") and not self._is_banned_model(m.get("id"))]
-            candidate_pool = [mid for mid in pool if not self._is_banned_model(mid)]
+    async def route_request(self, chat_req: ChatCompletionRequest, raw_request: Request = None) -> Response:
+        return await self._route_request(chat_req, raw_request)
 
+    async def _route_request(self, request: ChatCompletionRequest, raw_request: Request = None) -> Response:
+        now = time.time()
+        async with self._lock:
+            if not self.models or (now - self._pool_updated > HEALTH_REFRESH_INTERVAL):
+                self.models = await self._discover_models()
+                for m in self.models:
+                    mid = m.get("id")
+                    if mid and "provider" in m:
+                        self._model_providers[mid] = m["provider"]
+                self._healthy_pool = self._build_healthy_pool()
+                self._pool_updated = time.time()
+
+            candidate_pool = list(self._healthy_pool)
             if not candidate_pool:
-                self._health.clear()
-                self._rate_limited_until.clear()
-                candidate_pool = self._build_healthy_pool()
+                self.models = self._load_fallback_models()
+                for m in self.models:
+                    mid = m.get("id")
+                    if mid and "provider" in m:
+                        self._model_providers[mid] = m["provider"]
+                candidate_pool = [m.get("id") for m in self.models if m.get("id")]
 
-            if is_vision:
-                vision_capable = [
-                    mid for mid in candidate_pool
-                    if self._is_vision_model(mid)
-                ]
+            requested_model = (request.model or "").strip()
+
+            if self._is_vision_request(request):
+                vision_capable = [mid for mid in candidate_pool if self._is_vision_model(mid)]
                 if not vision_capable:
-                    vision_capable = [
-                        m.get("id") for m in self.models
-                        if m.get("id") and self._is_vision_model(m.get("id"))
-                    ]
+                    all_ids = [m.get("id") for m in self.models if m.get("id")]
+                    vision_capable = [mid for mid in all_ids if self._is_vision_model(mid)]
+
                 if not vision_capable:
                     raise HTTPException(
                         status_code=400,
@@ -240,10 +296,11 @@ class ModelRouter:
                 continue
             tried_models.add(selected_id)
 
+            provider = self._get_provider_name(selected_id)
             current_latency = self._latencies.get(selected_id, 0.0)
             current_rpm = self._get_recent_rpm(selected_id, time.time())
             in_flight_num = self._in_flight.get(selected_id, 0)
-            logger.info(f"Routing request (attempt {len(tried_models)}/{attempts}) -> {selected_id} (latency: {current_latency:.3f}s, rpm: {current_rpm}/{MODEL_MAX_RPM}, in-flight: {in_flight_num}, stream={request.stream})")
+            logger.info(f"Routing request (attempt {len(tried_models)}/{attempts}) -> {provider} :: {selected_id} (latency: {current_latency:.3f}s, rpm: {current_rpm}/{MODEL_MAX_RPM}, in-flight: {in_flight_num}, stream={request.stream})")
 
             t0 = time.time()
             self._record_request_dispatch(selected_id, t0)
@@ -255,11 +312,11 @@ class ModelRouter:
                         response = await call_provider_endpoint(current_key, selected_id, request, base_url)
                         elapsed = time.time() - t0
                         self._record_success(selected_id, elapsed)
-                        logger.success(f"Request completed successfully via {selected_id} ({elapsed:.3f}s)")
+                        logger.success(f"Request completed successfully via {provider} :: {selected_id} ({elapsed:.3f}s)")
                         return response
                     except HTTPException as e:
                         if e.status_code == 429 and k_idx < len(keys_to_try) - 1:
-                            logger.warning(f"Model {selected_id} rate limited on key {current_key[:8]}..., retrying with next API key...")
+                            logger.warning(f"Model {provider} :: {selected_id} rate limited on key {current_key[:8]}..., retrying with next API key...")
                             await asyncio.sleep(0.1)
                             continue
                         raise
@@ -267,60 +324,18 @@ class ModelRouter:
                 last_error = e
                 self._record_failure(selected_id, status_code=e.status_code)
                 if e.status_code in (429, 402):
-                    logger.warning(f"Model {selected_id} returned status {e.status_code} (Rate Limited/Billing), backing off and failing over...")
-                    await asyncio.sleep(0.15)
-                elif e.status_code in (400, 422, 500, 502, 503, 504):
-                    logger.warning(f"Model {selected_id} failed with status {e.status_code} ({e.detail}), failing over...")
+                    logger.warning(f"Model {provider} :: {selected_id} returned status {e.status_code} (Rate Limited/Billing), backing off and failing over...")
                 elif e.status_code == 404:
-                    logger.warning(f"Model {selected_id} returned 404 Not Found, removed from pool.")
+                    logger.warning(f"Model {provider} :: {selected_id} returned 404 (Not Found), removing from pool and failing over...")
                 else:
-                    logger.error(f"Non-retryable error for {selected_id}: {e.status_code} - {e.detail}")
-                    raise
+                    logger.warning(f"Model {provider} :: {selected_id} returned status {e.status_code}, failing over...")
             except Exception as e:
                 last_error = e
                 self._record_failure(selected_id, status_code=500)
-                logger.error(f"Unexpected error calling {selected_id}: {e}")
+                logger.error(f"Error calling {provider} :: {selected_id}: {e}, failing over...")
             finally:
                 self._in_flight[selected_id] = max(0, self._in_flight.get(selected_id, 1) - 1)
 
-        detail_msg = last_error.detail if isinstance(last_error, HTTPException) else str(last_error)
-        raise HTTPException(
-            status_code=503,
-            detail=f"All {len(tried_models)} candidate NIM models failed or are temporarily rate-limited. Last error: {detail_msg}"
-        )
-
-    async def _call_nvidia_endpoint(self, model_id: str, request: ChatCompletionRequest, api_key: str = None) -> Response:
-        base_url, key, _ = self._get_provider_info(model_id)
-        selected_key = api_key or key
-        return await call_provider_endpoint(selected_key, model_id, request, base_url)
-
-    async def handle_request(self, request: Request) -> Response:
-        try:
-            body = await request.json()
-            chat_req = ChatCompletionRequest(**body)
-            return await self._route_request(chat_req)
-        except HTTPException as e:
-            return Response(
-                content=json.dumps({
-                    "error": {
-                        "message": e.detail,
-                        "type": "upstream_error",
-                        "code": e.status_code
-                    }
-                }),
-                status_code=e.status_code,
-                media_type="application/json"
-            )
-        except Exception as e:
-            logger.error(f"Error processing request: {e}")
-            return Response(
-                content=json.dumps({
-                    "error": {
-                        "message": str(e),
-                        "type": "router_error",
-                        "code": 500
-                    }
-                }),
-                status_code=500,
-                media_type="application/json"
-            )
+        if last_error:
+            raise last_error
+        raise HTTPException(status_code=503, detail="No healthy model endpoints available in pool.")

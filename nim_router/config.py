@@ -5,7 +5,7 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)),
 
 NIM_API_BASE = "https://integrate.api.nvidia.com/v1"
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
-OPENCODE_API_BASE = "https://opencode.ai/v1"
+OPENCODE_API_BASE = "https://opencode.ai/zen/v1"
 
 HEALTH_REFRESH_INTERVAL = 180
 RATE_LIMIT_COOLDOWN = 30

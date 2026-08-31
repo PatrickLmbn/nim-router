@@ -12,7 +12,10 @@ A lightweight, OpenAI-compatible proxy router that aggregates, load-balances, an
   - **OpenCode API** (`OPENCODE_API_KEY`)
 - **Primary Model Priority with Free Fallback**: Set any model (free or paid) as your primary priority model. If it encounters rate limits (`429`), out-of-credits (`402`), or server errors (`5xx`), `nim-router` automatically fails over to the lowest-latency free models across providers with zero downtime.
 - **Unified Virtual Model (`nim-free` / `auto`)**: Send requests to a single model identifier that automatically load-balances across all healthy free models ranked by real-time latency.
-- **Interactive Model Selection CLI (`nim-router models`)**: Easily view and set your primary priority model interactively from any terminal.
+- **Interactive Model Selection CLI (`nim-router models`)**: Easily view and set your primary priority model interactively (with optional live probing scan).
+- **Standalone Endpoint Probing CLI (`nim-router probe`)**: Perform full multi-provider live latency probing scans anytime.
+- **Interactive Key Setup CLI (`nim-router connect`)**: Add or update API keys anytime without editing files manually.
+- **CLI Command Help (`nim-router --help`)**: Comprehensive built-in documentation for all CLI commands.
 - **Multi-Account API Key Rotation**: Rotate up to 3 NVIDIA API keys to multiply rate limits and bypass account-level throttling.
 - **Multimodal & Vision Support**: Automatically isolates and routes image payloads (`image_url`, base64) to vision-capable models.
 - **Tool-Calling Compatibility**: Isolates tool-enabled requests to models supporting function calling.
@@ -27,7 +30,7 @@ Client Request (model: "nim-free" or "auto")
         │
         ▼
 [Primary Model Configured?]
-   ├── YES ──► Try Primary Model (e.g., anthropic/claude-3.5-sonnet, meta/llama-3.3-70b-instruct)
+   ├── YES ──► Try Primary Model (e.g., openai/gpt-oss-120b, meta/llama-3.3-70b-instruct)
    │               │
    │               ├── 200 OK ──► Return Stream / Response
    │               └── 402/429/5xx ──► [Failover to Free Pool]
@@ -69,14 +72,35 @@ install.bat
 
 You can control `nim-router` directly from your terminal:
 
-### **Set Primary Priority Model**
+### **1. Set Primary Priority Model (`nim-router models`)**
 ```bash
 nim-router models
 ```
-- Scans all configured providers.
-- Displays a clean numbered terminal menu of active models.
-- Select your primary model or select `[0] nim-free` for automatic free pool rotation.
-- Automatically updates `.env` and refreshes the live router server.
+- Asks user whether to run live probing scan first (Recommended, optional).
+- Displays provider-categorized terminal menu (`--- NVIDIA NIM Models ---`, `--- OpenRouter Free Models ---`, `--- OpenCode Models ---`).
+- Select your primary model or choose `[0] nim-free` for auto free pool rotation.
+
+### **2. Probe Endpoints (`nim-router probe`)**
+```bash
+nim-router probe
+```
+- Performs a live probing scan across all configured provider endpoints (NVIDIA, OpenRouter, OpenCode).
+- Saves discovered working models to `config/models_status.json`.
+- Refreshes the active pool of the live running `nim-router` server process.
+
+### **3. Configure API Keys (`nim-router connect`)**
+```bash
+nim-router connect
+```
+- Interactive step-by-step prompts for NVIDIA, OpenRouter, and OpenCode API keys.
+- Shows masked current key status.
+- Automatically saves to `.env` and refreshes the live router server.
+
+### **4. Command Help (`nim-router --help`)**
+```bash
+nim-router --help
+```
+- Displays built-in CLI command menu and usage examples.
 
 ---
 
@@ -89,100 +113,12 @@ curl -X POST http://localhost:11435/v1/chat/completions \
   -H "Authorization: Bearer local" \
   -d '{
     "model": "nim-free",
-    "messages": [{"role": "user", "content": "Hello!"}],
-    "temperature": 0.7
-  }'
-```
-
-### 2. Direct Custom Model Request (With Free Fallback)
-```bash
-curl -X POST http://localhost:11435/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer local" \
-  -d '{
-    "model": "anthropic/claude-3.5-sonnet",
-    "messages": [{"role": "user", "content": "Write a python script"}],
-    "stream": true
+    "messages": [{"role": "user", "content": "Explain quantum computing in one sentence."}]
   }'
 ```
 
 ---
 
-## Connecting to AI Agents & Harnesses
+## License
 
-The router exposes a standard OpenAI-compatible API base URL (`http://localhost:11435/v1`).
-
-### 1. Hermes Agent
-```yaml
-providers:
-  nim-router:
-    base_url: "http://localhost:11435/v1"
-    model: "nim-free"
-    api_key: "local"
-```
-
-### 2. Coding Harnesses (Aider, Cline, Continue.dev)
-```json
-{
-  "api_base": "http://localhost:11435/v1",
-  "api_key": "local",
-  "model": "nim-free",
-  "stream": true
-}
-```
-
-### 3. OpenAI Python SDK
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:11435/v1",
-    api_key="local"
-)
-
-response = client.chat.completions.create(
-    model="nim-free",
-    messages=[
-        {"role": "user", "content": "Explain binary search in Python."}
-    ],
-    stream=True
-)
-
-for chunk in response:
-    content = chunk.choices[0].delta.content
-    if content:
-        print(content, end="", flush=True)
-print()
-```
-
----
-
-## Environment Configuration (`.env`)
-
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `NVIDIA_API_KEYS` | Comma-separated list of NVIDIA NIM API keys (up to 3 for rotation) | `""` |
-| `OPENROUTER_API_KEY` | OpenRouter API key for `:free` models | `""` |
-| `OPENCODE_API_KEY` | OpenCode API key | `""` |
-| `PRIMARY_MODEL` | Primary model preference (e.g. `anthropic/claude-3.5-sonnet`, `meta/llama-3.3-70b-instruct`) | `nim-free` |
-| `PORT` | Local port for proxy server | `11435` |
-
----
-
-## API Endpoints
-
-| Endpoint | Method | Description |
-| :--- | :--- | :--- |
-| `/v1/chat/completions` | `POST` | OpenAI-compatible chat completion endpoint (supports streaming) |
-| `/v1/models` | `GET` | Returns list of currently active models across all providers |
-| `/health` | `GET` | Health check endpoint reporting active pool size |
-| `/refresh` | `POST` | Triggers immediate re-discovery and probing of model endpoints |
-
----
-
-## Diagnostics & Testing
-
-Run unit test suite:
-```bash
-python3 -m unittest discover -s tests -p "test_*.py"
-```
+MIT License.

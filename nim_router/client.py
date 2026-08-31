@@ -11,7 +11,7 @@ from nim_router.logger import logger
 from nim_router.schemas import ChatCompletionRequest
 from nim_router.catalog import is_banned_model, load_fallback_models
 
-async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, sem: asyncio.Semaphore, base_url: str = NIM_API_BASE) -> tuple[bool, float]:
+async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, sem: asyncio.Semaphore, base_url: str = NIM_API_BASE, timeout_sec: float = 8.0) -> tuple[bool, float]:
     if is_banned_model(model_id):
         return False, 999.0
     async with sem:
@@ -33,12 +33,12 @@ async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, se
                     "max_tokens": 1,
                     "temperature": 0.0
                 },
-                timeout=12.0
+                timeout=timeout_sec
             )
             elapsed = round(time.time() - t0, 3)
             if resp.status_code == 200:
                 return True, elapsed
-            elif resp.status_code == 429:
+            elif resp.status_code in (400, 401, 402, 429, 500, 502, 503):
                 return True, 10.0 + elapsed
             else:
                 return False, 999.0
@@ -48,6 +48,7 @@ async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, se
 async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_key: str = "", opencode_key: str = "") -> list[dict]:
     primary_nvidia_key = api_keys[0] if isinstance(api_keys, list) and api_keys else (api_keys if isinstance(api_keys, str) else "")
     all_discovered = []
+    candidates_to_probe = []
 
     if primary_nvidia_key:
         try:
@@ -59,47 +60,16 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                 if response.status_code == 200:
                     data = response.json()
                     all_models = data.get("data", [])
-                    logger.info(f"Discovered {len(all_models)} total models from NVIDIA API.")
-
-                    sem = asyncio.Semaphore(10)
                     valid_models = [
                         m for m in all_models
                         if m.get("id") and not is_banned_model(m.get("id"))
                     ]
-                    total_probes = len(valid_models)
-                    completed_count = 0
-                    lock = asyncio.Lock()
-
-                    async def probe_with_progress(m_obj):
-                        nonlocal completed_count
-                        mid = m_obj.get("id", "")
-                        ok, latency = await probe_model(primary_nvidia_key, client, mid, sem, NIM_API_BASE)
-                        async with lock:
-                            completed_count += 1
-                            pct = int((completed_count / total_probes) * 100) if total_probes else 100
-                            bar_len = 30
-                            filled = int((completed_count / total_probes) * bar_len) if total_probes else bar_len
-                            filled_bar = "=" * filled
-                            empty_bar = "-" * (bar_len - filled)
-                            sys.stdout.write(f"\r\033[1;36mProbing NVIDIA models:\033[0m \033[90m[\033[1;32m{filled_bar}\033[90m{empty_bar}]\033[0m \033[1;37m{completed_count}/{total_probes}\033[0m \033[1;33m({pct}%)\033[0m")
-                            sys.stdout.flush()
-
-                        return m_obj, ok, latency
-
-                    probe_results = await asyncio.gather(*[probe_with_progress(m) for m in valid_models])
-                    sys.stdout.write("\n")
-                    sys.stdout.flush()
-
-                    for m, ok, latency in probe_results:
-                        mid = m.get("id")
-                        if ok and mid:
-                            latencies_dict[mid] = latency
-                            all_discovered.append(m)
+                    for m in valid_models:
+                        m_copy = dict(m)
+                        m_copy["provider"] = "NVIDIA"
+                        candidates_to_probe.append((primary_nvidia_key, m_copy, NIM_API_BASE))
         except Exception as e:
             logger.error(f"NVIDIA model discovery failed: {e}")
-
-    if not all_discovered and not openrouter_key and not opencode_key:
-        all_discovered = load_fallback_models(latencies_dict)
 
     if openrouter_key:
         try:
@@ -111,12 +81,10 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                 if response.status_code == 200:
                     data = response.json()
                     or_models = [m for m in data.get("data", []) if m.get("id", "").endswith(":free")]
-                    logger.info(f"Discovered {len(or_models)} free models from OpenRouter API.")
                     for m in or_models:
-                        mid = m.get("id")
-                        if mid and mid not in latencies_dict:
-                            latencies_dict[mid] = 0.85
-                            all_discovered.append(m)
+                        m_copy = dict(m)
+                        m_copy["provider"] = "OpenRouter"
+                        candidates_to_probe.append((openrouter_key, m_copy, OPENROUTER_API_BASE))
         except Exception as e:
             logger.error(f"OpenRouter discovery failed: {e}")
 
@@ -129,15 +97,64 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                 )
                 if response.status_code == 200:
                     data = response.json()
-                    oc_models = [m for m in data.get("data", []) if not is_banned_model(m.get("id", ""))]
-                    logger.info(f"Discovered {len(oc_models)} models from OpenCode API.")
+                    oc_models = [
+                        m for m in data.get("data", [])
+                        if "free" in m.get("id", "").lower() and not is_banned_model(m.get("id", ""))
+                    ]
                     for m in oc_models:
-                        mid = m.get("id")
-                        if mid and mid not in latencies_dict:
-                            latencies_dict[mid] = 0.4
-                            all_discovered.append(m)
+                        m_copy = dict(m)
+                        m_copy["provider"] = "OpenCode"
+                        candidates_to_probe.append((opencode_key, m_copy, OPENCODE_API_BASE))
         except Exception as e:
             logger.error(f"OpenCode discovery failed: {e}")
+
+    if candidates_to_probe:
+        total_probes = len(candidates_to_probe)
+        completed_count = 0
+        lock = asyncio.Lock()
+        sem = asyncio.Semaphore(15)
+        is_tty = sys.stdout.isatty()
+
+        logger.info(f"Discovered {total_probes} candidate models across enabled providers.")
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            async def probe_task(item):
+                nonlocal completed_count
+                key, m_obj, base_url = item
+                mid = m_obj.get("id", "")
+                try:
+                    ok, latency = await asyncio.wait_for(probe_model(key, client, mid, sem, base_url, timeout_sec=8.0), timeout=10.0)
+                except Exception:
+                    ok, latency = False, 999.0
+                async with lock:
+                    completed_count += 1
+                    if is_tty:
+                        pct = int((completed_count / total_probes) * 100) if total_probes else 100
+                        bar_len = 30
+                        filled = int((completed_count / total_probes) * bar_len) if total_probes else bar_len
+                        filled_bar = "=" * filled
+                        empty_bar = "-" * (bar_len - filled)
+                        sys.stdout.write(f"\r\033[1;36mProbing active model endpoints:\033[0m \033[90m[\033[1;32m{filled_bar}\033[90m{empty_bar}]\033[0m \033[1;37m{completed_count}/{total_probes}\033[0m \033[1;33m({pct}%)\033[0m")
+                        sys.stdout.flush()
+
+                return m_obj, ok, latency
+
+            probe_results = await asyncio.gather(*[probe_task(item) for item in candidates_to_probe])
+            if is_tty:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+
+            for m, ok, latency in probe_results:
+                mid = m.get("id")
+                if ok and mid:
+                    latencies_dict[mid] = latency
+                    all_discovered.append(m)
+
+    if not all_discovered:
+        all_discovered = load_fallback_models(latencies_dict)
+        for m in all_discovered:
+            if "provider" not in m:
+                m["provider"] = "NVIDIA"
 
     all_discovered.sort(key=lambda m: latencies_dict.get(m.get("id", ""), 999.0))
     logger.success(f"Multi-provider model discovery complete: {len(all_discovered)} active models in pool.")

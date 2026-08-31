@@ -11,9 +11,23 @@ from nim_router.server import create_app
 app = create_app()
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1].lower() in ("models", "list", "select"):
-        from nim_router.cli import main as cli_main
-        cli_main()
+    if len(sys.argv) > 1:
+        cmd = sys.argv[1].lower()
+        if cmd in ("models", "list", "select"):
+            from nim_router.cli import select_primary_model
+            select_primary_model()
+        elif cmd in ("probe", "scan"):
+            from nim_router.cli import probe_active_models
+            probe_active_models()
+        elif cmd in ("connect", "keys", "key", "config"):
+            from nim_router.cli import connect_api_keys
+            connect_api_keys()
+        elif cmd in ("help", "-h", "--help"):
+            from nim_router.cli import show_help
+            show_help()
+        else:
+            port = int(os.getenv("PORT", 11435))
+            uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
     else:
         port = int(os.getenv("PORT", 11435))
         uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
