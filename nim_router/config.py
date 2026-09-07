@@ -42,6 +42,9 @@ def get_bai_key() -> str:
 def get_primary_model() -> str:
     return os.getenv("PRIMARY_MODEL", "").strip() or os.getenv("MODEL", "nim-free").strip()
 
+def get_routing_strategy() -> str:
+    return os.getenv("ROUTING_STRATEGY", "fallback").strip().lower()
+
 def get_api_keys() -> list[str]:
     return get_nvidia_keys()
 

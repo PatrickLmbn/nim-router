@@ -15,6 +15,7 @@ from nim_router.config import (
     get_cerebras_keys,
     get_bai_key,
     get_primary_model,
+    get_routing_strategy,
 )
 from nim_router.engine import ModelRouter
 
@@ -94,6 +95,7 @@ def show_help():
     print("  \033[1;32mrestart, reload\033[0m        Restart background server process via PM2.")
     print("  \033[1;32mstop\033[0m                   Stop background server process via PM2.")
     print("  \033[1;32mlogs, log\033[0m              Stream live nim server logs.")
+    print("  \033[1;32mstrategy, mode\033[0m         Choose routing strategy (fallback or round_robin).")
     print("  \033[1;32mhelp, -h, --help\033[0m       Show CLI help documentation and exit.\n")
     print("\033[1;33mDefault (no argument):\033[0m")
     print("  Starts the nim OpenAI-compatible proxy server (Port 11435).\n")
@@ -105,6 +107,7 @@ def show_help():
     print("  nim restart      Restart background server process")
     print("  nim stop         Stop background server process")
     print("  nim logs         View live background server logs")
+    print("  nim strategy     Choose routing strategy (fallback or round_robin)")
     print("  nim --help       Show help documentation\n")
 
 def show_logs():
@@ -574,6 +577,62 @@ def safe_run(coro):
         print("\n\033[90mOperation cancelled.\033[0m")
         sys.exit(0)
 
+async def interactive_strategy_selector():
+    print(get_rainbow_banner())
+    current_strategy = get_routing_strategy()
+    print("\033[1;36mSelect Routing Strategy:\033[0m\n")
+    print(f"Current Strategy: \033[1;33m{current_strategy}\033[0m\n")
+    print("  \033[1;32m1\033[0m. \033[1;37mFallback\033[0m     - Try models in strict order; fall back only on cooldown/error (Recommended)")
+    print("  \033[1;32m2\033[0m. \033[1;37mRound Robin\033[0m  - Rotate requests evenly across top healthy models\n")
+    print("\033[90mEnter choice (1 or 2), or press Enter to keep current:\033[0m")
+
+    try:
+        choice = input("> ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print("\n\033[90mOperation cancelled.\033[0m")
+        return
+
+    if not choice:
+        print("\033[90mNo changes made.\033[0m")
+        return
+
+    if choice in ("1", "fallback"):
+        new_strategy = "fallback"
+    elif choice in ("2", "round_robin", "roundrobin"):
+        new_strategy = "round_robin"
+    else:
+        print("\033[91mInvalid choice.\033[0m")
+        return
+
+    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    env_vars = {}
+    if os.path.exists(env_path):
+        with open(env_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line and "=" in line and not line.startswith("#"):
+                    parts = line.split("=", 1)
+                    env_vars[parts[0].strip()] = parts[1].strip()
+
+    env_vars["ROUTING_STRATEGY"] = new_strategy
+    with open(env_path, "w") as f:
+        for k, v in env_vars.items():
+            f.write(f"{k}={v}\n")
+
+    print(f"\n\033[1;32m[✓] Routing strategy set to '{new_strategy}'.\033[0m")
+
+    try:
+        port = int(env_vars.get("PORT", 11435))
+        async with httpx.AsyncClient(timeout=3) as client:
+            r = await client.post(f"http://127.0.0.1:{port}/refresh")
+            if r.status_code == 200:
+                print("\033[1;32m[✓] Live nim server updated with new routing strategy.\033[0m")
+    except Exception:
+        pass
+
+def select_routing_strategy():
+    safe_run(interactive_strategy_selector())
+
 def select_primary_model():
     safe_run(interactive_model_selector())
 
@@ -588,3 +647,4 @@ def manage_keys():
 
 def main():
     safe_run(interactive_model_selector())
+

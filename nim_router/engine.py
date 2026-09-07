@@ -19,6 +19,7 @@ from nim_router.config import (
     CEREBRAS_API_BASE,
     BAI_API_BASE,
     get_primary_model,
+    get_routing_strategy,
 )
 from nim_router.logger import logger
 from nim_router.schemas import ChatCompletionRequest
@@ -35,7 +36,7 @@ from nim_router.classifier import (
 from nim_router.client import probe_model, discover_models, call_provider_endpoint, call_nvidia_endpoint
 
 class ModelRouter:
-    def __init__(self, api_key: str | list[str], openrouter_key: str = "", opencode_key: str = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = "", bai_key: str = ""):
+    def __init__(self, api_key: str | list[str], openrouter_key: str = "", opencode_key: str = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = "", bai_key: str = "", strategy: str = ""):
         if isinstance(api_key, list):
             self.api_keys = [k.strip() for k in api_key if k.strip()]
         else:
@@ -44,6 +45,7 @@ class ModelRouter:
             self.api_keys = [""]
         self.api_key = self.api_keys[0]
 
+        self.strategy = (strategy or get_routing_strategy()).strip().lower()
         self.openrouter_key = openrouter_key.strip()
         self.opencode_key = opencode_key.strip()
         self.bai_key = bai_key.strip()
@@ -317,9 +319,11 @@ class ModelRouter:
                 f"nim-router initialized instantly with {len(self._healthy_pool)} working models in pool "
                 f"(NVIDIA: {nvidia_count}, OpenRouter: {or_count}, OpenCode: {oc_count}, Groq: {groq_count}, Cerebras: {cerebras_count}, BAI: {bai_count})"
             )
+            logger.info(f"Active routing strategy: {self.strategy}")
         asyncio.create_task(self.refresh_models())
 
     async def refresh_models(self):
+        self.strategy = get_routing_strategy()
         logger.info("Refreshing model catalog and latency probes across providers in background...")
         new_models = await self._discover_models()
         if new_models:
@@ -471,16 +475,19 @@ class ModelRouter:
 
                 if not category_target and not is_vision:
                     candidate_pool.sort(key=sort_candidates)
-                    top_size = min(PRIMARY_POOL_SIZE, len(candidate_pool))
-                    if top_size > 0:
-                        top_pool = candidate_pool[:top_size]
-                        standby_pool = candidate_pool[top_size:]
-                        start_idx = self.model_index % len(top_pool)
-                        self.model_index = (self.model_index + 1) % len(top_pool)
-                        ordered_top = [top_pool[(start_idx + i) % len(top_pool)] for i in range(len(top_pool))]
-                        candidate_ids = ordered_top + standby_pool
-                    else:
+                    if self.strategy == "fallback":
                         candidate_ids = candidate_pool
+                    else:
+                        top_size = min(PRIMARY_POOL_SIZE, len(candidate_pool))
+                        if top_size > 0:
+                            top_pool = candidate_pool[:top_size]
+                            standby_pool = candidate_pool[top_size:]
+                            start_idx = self.model_index % len(top_pool)
+                            self.model_index = (self.model_index + 1) % len(top_pool)
+                            ordered_top = [top_pool[(start_idx + i) % len(top_pool)] for i in range(len(top_pool))]
+                            candidate_ids = ordered_top + standby_pool
+                        else:
+                            candidate_ids = candidate_pool
                 else:
                     candidate_ids = candidate_pool
 

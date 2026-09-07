@@ -11,6 +11,7 @@ from nim_router.config import (
     get_groq_keys,
     get_cerebras_keys,
     get_bai_key,
+    get_routing_strategy,
 )
 from nim_router.engine import ModelRouter
 from nim_router.logger import logger
@@ -26,6 +27,7 @@ async def lifespan(app: FastAPI):
     groq_keys = get_groq_keys()
     cerebras_keys = get_cerebras_keys()
     bai_key = get_bai_key()
+    strategy = get_routing_strategy()
 
     if not nvidia_keys and not openrouter_key and not opencode_key and not groq_keys and not cerebras_keys and not bai_key:
         logger.warning("No API keys found in environment (.env). Please configure NVIDIA_API_KEYS, OPENROUTER_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or BAI_API_KEY.")
@@ -36,7 +38,8 @@ async def lifespan(app: FastAPI):
         opencode_key=opencode_key,
         groq_keys=groq_keys,
         cerebras_keys=cerebras_keys,
-        bai_key=bai_key
+        bai_key=bai_key,
+        strategy=strategy
     )
     await _router_instance.initialize()
     yield
