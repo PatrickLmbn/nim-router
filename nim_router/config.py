@@ -8,6 +8,7 @@ OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 OPENCODE_API_BASE = "https://opencode.ai/zen/v1"
 GROQ_API_BASE = "https://api.groq.com/openai/v1"
 CEREBRAS_API_BASE = "https://api.cerebras.ai/v1"
+BAI_API_BASE = "https://api.b.ai/v1"
 
 HEALTH_REFRESH_INTERVAL = 180
 RATE_LIMIT_COOLDOWN = 30
@@ -35,8 +36,12 @@ def get_cerebras_keys() -> list[str]:
     raw_keys = os.getenv("CEREBRAS_API_KEYS", "") or os.getenv("CEREBRAS_API_KEY", "")
     return [k.strip() for k in raw_keys.split(",") if k.strip()]
 
+def get_bai_key() -> str:
+    return os.getenv("BAI_API_KEY", "").strip()
+
 def get_primary_model() -> str:
     return os.getenv("PRIMARY_MODEL", "").strip() or os.getenv("MODEL", "nim-free").strip()
 
 def get_api_keys() -> list[str]:
     return get_nvidia_keys()
+

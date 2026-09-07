@@ -13,6 +13,7 @@ from nim_router.config import (
     get_opencode_key,
     get_groq_keys,
     get_cerebras_keys,
+    get_bai_key,
     get_primary_model,
 )
 from nim_router.engine import ModelRouter
@@ -122,6 +123,27 @@ def show_logs():
     else:
         print("\033[91mPM2 is not installed on this system. Install PM2 via 'npm install -g pm2'.\033[0m")
 
+def start_server():
+    print(get_rainbow_banner())
+    base_dir = os.path.dirname(os.path.dirname(__file__))
+    try:
+        os.chdir(base_dir)
+    except Exception:
+        pass
+    pm2_bin = shutil.which("pm2")
+    if pm2_bin:
+        res = subprocess.run([pm2_bin, "startOrRestart", "ecosystem.config.js", "--update-env"], cwd=base_dir)
+        if res.returncode == 0:
+            print("\n\033[1;32m[✓] Live nim server process started via PM2!\033[0m")
+        else:
+            print("\n\033[91mFailed to start nim via PM2.\033[0m")
+    else:
+        print("\033[90mPM2 is not installed. Starting nim server in foreground...\033[0m")
+        import uvicorn
+        from nim_router.server import create_app
+        port = int(os.getenv("PORT", 11435))
+        uvicorn.run(create_app(), host="0.0.0.0", port=port, log_level="info")
+
 def restart_server():
     print(get_rainbow_banner())
     base_dir = os.path.dirname(os.path.dirname(__file__))
@@ -131,11 +153,11 @@ def restart_server():
         pass
     pm2_bin = shutil.which("pm2")
     if pm2_bin:
-        res = subprocess.run([pm2_bin, "restart", "nim-router", "--update-env"], cwd=base_dir)
+        res = subprocess.run([pm2_bin, "startOrRestart", "ecosystem.config.js", "--update-env"], cwd=base_dir)
         if res.returncode == 0:
             print("\n\033[1;32m[✓] Live nim server process restarted via PM2!\033[0m")
         else:
-            print("\n\033[91mFailed to restart nim via PM2. Please check if process is running in PM2.\033[0m")
+            print("\n\033[91mFailed to restart nim via PM2.\033[0m")
     else:
         print("\033[91mPM2 is not installed on this system.\033[0m")
 
@@ -162,6 +184,7 @@ async def async_probe_models():
     opencode_key = get_opencode_key()
     groq_keys = get_groq_keys()
     cerebras_keys = get_cerebras_keys()
+    bai_key = get_bai_key()
 
     print(get_rainbow_banner())
     print("\033[1;37m   Endpoint Probing Scan       \033[0m\n")
@@ -172,7 +195,8 @@ async def async_probe_models():
         openrouter_key=openrouter_key,
         opencode_key=opencode_key,
         groq_keys=groq_keys,
-        cerebras_keys=cerebras_keys
+        cerebras_keys=cerebras_keys,
+        bai_key=bai_key
     )
     models = await router._discover_models()
 
@@ -199,6 +223,7 @@ async def interactive_model_selector():
     opencode_key = get_opencode_key()
     groq_keys = get_groq_keys()
     cerebras_keys = get_cerebras_keys()
+    bai_key = get_bai_key()
 
     print(get_rainbow_banner())
     print("\033[1;37m   Model Priority Selector      \033[0m\n")
@@ -219,7 +244,8 @@ async def interactive_model_selector():
         openrouter_key=openrouter_key,
         opencode_key=opencode_key,
         groq_keys=groq_keys,
-        cerebras_keys=cerebras_keys
+        cerebras_keys=cerebras_keys,
+        bai_key=bai_key
     )
 
     if should_probe:
@@ -351,6 +377,7 @@ async def async_connect_api_keys():
     current_oc = get_opencode_key()
     current_groq = get_groq_keys()
     current_cerebras = get_cerebras_keys()
+    current_bai = get_bai_key()
 
     def mask(k: str) -> str:
         return f"{k[:8]}...{k[-4:]}" if len(k) > 12 else ("(Set)" if k else "(Not set)")
@@ -363,7 +390,8 @@ async def async_connect_api_keys():
     print(f"Current Groq Key:      \033[1;33m{groq_disp}\033[0m")
     print(f"Current Cerebras Key:  \033[1;33m{cerebras_disp}\033[0m")
     print(f"Current OpenRouter Key:\033[1;33m{mask(current_or)}\033[0m")
-    print(f"Current OpenCode Key:  \033[1;33m{mask(current_oc)}\033[0m\n")
+    print(f"Current OpenCode Key:  \033[1;33m{mask(current_oc)}\033[0m")
+    print(f"Current B.AI Key:      \033[1;33m{mask(current_bai)}\033[0m\n")
 
     print("\033[90mEnter new API keys (inputs hidden, press Enter to keep current value):\033[0m\n")
     try:
@@ -372,6 +400,7 @@ async def async_connect_api_keys():
         cerebras_k = getpass.getpass("Cerebras Free API Key (Optional): ").strip()
         or_key = getpass.getpass("OpenRouter API Key (Optional): ").strip()
         oc_key = getpass.getpass("OpenCode API Key (Optional): ").strip()
+        bai_k = getpass.getpass("B.AI Free API Key (Optional): ").strip()
     except (KeyboardInterrupt, EOFError):
         print("\n\033[90mOperation cancelled.\033[0m")
         sys.exit(0)
@@ -381,6 +410,7 @@ async def async_connect_api_keys():
     final_oc = oc_key if oc_key else current_oc
     final_groq = groq_k if groq_k else ",".join(current_groq)
     final_cerebras = cerebras_k if cerebras_k else ",".join(current_cerebras)
+    final_bai = bai_k if bai_k else current_bai
 
     env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
     env_vars = {}
@@ -402,6 +432,8 @@ async def async_connect_api_keys():
         env_vars["GROQ_API_KEYS"] = final_groq
     if final_cerebras:
         env_vars["CEREBRAS_API_KEYS"] = final_cerebras
+    if final_bai:
+        env_vars["BAI_API_KEY"] = final_bai
 
     if "PORT" not in env_vars:
         env_vars["PORT"] = "11435"
@@ -420,19 +452,20 @@ async def async_connect_api_keys():
         async with httpx.AsyncClient(timeout=3) as client:
             r = await client.post(f"http://127.0.0.1:{port}/refresh")
             if r.status_code == 200:
-                print("\033[1;32m[✓] Live nim server refreshed with new keys.\033[0m")
+                print("\033[1;32m[✓] Live nim server refreshed automatically.\033[0m")
     except Exception:
         pass
 
 async def async_manage_provider_keys():
     print(get_rainbow_banner())
-    print("\033[1;37m   Multi-Key Provider Manager   \033[0m\n")
+    print("\033[1;37m   Manage API Keys by Provider \033[0m\n")
 
     current_nvidia = get_nvidia_keys()
     current_groq = get_groq_keys()
     current_cerebras = get_cerebras_keys()
     current_or = get_openrouter_key()
     current_oc = get_opencode_key()
+    current_bai = get_bai_key()
 
     def mask_list(keys: list[str]) -> str:
         if not keys:
@@ -444,10 +477,11 @@ async def async_manage_provider_keys():
     print(f"  \033[1;32m[2]\033[0m Groq LPU      \033[90m({len(current_groq)} keys: {mask_list(current_groq)})\033[0m")
     print(f"  \033[1;32m[3]\033[0m Cerebras      \033[90m({len(current_cerebras)} keys: {mask_list(current_cerebras)})\033[0m")
     print(f"  \033[1;32m[4]\033[0m OpenRouter    \033[90m(Key: {mask_list([current_or] if current_or else [])})\033[0m")
-    print(f"  \033[1;32m[5]\033[0m OpenCode      \033[90m(Key: {mask_list([current_oc] if current_oc else [])})\033[0m\n")
+    print(f"  \033[1;32m[5]\033[0m OpenCode      \033[90m(Key: {mask_list([current_oc] if current_oc else [])})\033[0m")
+    print(f"  \033[1;32m[6]\033[0m B.AI          \033[90m(Key: {mask_list([current_bai] if current_bai else [])})\033[0m\n")
 
     try:
-        choice = input("\033[1;36mSelect provider number [1-5]: \033[0m").strip()
+        choice = input("\033[1;36mSelect provider number [1-6]: \033[0m").strip()
         if not choice:
             return
         prov_num = int(choice)
@@ -464,6 +498,7 @@ async def async_manage_provider_keys():
         3: ("CEREBRAS_API_KEYS", "Cerebras", current_cerebras),
         4: ("OPENROUTER_API_KEY", "OpenRouter", [current_or] if current_or else []),
         5: ("OPENCODE_API_KEY", "OpenCode", [current_oc] if current_oc else []),
+        6: ("BAI_API_KEY", "B.AI", [current_bai] if current_bai else []),
     }
 
     if prov_num not in provider_env_keys:

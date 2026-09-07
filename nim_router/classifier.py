@@ -49,6 +49,9 @@ CHAT_KEYWORDS = (
     "conversational",
     "spark",
     "mimo",
+    "glm",
+    "hy3",
+    "hunyuan",
 )
 
 def is_vision_model(model_id: str) -> bool:

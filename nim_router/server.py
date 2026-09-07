@@ -10,6 +10,7 @@ from nim_router.config import (
     get_opencode_key,
     get_groq_keys,
     get_cerebras_keys,
+    get_bai_key,
 )
 from nim_router.engine import ModelRouter
 from nim_router.logger import logger
@@ -24,16 +25,18 @@ async def lifespan(app: FastAPI):
     opencode_key = get_opencode_key()
     groq_keys = get_groq_keys()
     cerebras_keys = get_cerebras_keys()
+    bai_key = get_bai_key()
 
-    if not nvidia_keys and not openrouter_key and not opencode_key and not groq_keys and not cerebras_keys:
-        logger.warning("No API keys found in environment (.env). Please configure NVIDIA_API_KEYS, OPENROUTER_API_KEY, GROQ_API_KEY, or CEREBRAS_API_KEY.")
+    if not nvidia_keys and not openrouter_key and not opencode_key and not groq_keys and not cerebras_keys and not bai_key:
+        logger.warning("No API keys found in environment (.env). Please configure NVIDIA_API_KEYS, OPENROUTER_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or BAI_API_KEY.")
 
     _router_instance = ModelRouter(
         api_key=nvidia_keys,
         openrouter_key=openrouter_key,
         opencode_key=opencode_key,
         groq_keys=groq_keys,
-        cerebras_keys=cerebras_keys
+        cerebras_keys=cerebras_keys,
+        bai_key=bai_key
     )
     await _router_instance.initialize()
     yield
@@ -52,6 +55,8 @@ def create_app() -> FastAPI:
 
     @app.get("/models")
     @app.get("/v1/models")
+    @app.get("/api/v1/models")
+    @app.get("/api/models")
     async def list_models():
         if not _router_instance:
             return {"error": "Router not initialized"}
@@ -77,13 +82,15 @@ def create_app() -> FastAPI:
         cerebras_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "Cerebras"])
         openrouter_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "OpenRouter"])
         opencode_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "OpenCode"])
+        bai_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "BAI"])
 
         for provider_name, model_group in [
             ("NVIDIA", nvidia_models),
             ("Groq", groq_models),
             ("Cerebras", cerebras_models),
             ("OpenRouter", openrouter_models),
-            ("OpenCode", opencode_models)
+            ("OpenCode", opencode_models),
+            ("BAI", bai_models)
         ]:
             for mid in model_group:
                 if mid not in added_ids and " " not in mid:
@@ -94,9 +101,11 @@ def create_app() -> FastAPI:
 
     @app.get("/v1/models/{model_id:path}")
     @app.get("/models/{model_id:path}")
+    @app.get("/api/v1/models/{model_id:path}")
+    @app.get("/api/models/{model_id:path}")
     async def get_model(model_id: str):
         clean_id = model_id.strip()
-        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[Category] "):
+        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[BAI] ", "[Category] "):
             if clean_id.startswith(prefix):
                 clean_id = clean_id[len(prefix):].strip()
         provider = _router_instance._get_provider_name(clean_id) if _router_instance else "nim-router"
@@ -128,13 +137,15 @@ def create_app() -> FastAPI:
         cerebras_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "Cerebras"])
         openrouter_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "OpenRouter"])
         opencode_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "OpenCode"])
+        bai_models = sorted([m.get("id") for m in _router_instance.models if m.get("id") and _router_instance._get_provider_name(m.get("id")) == "BAI"])
 
         for provider_name, model_group in [
             ("NVIDIA", nvidia_models),
             ("Groq", groq_models),
             ("Cerebras", cerebras_models),
             ("OpenRouter", openrouter_models),
-            ("OpenCode", opencode_models)
+            ("OpenCode", opencode_models),
+            ("BAI", bai_models)
         ]:
             for mid in model_group:
                 if mid not in added_names and " " not in mid:
@@ -192,6 +203,8 @@ def create_app() -> FastAPI:
 
     @app.post("/v1/chat/completions")
     @app.post("/chat/completions")
+    @app.post("/api/v1/chat/completions")
+    @app.post("/api/chat/completions")
     async def chat_completions(request: Request):
         return await _router_instance.handle_request(request)
 

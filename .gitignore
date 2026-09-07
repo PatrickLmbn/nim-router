@@ -7,3 +7,4 @@ venv/
 config/models_status.json
 !config/models_status.example.json
 README copy.md
+tests/

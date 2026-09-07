@@ -38,16 +38,19 @@ if __name__ == "__main__":
             elif cmd in ("help", "-h", "--help"):
                 from nim_router.cli import show_help
                 show_help()
-            elif cmd in ("server", "start", "run"):
+            elif cmd in ("run", "fg", "foreground"):
                 port = int(os.getenv("PORT", 11435))
                 uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+            elif cmd in ("server", "start"):
+                from nim_router.cli import start_server
+                start_server()
             else:
                 print(f"\033[1;33m[!] Unknown command: '{sys.argv[1]}'\033[0m\n")
                 from nim_router.cli import show_help
                 show_help()
                 sys.exit(1)
         else:
-            port = int(os.getenv("PORT", 11435))
-            uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+            from nim_router.cli import start_server
+            start_server()
     except (KeyboardInterrupt, SystemExit):
         sys.exit(0)

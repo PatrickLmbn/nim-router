@@ -17,6 +17,7 @@ from nim_router.config import (
     OPENCODE_API_BASE,
     GROQ_API_BASE,
     CEREBRAS_API_BASE,
+    BAI_API_BASE,
     get_primary_model,
 )
 from nim_router.logger import logger
@@ -34,7 +35,7 @@ from nim_router.classifier import (
 from nim_router.client import probe_model, discover_models, call_provider_endpoint, call_nvidia_endpoint
 
 class ModelRouter:
-    def __init__(self, api_key: str | list[str], openrouter_key: str = "", opencode_key: str = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = ""):
+    def __init__(self, api_key: str | list[str], openrouter_key: str = "", opencode_key: str = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = "", bai_key: str = ""):
         if isinstance(api_key, list):
             self.api_keys = [k.strip() for k in api_key if k.strip()]
         else:
@@ -45,6 +46,7 @@ class ModelRouter:
 
         self.openrouter_key = openrouter_key.strip()
         self.opencode_key = opencode_key.strip()
+        self.bai_key = bai_key.strip()
 
         if isinstance(groq_keys, list):
             self.groq_keys = [k.strip() for k in groq_keys if k.strip()]
@@ -67,6 +69,8 @@ class ModelRouter:
         self._tps: dict[str, float] = {}
         self._reliability: dict[str, float] = {}
         self._rate_limited_until: dict[str, float] = {}
+        self._key_cooldowns: dict[tuple[str, str], float] = {}
+        self._consecutive_failures: dict[str, int] = {}
         self._request_history: dict[str, list[float]] = {}
         self._in_flight: dict[str, int] = {}
         self._healthy_pool: list[str] = []
@@ -80,14 +84,16 @@ class ModelRouter:
 
     def _get_provider_name(self, model_id: str) -> str:
         mid_clean = model_id
-        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[Category] "):
+        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[BAI] ", "[Category] "):
             if mid_clean.startswith(prefix):
                 mid_clean = mid_clean[len(prefix):].strip()
 
         if mid_clean in self._model_providers:
             return self._model_providers[mid_clean]
         mid = mid_clean.lower()
-        if mid.endswith(":free") or "openrouter/" in mid or mid.startswith("openrouter"):
+        if mid in ("glm-5.3-flash", "qwen3.8-flash", "hy3") or mid.startswith("bai/") or "b.ai" in mid:
+            return "BAI"
+        elif mid.endswith(":free") or "openrouter/" in mid or mid.startswith("openrouter"):
             return "OpenRouter"
         elif mid.startswith("opencode/") or "opencode" in mid or mid.endswith("-free"):
             return "OpenCode"
@@ -100,24 +106,42 @@ class ModelRouter:
 
     def _get_provider_info(self, model_id: str) -> tuple[str, str, list[str]]:
         provider = self._get_provider_name(model_id)
+        now = time.time()
+
         if provider == "OpenRouter":
-            return OPENROUTER_API_BASE, self.openrouter_key, [self.openrouter_key] if self.openrouter_key else [""]
+            keys = [self.openrouter_key] if self.openrouter_key else [""]
+            base_url = OPENROUTER_API_BASE
         elif provider == "OpenCode":
-            return OPENCODE_API_BASE, self.opencode_key, [self.opencode_key] if self.opencode_key else [""]
+            keys = [self.opencode_key] if self.opencode_key else [""]
+            base_url = OPENCODE_API_BASE
+        elif provider == "BAI":
+            keys = [self.bai_key] if self.bai_key else [""]
+            base_url = BAI_API_BASE
         elif provider == "Groq":
             keys = self.groq_keys if self.groq_keys else [""]
+            base_url = GROQ_API_BASE
             rotated = keys[self.groq_key_index:] + keys[:self.groq_key_index]
             self.groq_key_index = (self.groq_key_index + 1) % len(keys)
-            return GROQ_API_BASE, rotated[0], rotated
+            keys = rotated
         elif provider == "Cerebras":
             keys = self.cerebras_keys if self.cerebras_keys else [""]
+            base_url = CEREBRAS_API_BASE
             rotated = keys[self.cerebras_key_index:] + keys[:self.cerebras_key_index]
             self.cerebras_key_index = (self.cerebras_key_index + 1) % len(keys)
-            return CEREBRAS_API_BASE, rotated[0], rotated
+            keys = rotated
         else:
-            rotated_keys = self.api_keys[self.key_index:] + self.api_keys[:self.key_index]
-            self.key_index = (self.key_index + 1) % len(self.api_keys)
-            return NIM_API_BASE, rotated_keys[0], rotated_keys
+            keys = self.api_keys if self.api_keys else [""]
+            base_url = NIM_API_BASE
+            rotated = keys[self.key_index:] + keys[:self.key_index]
+            self.key_index = (self.key_index + 1) % len(keys)
+            keys = rotated
+
+        healthy_keys = [k for k in keys if self._key_cooldowns.get((provider, k), 0.0) <= now]
+        cooling_keys = [k for k in keys if self._key_cooldowns.get((provider, k), 0.0) > now]
+
+        sorted_keys = healthy_keys + cooling_keys if healthy_keys else keys
+        primary_key = sorted_keys[0] if sorted_keys else ""
+        return base_url, primary_key, sorted_keys
 
     def _get_recent_rpm(self, model_id: str, now: float) -> int:
         cutoff = now - 60.0
@@ -148,7 +172,8 @@ class ModelRouter:
             self.openrouter_key,
             self.opencode_key,
             self.groq_keys,
-            self.cerebras_keys
+            self.cerebras_keys,
+            self.bai_key
         )
         for m in discovered:
             mid = m.get("id")
@@ -172,13 +197,44 @@ class ModelRouter:
             record["healthy"] = True
         return record.get("healthy", True)
 
+    def _record_key_failure(self, provider: str, key: str, model_id: str, status_code: int, retry_after: float | None = None):
+        now = time.time()
+        key_short = key[:8] if key else "default"
+        key_ident = f"{provider}:{key_short}"
+        fail_count = self._consecutive_failures.get(key_ident, 0) + 1
+        self._consecutive_failures[key_ident] = fail_count
+
+        if status_code in (429, 402, 503):
+            if retry_after is not None and retry_after > 0:
+                cooldown_sec = retry_after
+            else:
+                cooldown_sec = min(60.0, max(5.0, 5.0 * (2 ** (fail_count - 1))))
+
+            cooldown_until = now + cooldown_sec
+            if key:
+                self._key_cooldowns[(provider, key)] = cooldown_until
+            self._rate_limited_until[model_id] = cooldown_until
+            logger.warning(
+                f"Key {key_ident} for model '{model_id}' cooling down for {cooldown_sec:.1f}s "
+                f"(status={status_code}, retry_after_hdr={retry_after}, consecutive_fails={fail_count})"
+            )
+
+    def _record_key_success(self, provider: str, key: str, model_id: str):
+        key_short = key[:8] if key else "default"
+        key_ident = f"{provider}:{key_short}"
+        self._consecutive_failures.pop(key_ident, None)
+        if key:
+            self._key_cooldowns.pop((provider, key), None)
+        self._consecutive_failures.pop(model_id, None)
+
     def _record_failure(self, model_id: str, status_code: int = 500):
         now = time.time()
         cur_rel = self._reliability.get(model_id, 1.0)
         self._reliability[model_id] = max(0.05, 0.7 * cur_rel)
 
         if status_code in (429, 402):
-            self._rate_limited_until[model_id] = now + RATE_LIMIT_COOLDOWN
+            if model_id not in self._rate_limited_until or self._rate_limited_until[model_id] <= now:
+                self._rate_limited_until[model_id] = now + RATE_LIMIT_COOLDOWN
             current = self._latencies.get(model_id, 1.0)
             self._latencies[model_id] = round(current + 2.5, 3)
         elif status_code == 404:
@@ -255,10 +311,11 @@ class ModelRouter:
             oc_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "OpenCode")
             groq_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "Groq")
             cerebras_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "Cerebras")
+            bai_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "BAI")
 
             logger.success(
                 f"nim-router initialized instantly with {len(self._healthy_pool)} working models in pool "
-                f"(NVIDIA: {nvidia_count}, OpenRouter: {or_count}, OpenCode: {oc_count}, Groq: {groq_count}, Cerebras: {cerebras_count})"
+                f"(NVIDIA: {nvidia_count}, OpenRouter: {or_count}, OpenCode: {oc_count}, Groq: {groq_count}, Cerebras: {cerebras_count}, BAI: {bai_count})"
             )
         asyncio.create_task(self.refresh_models())
 
@@ -403,12 +460,14 @@ class ModelRouter:
                     busy = 1 if self._in_flight.get(mid, 0) >= MODEL_MAX_CONCURRENCY else 0
                     in_flight_count = self._in_flight.get(mid, 0)
 
+                    is_vision_demotion = 1 if (not is_vision and self._is_vision_model(mid)) else 0
+
                     lat = self._latencies.get(mid, 1.0)
                     rel = self._reliability.get(mid, 1.0)
                     tps = self._tps.get(mid, 40.0)
                     perf_score = (1.0 / max(0.01, lat)) * (rel ** 2) * (1.0 + 0.01 * tps)
 
-                    return (throttled, rpm_over, busy, in_flight_count, -perf_score)
+                    return (throttled, rpm_over, busy, is_vision_demotion, in_flight_count, -perf_score)
 
                 if not category_target and not is_vision:
                     candidate_pool.sort(key=sort_candidates)
@@ -446,14 +505,23 @@ class ModelRouter:
             try:
                 base_url, _, keys_to_try = self._get_provider_info(selected_id)
                 for k_idx, current_key in enumerate(keys_to_try):
+                    now_check = time.time()
+                    cool_until = self._key_cooldowns.get((provider, current_key), 0.0)
+                    if cool_until > now_check and len(keys_to_try) > 1:
+                        logger.debug(f"Skipping key {current_key[:8]}... for {provider} (cooling down for {cool_until - now_check:.1f}s)")
+                        continue
                     try:
                         request.model = selected_id
                         response = await call_provider_endpoint(current_key, selected_id, request, base_url)
                         elapsed = time.time() - t0
                         self._record_success(selected_id, elapsed)
+                        self._record_key_success(provider, current_key, selected_id)
                         logger.success(f"Request completed successfully via {provider} :: {selected_id} ({elapsed:.3f}s)")
                         return response
                     except HTTPException as e:
+                        retry_after_hdr = e.headers.get("Retry-After") if e.headers else None
+                        retry_sec = float(retry_after_hdr) if retry_after_hdr else None
+                        self._record_key_failure(provider, current_key, selected_id, e.status_code, retry_after=retry_sec)
                         if e.status_code in (429, 400, 404, 500, 502, 503) and k_idx < len(keys_to_try) - 1:
                             logger.warning(f"Model {provider} :: {selected_id} error {e.status_code} on key {current_key[:8]}..., retrying next API key...")
                             await asyncio.sleep(0.1)

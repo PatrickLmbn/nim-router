@@ -14,6 +14,7 @@ module.exports = {
     {
       name: "nim-router",
       script: "nim-router.py",
+      args: "run",
       interpreter: interpreter,
       autorestart: true,
       watch: false,

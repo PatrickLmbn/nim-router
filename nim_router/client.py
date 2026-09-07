@@ -12,10 +12,33 @@ from nim_router.config import (
     OPENCODE_API_BASE,
     GROQ_API_BASE,
     CEREBRAS_API_BASE,
+    BAI_API_BASE,
 )
 from nim_router.logger import logger
 from nim_router.schemas import ChatCompletionRequest
 from nim_router.catalog import is_banned_model, load_fallback_models
+
+import email.utils
+
+def parse_retry_after(header_val: str | None) -> float | None:
+    if not header_val:
+        return None
+    header_val = str(header_val).strip()
+    if not header_val:
+        return None
+    try:
+        val = float(header_val)
+        return max(0.0, val)
+    except ValueError:
+        pass
+    try:
+        dt = email.utils.parsedate_to_datetime(header_val)
+        if dt:
+            diff = dt.timestamp() - time.time()
+            return max(0.0, diff)
+    except Exception:
+        pass
+    return None
 
 async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, sem: asyncio.Semaphore, base_url: str = NIM_API_BASE, timeout_sec: float = 8.0) -> tuple[bool, float]:
     if is_banned_model(model_id):
@@ -36,7 +59,7 @@ async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, se
                 json={
                     "model": model_id,
                     "messages": [{"role": "user", "content": "hi"}],
-                    "max_tokens": 1,
+                    "max_tokens": 5,
                     "temperature": 0.0
                 },
                 timeout=timeout_sec
@@ -51,7 +74,7 @@ async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, se
         except Exception:
             return False, 999.0
 
-async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_key: str = "", opencode_key: str = "", groq_keys: list[str] | str = "", cerebras_keys: list[str] | str = "") -> list[dict]:
+async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_key: str = "", opencode_key: str = "", groq_keys: list[str] | str = "", cerebras_keys: list[str] | str = "", bai_key: str = "") -> list[dict]:
     primary_nvidia_key = api_keys[0] if isinstance(api_keys, list) and api_keys else (api_keys if isinstance(api_keys, str) else "")
     primary_groq_key = groq_keys[0] if isinstance(groq_keys, list) and groq_keys else (groq_keys if isinstance(groq_keys, str) else "")
     primary_cerebras_key = cerebras_keys[0] if isinstance(cerebras_keys, list) and cerebras_keys else (cerebras_keys if isinstance(cerebras_keys, str) else "")
@@ -157,6 +180,27 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
         except Exception as e:
             logger.error(f"Cerebras model discovery failed: {e}")
 
+    if bai_key:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(
+                    f"{BAI_API_BASE}/models",
+                    headers={"Authorization": f"Bearer {bai_key}"},
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    bai_free_set = {"glm-5.3-flash", "qwen3.8-flash", "hy3"}
+                    bai_models = [
+                        m for m in data.get("data", [])
+                        if m.get("id") in bai_free_set and not is_banned_model(m.get("id"))
+                    ]
+                    for m in bai_models:
+                        m_copy = dict(m)
+                        m_copy["provider"] = "BAI"
+                        candidates_to_probe.append((bai_key, m_copy, BAI_API_BASE))
+        except Exception as e:
+            logger.error(f"BAI model discovery failed: {e}")
+
     if candidates_to_probe:
         total_probes = len(candidates_to_probe)
         completed_count = 0
@@ -245,6 +289,8 @@ async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompl
     }
     if request.max_tokens is not None:
         payload["max_tokens"] = request.max_tokens
+        if "api.b.ai" in base_url and payload["max_tokens"] <= 2:
+            payload["max_tokens"] = 3
     if request.stop is not None:
         payload["stop"] = request.stop
     if request.tools is not None:
@@ -259,9 +305,34 @@ async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompl
             response = await client.send(req, stream=True)
 
             if response.status_code == 200:
+                aiter = response.aiter_raw()
+                first_chunk = None
+                try:
+                    first_chunk = await aiter.__anext__()
+                except StopAsyncIteration:
+                    first_chunk = None
+
+                if first_chunk:
+                    sample = first_chunk.decode("utf-8", errors="ignore")
+                    if '"error":' in sample and ('"message":' in sample or '"code":' in sample):
+                        await response.aclose()
+                        await client.aclose()
+                        detail_msg = sample
+                        try:
+                            clean = sample.strip()
+                            if clean.startswith("data:"):
+                                clean = clean[5:].strip()
+                            data = json.loads(clean)
+                            detail_msg = data.get("error", {}).get("message", sample)
+                        except Exception:
+                            pass
+                        raise HTTPException(status_code=503, detail=detail_msg)
+
                 async def stream_generator():
                     try:
-                        async for chunk in response.aiter_raw():
+                        if first_chunk:
+                            yield first_chunk
+                        async for chunk in aiter:
                             yield chunk
                     except (httpx.ReadTimeout, httpx.RequestError) as e:
                         logger.warning(f"Stream read timeout/error for {model_id}: {e}")
@@ -289,14 +360,24 @@ async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompl
                 )
             else:
                 body = await response.aread()
+                retry_sec = parse_retry_after(response.headers.get("Retry-After") or response.headers.get("retry-after"))
                 await response.aclose()
                 await client.aclose()
                 try:
                     err_data = json.loads(body.decode())
                     detail = err_data.get("error", {}).get("message", str(err_data))
+                    if retry_sec is None:
+                        err_retry = err_data.get("error", {}).get("retry_after") or err_data.get("retry_after")
+                        if err_retry is not None:
+                            try:
+                                retry_sec = float(err_retry)
+                            except (ValueError, TypeError):
+                                pass
                 except Exception:
                     detail = body.decode()
-                raise HTTPException(status_code=response.status_code, detail=detail)
+
+                resp_headers = {"Retry-After": str(retry_sec)} if retry_sec is not None else None
+                raise HTTPException(status_code=response.status_code, detail=detail, headers=resp_headers)
         except HTTPException:
             raise
         except Exception as e:
@@ -305,6 +386,7 @@ async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompl
     else:
         try:
             response = await client.post(url, headers=headers, json=payload)
+            retry_sec = parse_retry_after(response.headers.get("Retry-After") or response.headers.get("retry-after"))
 
             if response.status_code == 200:
                 try:
@@ -327,17 +409,22 @@ async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompl
                     logger.debug(f"Response normalization error: {e}")
 
                 return Response(content=response.text, media_type="application/json", status_code=200)
-            elif response.status_code in (429, 500, 502, 503, 504):
-                raise HTTPException(status_code=response.status_code, detail=f"API error: {response.status_code}")
-            elif response.status_code == 404:
-                raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
             else:
                 try:
                     err_data = response.json()
                     detail = err_data.get("error", {}).get("message", str(err_data))
+                    if retry_sec is None:
+                        err_retry = err_data.get("error", {}).get("retry_after") or err_data.get("retry_after")
+                        if err_retry is not None:
+                            try:
+                                retry_sec = float(err_retry)
+                            except (ValueError, TypeError):
+                                pass
                 except Exception:
-                    detail = response.text
-                raise HTTPException(status_code=response.status_code, detail=detail)
+                    detail = response.text or f"API error: {response.status_code}"
+
+                resp_headers = {"Retry-After": str(retry_sec)} if retry_sec is not None else None
+                raise HTTPException(status_code=response.status_code, detail=detail, headers=resp_headers)
         except httpx.RequestError as e:
             logger.error(f"Request error calling API for {model_id}: {e}")
             raise HTTPException(status_code=502, detail=str(e))
