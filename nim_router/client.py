@@ -67,7 +67,7 @@ async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, se
             elapsed = round(time.time() - t0, 3)
             if resp.status_code == 200:
                 return True, elapsed
-            elif resp.status_code in (400, 401, 402, 429, 500, 502, 503):
+            elif resp.status_code in (400, 429, 500, 502, 503):
                 return True, 10.0 + elapsed
             else:
                 return False, 999.0

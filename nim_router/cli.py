@@ -51,13 +51,19 @@ def get_provider_name(m_obj: dict | str) -> str:
     else:
         mid = str(m_obj).lower()
 
-    if mid.endswith(":free") or "openrouter/" in mid or mid.startswith("openrouter"):
+    for prefix in ("[nvidia] ", "[openrouter] ", "[opencode] ", "[groq] ", "[cerebras] ", "[bai] ", "[category] "):
+        if mid.startswith(prefix):
+            mid = mid[len(prefix):].strip()
+
+    if mid in ("glm-5.3-flash", "qwen3.8-flash", "hy3") or mid.startswith("bai/") or "b.ai" in mid:
+        return "BAI"
+    elif mid.endswith(":free") or "openrouter/" in mid or mid.startswith("openrouter"):
         return "OpenRouter"
     elif mid.startswith("opencode/") or "opencode" in mid or mid.endswith("-free"):
         return "OpenCode"
-    elif any(k in mid for k in ("llama3-", "mixtral-8x7b", "gemma2-", "groq", "versatile", "instant", "specdec", "orpheus", "allam", "compound")):
+    elif any(k in mid for k in ("llama3-", "mixtral-8x7b", "gemma2-", "groq", "versatile", "instant", "specdec", "orpheus", "allam", "compound")) or mid.startswith("groq/") or mid.startswith("qwen/"):
         return "Groq"
-    elif "cerebras" in mid or "llama3.1" in mid or "csk" in mid:
+    elif "cerebras" in mid or "llama3.1" in mid or "csk" in mid or mid in ("gpt-oss-120b", "qwen-3.8-27b", "gemma-4-31b") or mid.startswith("cerebras/"):
         return "Cerebras"
     else:
         return "NVIDIA"
@@ -269,6 +275,7 @@ async def interactive_model_selector():
     cerebras_models = [m.get("id") for m in models if m.get("id") and get_provider_name(m) == "Cerebras"]
     openrouter_models = [m.get("id") for m in models if m.get("id") and get_provider_name(m) == "OpenRouter"]
     opencode_models = [m.get("id") for m in models if m.get("id") and get_provider_name(m) == "OpenCode"]
+    bai_models = [m.get("id") for m in models if m.get("id") and get_provider_name(m) == "BAI"]
 
     all_ordered = []
     counter = 1
@@ -321,6 +328,15 @@ async def interactive_model_selector():
             counter += 1
         print()
 
+    if bai_models:
+        print("\033[1;36m--- B.AI Models ---\033[0m")
+        for mid in bai_models:
+            all_ordered.append(mid)
+            prefix = "★ " if mid == current_primary else "  "
+            print(f"{prefix}\033[1;37m[{counter}]\033[0m {mid}")
+            counter += 1
+        print()
+
     try:
         choice = input("\033[1;36mSelect primary priority model number (0 to reset): \033[0m").strip()
         if not choice:
@@ -365,7 +381,7 @@ async def interactive_model_selector():
     try:
         port = int(os.getenv("PORT", 11435))
         async with httpx.AsyncClient(timeout=3) as client:
-            r = await client.post(f"http://127.0.0.1:{port}/refresh")
+            r = await client.post(f"http://127.0.0.1:{port}/refresh", json={"primary_model": selected_model})
             if r.status_code == 200:
                 print("\033[1;32m[✓] Live nim server refreshed successfully.\033[0m")
     except Exception:

@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 import os
 from typing import Optional
@@ -12,6 +13,8 @@ from nim_router.config import (
     get_cerebras_keys,
     get_bai_key,
     get_routing_strategy,
+    get_primary_model,
+    reload_env,
 )
 from nim_router.engine import ModelRouter
 from nim_router.logger import logger
@@ -194,12 +197,44 @@ def create_app() -> FastAPI:
         return {}
 
     @app.post("/refresh")
-    async def refresh_models():
+    async def refresh_models(request: Request):
         if not _router_instance:
             raise HTTPException(status_code=500, detail="Router not initialized")
-        await _router_instance.refresh_models()
+        reload_env()
+        try:
+            body = await request.json()
+            if isinstance(body, dict) and "primary_model" in body:
+                val = str(body["primary_model"]).strip()
+                if val:
+                    os.environ["PRIMARY_MODEL"] = val
+                    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+                    if os.path.exists(env_path):
+                        with open(env_path, "r") as f:
+                            lines = f.readlines()
+                        new_lines = []
+                        updated = False
+                        for line in lines:
+                            if line.startswith("PRIMARY_MODEL=") or line.startswith("MODEL="):
+                                new_lines.append(f"PRIMARY_MODEL={val}\n")
+                                updated = True
+                            else:
+                                new_lines.append(line)
+                        if not updated:
+                            new_lines.append(f"PRIMARY_MODEL={val}\n")
+                        with open(env_path, "w") as f:
+                            f.writelines(new_lines)
+        except Exception:
+            pass
+        _router_instance.api_keys = get_nvidia_keys()
+        _router_instance.openrouter_key = get_openrouter_key()
+        _router_instance.opencode_key = get_opencode_key()
+        _router_instance.groq_keys = get_groq_keys()
+        _router_instance.cerebras_keys = get_cerebras_keys()
+        _router_instance.bai_key = get_bai_key()
+        asyncio.create_task(_router_instance.refresh_models())
         return {
             "message": "Models refreshed successfully",
+            "primary_model": get_primary_model(),
             "working_models": len(_router_instance.models),
             "models": [m.get("id") for m in _router_instance.models if m.get("id")]
         }

@@ -99,9 +99,9 @@ class ModelRouter:
             return "OpenRouter"
         elif mid.startswith("opencode/") or "opencode" in mid or mid.endswith("-free"):
             return "OpenCode"
-        elif any(k in mid for k in ("llama3-", "mixtral-8x7b", "gemma2-", "groq", "versatile", "instant", "specdec", "orpheus", "allam", "compound")):
+        elif any(k in mid for k in ("llama3-", "mixtral-8x7b", "gemma2-", "groq", "versatile", "instant", "specdec", "orpheus", "allam", "compound")) or mid.startswith("groq/") or mid.startswith("qwen/"):
             return "Groq"
-        elif "cerebras" in mid or "llama3.1" in mid or "csk" in mid:
+        elif "cerebras" in mid or "llama3.1" in mid or "csk" in mid or mid in ("gpt-oss-120b", "qwen-3.8-27b", "gemma-4-31b") or mid.startswith("cerebras/"):
             return "Cerebras"
         else:
             return "NVIDIA"
@@ -304,7 +304,7 @@ class ModelRouter:
             for m in self.models:
                 mid = m.get("id")
                 if mid:
-                    self._model_providers[mid] = self._get_provider_name(mid)
+                    self._model_providers[mid] = m.get("provider") or self._get_provider_name(mid)
             self._healthy_pool = self._build_healthy_pool()
             self._pool_updated = time.time()
 
@@ -331,8 +331,8 @@ class ModelRouter:
                 self.models = new_models
                 for m in self.models:
                     mid = m.get("id")
-                    if mid and "provider" in m:
-                        self._model_providers[mid] = m["provider"]
+                    if mid:
+                        self._model_providers[mid] = m.get("provider") or self._get_provider_name(mid)
                 self._healthy_pool = self._build_healthy_pool()
                 self._pool_updated = time.time()
                 logger.success(f"Refreshed pool: {len(self._healthy_pool)} active models available.")
@@ -356,7 +356,7 @@ class ModelRouter:
                 for m in self.models:
                     mid = m.get("id")
                     if mid:
-                        self._model_providers[mid] = self._get_provider_name(mid)
+                        self._model_providers[mid] = m.get("provider") or self._get_provider_name(mid)
                 self._healthy_pool = self._build_healthy_pool()
                 self._pool_updated = time.time()
 
@@ -365,7 +365,7 @@ class ModelRouter:
                 asyncio.create_task(self.refresh_models())
 
             requested_model = (request.model or "").strip()
-            for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[Category] "):
+            for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[BAI] ", "[Category] "):
                 if requested_model.startswith(prefix):
                     requested_model = requested_model[len(prefix):].strip()
 
@@ -388,7 +388,7 @@ class ModelRouter:
                 for m in self.models:
                     mid = m.get("id")
                     if mid:
-                        self._model_providers[mid] = self._get_provider_name(mid)
+                        self._model_providers[mid] = m.get("provider") or self._get_provider_name(mid)
                 candidate_pool = [m.get("id") for m in self.models if m.get("id")]
 
             is_vision = self._is_vision_request(request)
@@ -431,8 +431,23 @@ class ModelRouter:
                     logger.warning(f"Target model {target_model} is banned/non-chat; routing to healthy pool.")
                     candidate_ids = candidate_pool
                 else:
-                    other_candidates = [mid for mid in candidate_pool if mid != target_model]
-                    candidate_ids = [target_model] + other_candidates
+                    if target_model in candidate_pool:
+                        other_candidates = [mid for mid in candidate_pool if mid != target_model]
+                        candidate_ids = [target_model] + other_candidates
+                    else:
+                        target_clean = target_model.lower().replace("-", "").replace("/", "").replace(".", "")
+                        matching = [
+                            mid for mid in candidate_pool
+                            if target_clean in mid.lower().replace("-", "").replace("/", "").replace(".", "")
+                            or mid.lower().replace("-", "").replace("/", "").replace(".", "") in target_clean
+                        ]
+                        if matching:
+                            logger.info(f"Target model '{target_model}' matched candidate '{matching[0]}' in active pool.")
+                            other = [mid for mid in candidate_pool if mid not in matching]
+                            candidate_ids = matching + other
+                        else:
+                            other_candidates = [mid for mid in candidate_pool if mid != target_model]
+                            candidate_ids = [target_model] + other_candidates
             else:
                 if candidate_pool:
                     fast_candidates = [mid for mid in candidate_pool if self._latencies.get(mid, 0.0) <= MAX_LATENCY_THRESHOLD]

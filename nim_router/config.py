@@ -18,6 +18,11 @@ MODEL_MAX_RPM = 35
 MODEL_MAX_CONCURRENCY = 4
 MAX_LATENCY_THRESHOLD = float(os.getenv("MAX_LATENCY_THRESHOLD", "3.0"))
 
+def reload_env():
+    env_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    if os.path.exists(env_file):
+        load_dotenv(dotenv_path=env_file, override=True)
+
 def get_nvidia_keys() -> list[str]:
     raw_keys = os.getenv("NVIDIA_API_KEYS", "") or os.getenv("NVIDIA_API_KEY", "")
     return [k.strip() for k in raw_keys.split(",") if k.strip()]
