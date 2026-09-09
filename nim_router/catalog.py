@@ -26,10 +26,7 @@ BANNED_KEYWORDS = (
     "reward",
     "clip",
     "detector",
-    "parse",
     "rerank",
-    "guard",
-    "safety",
     "ising",
     "topic-control",
     "translate",
@@ -51,6 +48,8 @@ BANNED_MODELS = {
     "nvidia/riva-translate-4b-instruct-v1.1",
     "nvidia/riva-translate-4b-instruct-v2",
     "nvidia/riva-translate-4b-instruct",
+    "nvidia/llama-3.1-nemoguard-8b-content-safety",
+    "nvidia/llama-3.1-nemotron-safety-guard-8b-v3",
 }
 
 def is_banned_model(model_id: str) -> bool:
@@ -60,6 +59,56 @@ def is_banned_model(model_id: str) -> bool:
     if mid in BANNED_MODELS:
         return True
     return any(k in mid for k in BANNED_KEYWORDS)
+
+def get_provider_name(m_obj: "dict | str", provider_cache: "dict | None" = None) -> str:
+    if isinstance(m_obj, dict):
+        if "provider" in m_obj:
+            return m_obj["provider"]
+        mid = m_obj.get("id", "").lower()
+    else:
+        mid = str(m_obj).lower()
+
+    for prefix in ("[nvidia] ", "[openrouter] ", "[opencode] ", "[groq] ", "[cerebras] ", "[bai] ", "[category] "):
+        if mid.startswith(prefix):
+            mid = mid[len(prefix):].strip()
+
+    if provider_cache and mid in provider_cache:
+        return provider_cache[mid]
+
+    if mid in ("glm-5.3-flash", "qwen3.8-flash", "hy3") or mid.startswith("bai/") or "b.ai" in mid:
+        return "BAI"
+    elif mid.endswith(":free") or "openrouter/" in mid or mid.startswith("openrouter"):
+        return "OpenRouter"
+    elif mid.startswith("opencode/") or "opencode" in mid or mid.endswith("-free"):
+        return "OpenCode"
+    elif any(k in mid for k in ("llama3-", "mixtral-8x7b", "gemma2-", "groq", "versatile", "instant", "specdec", "orpheus", "allam", "compound")) or mid.startswith("groq/") or mid.startswith("qwen/"):
+        return "Groq"
+    elif "cerebras" in mid or "llama3.1" in mid or "csk" in mid or mid in ("gpt-oss-120b", "qwen-3.8-27b", "gemma-4-31b") or mid.startswith("cerebras/"):
+        return "Cerebras"
+    else:
+        return "NVIDIA"
+
+def save_working_models(models: "list[dict | str]"):
+    base_dir = os.path.dirname(os.path.dirname(__file__))
+    config_dir = os.path.join(base_dir, "config")
+    os.makedirs(config_dir, exist_ok=True)
+    status_path = os.path.join(config_dir, "models_status.json")
+    saved_list = []
+    for item in models:
+        if isinstance(item, dict):
+            mid = item.get("id")
+            prov = item.get("provider")
+            if mid and prov:
+                saved_list.append({"id": mid, "provider": prov})
+            elif mid:
+                saved_list.append({"id": mid, "provider": get_provider_name(mid)})
+        elif isinstance(item, str):
+            saved_list.append({"id": item, "provider": get_provider_name(item)})
+    try:
+        with open(status_path, "w") as f:
+            json.dump({"working_models": saved_list}, f, indent=2)
+    except Exception:
+        pass
 
 def load_fallback_models(latencies_dict: dict) -> list[dict]:
     base_dir = os.path.dirname(os.path.dirname(__file__))
@@ -119,3 +168,4 @@ def load_fallback_models(latencies_dict: dict) -> list[dict]:
     for i, mid in enumerate(clean_fallback):
         latencies_dict[mid] = 0.3 + (i * 0.05)
     return [{"id": mid, "provider": "NVIDIA"} for mid in clean_fallback]
+

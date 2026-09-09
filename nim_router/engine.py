@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import time
 from fastapi import HTTPException, Request, Response
 import httpx
@@ -33,7 +34,8 @@ from nim_router.classifier import (
     is_vision_request,
     estimate_token_count,
 )
-from nim_router.client import probe_model, discover_models, call_provider_endpoint, call_nvidia_endpoint
+from nim_router.client import probe_model, discover_models, call_provider_endpoint
+from nim_router.catalog import is_banned_model, load_fallback_models, get_provider_name as _catalog_get_provider_name, save_working_models
 
 class ModelRouter:
     def __init__(self, api_key: str | list[str], openrouter_key: str = "", opencode_key: str = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = "", bai_key: str = "", strategy: str = ""):
@@ -78,6 +80,7 @@ class ModelRouter:
         self._healthy_pool: list[str] = []
         self._pool_updated: float = 0
         self._model_providers: dict[str, str] = {}
+        self._write_lock = asyncio.Lock()
 
     def _get_next_api_key(self) -> str:
         key = self.api_keys[self.key_index % len(self.api_keys)]
@@ -89,22 +92,9 @@ class ModelRouter:
         for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[BAI] ", "[Category] "):
             if mid_clean.startswith(prefix):
                 mid_clean = mid_clean[len(prefix):].strip()
-
         if mid_clean in self._model_providers:
             return self._model_providers[mid_clean]
-        mid = mid_clean.lower()
-        if mid in ("glm-5.3-flash", "qwen3.8-flash", "hy3") or mid.startswith("bai/") or "b.ai" in mid:
-            return "BAI"
-        elif mid.endswith(":free") or "openrouter/" in mid or mid.startswith("openrouter"):
-            return "OpenRouter"
-        elif mid.startswith("opencode/") or "opencode" in mid or mid.endswith("-free"):
-            return "OpenCode"
-        elif any(k in mid for k in ("llama3-", "mixtral-8x7b", "gemma2-", "groq", "versatile", "instant", "specdec", "orpheus", "allam", "compound")) or mid.startswith("groq/") or mid.startswith("qwen/"):
-            return "Groq"
-        elif "cerebras" in mid or "llama3.1" in mid or "csk" in mid or mid in ("gpt-oss-120b", "qwen-3.8-27b", "gemma-4-31b") or mid.startswith("cerebras/"):
-            return "Cerebras"
-        else:
-            return "NVIDIA"
+        return _catalog_get_provider_name(mid_clean)
 
     def _get_provider_info(self, model_id: str) -> tuple[str, str, list[str]]:
         provider = self._get_provider_name(model_id)
@@ -298,9 +288,42 @@ class ModelRouter:
         healthy.sort(key=sort_key)
         return healthy
 
+    def _load_runtime_state(self):
+        try:
+            base_dir = os.path.dirname(os.path.dirname(__file__))
+            state_path = os.path.join(base_dir, "config", "runtime_state.json")
+            if not os.path.exists(state_path):
+                return
+            age = time.time() - os.path.getmtime(state_path)
+            if age > 3600:
+                return
+            with open(state_path, "r") as f:
+                state = json.load(f)
+            self._latencies.update(state.get("latencies", {}))
+            self._reliability.update(state.get("reliability", {}))
+            self._tps.update(state.get("tps", {}))
+        except Exception:
+            pass
+
+    def _save_runtime_state(self):
+        try:
+            base_dir = os.path.dirname(os.path.dirname(__file__))
+            config_dir = os.path.join(base_dir, "config")
+            os.makedirs(config_dir, exist_ok=True)
+            state_path = os.path.join(config_dir, "runtime_state.json")
+            with open(state_path, "w") as f:
+                json.dump({
+                    "latencies": self._latencies,
+                    "reliability": self._reliability,
+                    "tps": self._tps,
+                }, f)
+        except Exception:
+            pass
+
     async def initialize(self):
-        async with self._lock:
+        async with self._write_lock:
             self.models = self._load_fallback_models()
+            self._load_runtime_state()
             for m in self.models:
                 mid = m.get("id")
                 if mid:
@@ -327,7 +350,7 @@ class ModelRouter:
         logger.info("Refreshing model catalog and latency probes across providers in background...")
         new_models = await self._discover_models()
         if new_models:
-            async with self._lock:
+            async with self._write_lock:
                 self.models = new_models
                 for m in self.models:
                     mid = m.get("id")
@@ -336,6 +359,8 @@ class ModelRouter:
                 self._healthy_pool = self._build_healthy_pool()
                 self._pool_updated = time.time()
                 logger.success(f"Refreshed pool: {len(self._healthy_pool)} active models available.")
+            save_working_models(new_models)
+            self._save_runtime_state()
 
     async def handle_request(self, raw_request: Request) -> Response:
         try:
@@ -350,161 +375,163 @@ class ModelRouter:
 
     async def _route_request(self, request: ChatCompletionRequest, raw_request: Request = None) -> Response:
         now = time.time()
-        async with self._lock:
-            if not self.models:
-                self.models = self._load_fallback_models()
-                for m in self.models:
-                    mid = m.get("id")
-                    if mid:
-                        self._model_providers[mid] = m.get("provider") or self._get_provider_name(mid)
-                self._healthy_pool = self._build_healthy_pool()
-                self._pool_updated = time.time()
+        if not self.models:
+            async with self._write_lock:
+                if not self.models:
+                    self.models = self._load_fallback_models()
+                    for m in self.models:
+                        mid = m.get("id")
+                        if mid:
+                            self._model_providers[mid] = m.get("provider") or self._get_provider_name(mid)
+                    self._healthy_pool = self._build_healthy_pool()
+                    self._pool_updated = time.time()
 
-            if now - self._pool_updated > HEALTH_REFRESH_INTERVAL:
-                self._pool_updated = now
-                asyncio.create_task(self.refresh_models())
+        if now - self._pool_updated > HEALTH_REFRESH_INTERVAL:
+            self._pool_updated = now
+            asyncio.create_task(self.refresh_models())
 
-            requested_model = (request.model or "").strip()
-            for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[BAI] ", "[Category] "):
-                if requested_model.startswith(prefix):
-                    requested_model = requested_model[len(prefix):].strip()
+        requested_model = (request.model or "").strip()
+        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[BAI] ", "[Category] "):
+            if requested_model.startswith(prefix):
+                requested_model = requested_model[len(prefix):].strip()
 
-            req_lower = requested_model.lower()
-            category_target = None
-            if req_lower in ("nim-coding", "coding", "code"):
-                category_target = "coding"
-            elif req_lower in ("nim-reasoning", "reasoning", "reason"):
-                category_target = "reasoning"
-            elif req_lower in ("nim-vision", "vision", "multimodal"):
-                category_target = "vision"
-            elif req_lower in ("nim-moe", "moe", "mixture-of-experts"):
-                category_target = "moe"
-            elif req_lower in ("nim-chat", "chat", "conversation"):
-                category_target = "chat"
+        req_lower = requested_model.lower()
+        category_target = None
+        if req_lower in ("nim-coding", "coding", "code"):
+            category_target = "coding"
+        elif req_lower in ("nim-reasoning", "reasoning", "reason"):
+            category_target = "reasoning"
+        elif req_lower in ("nim-vision", "vision", "multimodal"):
+            category_target = "vision"
+        elif req_lower in ("nim-moe", "moe", "mixture-of-experts"):
+            category_target = "moe"
+        elif req_lower in ("nim-chat", "chat", "conversation"):
+            category_target = "chat"
 
-            candidate_pool = list(self._healthy_pool)
-            if not candidate_pool:
-                self.models = self._load_fallback_models()
-                for m in self.models:
-                    mid = m.get("id")
-                    if mid:
-                        self._model_providers[mid] = m.get("provider") or self._get_provider_name(mid)
-                candidate_pool = [m.get("id") for m in self.models if m.get("id")]
+        candidate_pool = list(self._healthy_pool)
+        if not candidate_pool:
+            self.models = self._load_fallback_models()
+            for m in self.models:
+                mid = m.get("id")
+                if mid:
+                    self._model_providers[mid] = m.get("provider") or self._get_provider_name(mid)
+            candidate_pool = [m.get("id") for m in self.models if m.get("id")]
 
-            is_vision = self._is_vision_request(request)
+        is_vision = self._is_vision_request(request)
 
-            if is_vision:
-                vision_capable = [mid for mid in candidate_pool if self._is_vision_model(mid)]
-                if not vision_capable:
-                    all_ids = [m.get("id") for m in self.models if m.get("id")]
-                    vision_capable = [mid for mid in all_ids if self._is_vision_model(mid)]
-                if vision_capable:
-                    other_candidates = [mid for mid in candidate_pool if mid not in vision_capable]
-                    candidate_pool = vision_capable + other_candidates
-                    logger.info(f"Vision payload detected: overriding target to {len(vision_capable)} vision-capable models first.")
-                target_model = "nim-free"
-            elif category_target:
-                if category_target == "coding":
-                    cat_filtered = [mid for mid in candidate_pool if is_coding_model(mid)]
-                elif category_target == "reasoning":
-                    cat_filtered = [mid for mid in candidate_pool if is_reasoning_model(mid)]
-                elif category_target == "vision":
-                    cat_filtered = [mid for mid in candidate_pool if is_vision_model(mid)]
-                elif category_target == "moe":
-                    cat_filtered = [mid for mid in candidate_pool if is_moe_model(mid)]
-                elif category_target == "chat":
-                    cat_filtered = [mid for mid in candidate_pool if is_chat_model(mid)]
-                else:
-                    cat_filtered = candidate_pool
-
-                if cat_filtered:
-                    other_candidates = [mid for mid in candidate_pool if mid not in cat_filtered]
-                    candidate_pool = cat_filtered + other_candidates
-                    logger.info(f"Purpose category '{category_target}' selected: prioritized {len(cat_filtered)} {category_target} models first.")
-                target_model = "nim-free"
+        if is_vision:
+            vision_capable = [mid for mid in candidate_pool if self._is_vision_model(mid)]
+            if not vision_capable:
+                all_ids = [m.get("id") for m in self.models if m.get("id")]
+                vision_capable = [mid for mid in all_ids if self._is_vision_model(mid)]
+            if vision_capable:
+                other_candidates = [mid for mid in candidate_pool if mid not in vision_capable]
+                candidate_pool = vision_capable + other_candidates
+                logger.info(f"Vision payload detected: overriding target to {len(vision_capable)} vision-capable models first.")
+            target_model = "nim-free"
+        elif category_target:
+            if category_target == "coding":
+                cat_filtered = [mid for mid in candidate_pool if is_coding_model(mid)]
+            elif category_target == "reasoning":
+                cat_filtered = [mid for mid in candidate_pool if is_reasoning_model(mid)]
+            elif category_target == "vision":
+                cat_filtered = [mid for mid in candidate_pool if is_vision_model(mid)]
+            elif category_target == "moe":
+                cat_filtered = [mid for mid in candidate_pool if is_moe_model(mid)]
+            elif category_target == "chat":
+                cat_filtered = [mid for mid in candidate_pool if is_chat_model(mid)]
             else:
-                target_model = requested_model if (requested_model and requested_model.lower() not in ("nim-free", "nim_free", "auto")) else get_primary_model()
+                cat_filtered = candidate_pool
 
-            if target_model and target_model.lower() not in ("nim-free", "nim_free", "auto") and not is_vision:
-                request.model = target_model
-                if self._is_banned_model(target_model):
-                    logger.warning(f"Target model {target_model} is banned/non-chat; routing to healthy pool.")
-                    candidate_ids = candidate_pool
+            if cat_filtered:
+                other_candidates = [mid for mid in candidate_pool if mid not in cat_filtered]
+                candidate_pool = cat_filtered + other_candidates
+                logger.info(f"Purpose category '{category_target}' selected: prioritized {len(cat_filtered)} {category_target} models first.")
+            target_model = "nim-free"
+        else:
+            target_model = requested_model if (requested_model and requested_model.lower() not in ("nim-free", "nim_free", "auto")) else get_primary_model()
+
+        if target_model and target_model.lower() not in ("nim-free", "nim_free", "auto") and not is_vision:
+            request.model = target_model
+            if self._is_banned_model(target_model):
+                logger.warning(f"Target model {target_model} is banned/non-chat; routing to healthy pool.")
+                candidate_ids = candidate_pool
+            else:
+                if target_model in candidate_pool:
+                    other_candidates = [mid for mid in candidate_pool if mid != target_model]
+                    candidate_ids = [target_model] + other_candidates
                 else:
-                    if target_model in candidate_pool:
+                    target_clean = target_model.lower().replace("-", "").replace("/", "").replace(".", "")
+                    matching = [
+                        mid for mid in candidate_pool
+                        if target_clean in mid.lower().replace("-", "").replace("/", "").replace(".", "")
+                        or mid.lower().replace("-", "").replace("/", "").replace(".", "") in target_clean
+                    ]
+                    if matching:
+                        logger.info(f"Target model '{target_model}' matched candidate '{matching[0]}' in active pool.")
+                        other = [mid for mid in candidate_pool if mid not in matching]
+                        candidate_ids = matching + other
+                    else:
                         other_candidates = [mid for mid in candidate_pool if mid != target_model]
                         candidate_ids = [target_model] + other_candidates
-                    else:
-                        target_clean = target_model.lower().replace("-", "").replace("/", "").replace(".", "")
-                        matching = [
-                            mid for mid in candidate_pool
-                            if target_clean in mid.lower().replace("-", "").replace("/", "").replace(".", "")
-                            or mid.lower().replace("-", "").replace("/", "").replace(".", "") in target_clean
-                        ]
-                        if matching:
-                            logger.info(f"Target model '{target_model}' matched candidate '{matching[0]}' in active pool.")
-                            other = [mid for mid in candidate_pool if mid not in matching]
-                            candidate_ids = matching + other
-                        else:
-                            other_candidates = [mid for mid in candidate_pool if mid != target_model]
-                            candidate_ids = [target_model] + other_candidates
-            else:
-                if candidate_pool:
-                    fast_candidates = [mid for mid in candidate_pool if self._latencies.get(mid, 0.0) <= MAX_LATENCY_THRESHOLD]
-                    if fast_candidates:
-                        non_fast = [mid for mid in candidate_pool if mid not in fast_candidates]
-                        candidate_pool = fast_candidates + non_fast
+        else:
+            if candidate_pool:
+                fast_candidates = [mid for mid in candidate_pool if self._latencies.get(mid, 0.0) <= MAX_LATENCY_THRESHOLD]
+                if fast_candidates:
+                    non_fast = [mid for mid in candidate_pool if mid not in fast_candidates]
+                    candidate_pool = fast_candidates + non_fast
 
-                est_tokens = estimate_token_count(request)
+            est_tokens = estimate_token_count(request)
 
-                if est_tokens > 16000:
-                    large_ctx_models = [mid for mid in candidate_pool if any(k in mid.lower() for k in ("31b", "90b", "120b", "550b", "glm-5", "deepseek"))]
-                    if large_ctx_models:
-                        non_large = [mid for mid in candidate_pool if mid not in large_ctx_models]
-                        candidate_pool = large_ctx_models + non_large
-                        logger.info(f"Large prompt detected ({est_tokens} tokens): isolated pool to large-context models.")
+            if est_tokens > 16000:
+                large_ctx_models = [mid for mid in candidate_pool if any(k in mid.lower() for k in ("31b", "90b", "120b", "550b", "glm-5", "deepseek"))]
+                if large_ctx_models:
+                    non_large = [mid for mid in candidate_pool if mid not in large_ctx_models]
+                    candidate_pool = large_ctx_models + non_large
+                    logger.info(f"Large prompt detected ({est_tokens} tokens): isolated pool to large-context models.")
 
-                if request.tools and not is_vision:
-                    tool_incompatible = ["safety", "guard", "translate", "ising-calibration", "topic-control"]
-                    tool_capable = [
-                        mid for mid in candidate_pool
-                        if not any(k in mid.lower() for k in tool_incompatible)
-                    ]
-                    if tool_capable:
-                        candidate_pool = tool_capable
+            if request.tools and not is_vision:
+                tool_incompatible = ["safety", "guard", "translate", "ising-calibration", "topic-control"]
+                tool_capable = [
+                    mid for mid in candidate_pool
+                    if not any(k in mid.lower() for k in tool_incompatible)
+                ]
+                if tool_capable:
+                    candidate_pool = tool_capable
 
-                def sort_candidates(mid: str):
-                    throttled = 1 if self._rate_limited_until.get(mid, 0) > now else 0
-                    rpm_over = 1 if self._get_recent_rpm(mid, now) >= MODEL_MAX_RPM else 0
-                    busy = 1 if self._in_flight.get(mid, 0) >= MODEL_MAX_CONCURRENCY else 0
-                    in_flight_count = self._in_flight.get(mid, 0)
+            def sort_candidates(mid: str):
+                throttled = 1 if self._rate_limited_until.get(mid, 0) > now else 0
+                rpm_over = 1 if self._get_recent_rpm(mid, now) >= MODEL_MAX_RPM else 0
+                busy = 1 if self._in_flight.get(mid, 0) >= MODEL_MAX_CONCURRENCY else 0
+                in_flight_count = self._in_flight.get(mid, 0)
 
-                    is_vision_demotion = 1 if (not is_vision and self._is_vision_model(mid)) else 0
+                is_vision_demotion = 1 if (not is_vision and self._is_vision_model(mid)) else 0
 
-                    lat = self._latencies.get(mid, 1.0)
-                    rel = self._reliability.get(mid, 1.0)
-                    tps = self._tps.get(mid, 40.0)
-                    perf_score = (1.0 / max(0.01, lat)) * (rel ** 2) * (1.0 + 0.01 * tps)
+                lat = self._latencies.get(mid, 1.0)
+                rel = self._reliability.get(mid, 1.0)
+                tps = self._tps.get(mid, 40.0)
+                perf_score = (1.0 / max(0.01, lat)) * (rel ** 2) * (1.0 + 0.01 * tps)
 
-                    return (throttled, rpm_over, busy, is_vision_demotion, in_flight_count, -perf_score)
+                return (throttled, rpm_over, busy, is_vision_demotion, in_flight_count, -perf_score)
 
-                if not category_target and not is_vision:
-                    candidate_pool.sort(key=sort_candidates)
-                    if self.strategy == "fallback":
-                        candidate_ids = candidate_pool
-                    else:
-                        top_size = min(PRIMARY_POOL_SIZE, len(candidate_pool))
-                        if top_size > 0:
-                            top_pool = candidate_pool[:top_size]
-                            standby_pool = candidate_pool[top_size:]
-                            start_idx = self.model_index % len(top_pool)
-                            self.model_index = (self.model_index + 1) % len(top_pool)
-                            ordered_top = [top_pool[(start_idx + i) % len(top_pool)] for i in range(len(top_pool))]
-                            candidate_ids = ordered_top + standby_pool
-                        else:
-                            candidate_ids = candidate_pool
-                else:
+            if not category_target and not is_vision:
+                candidate_pool.sort(key=sort_candidates)
+                if self.strategy == "fallback":
                     candidate_ids = candidate_pool
+                else:
+                    top_size = min(PRIMARY_POOL_SIZE, len(candidate_pool))
+                    if top_size > 0:
+                        top_pool = candidate_pool[:top_size]
+                        standby_pool = candidate_pool[top_size:]
+                        start_idx = self.model_index % len(top_pool)
+                        self.model_index = (self.model_index + 1) % len(top_pool)
+                        ordered_top = [top_pool[(start_idx + i) % len(top_pool)] for i in range(len(top_pool))]
+                        candidate_ids = ordered_top + standby_pool
+                    else:
+                        candidate_ids = candidate_pool
+            else:
+                candidate_ids = candidate_pool
+
 
         tried_models = set()
         last_error = None

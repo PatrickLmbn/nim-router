@@ -1,0 +1,8 @@
+primary_model: qwen/qwen3.8-27b
+routing_strategy: fallback
+max_latency_threshold: 3.0
+health_refresh_interval: 180
+rate_limit_cooldown: 30
+primary_pool_size: 7
+model_max_rpm: 35
+model_max_concurrency: 4

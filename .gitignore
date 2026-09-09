@@ -6,5 +6,8 @@ __pycache__/
 venv/
 config/models_status.json
 !config/models_status.example.json
+config/settings.yaml
+!config/settings.yaml.example
+config/runtime_state.json
 README copy.md
 tests/

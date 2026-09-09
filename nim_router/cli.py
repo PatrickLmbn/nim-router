@@ -17,6 +17,8 @@ from nim_router.config import (
     get_primary_model,
     get_routing_strategy,
 )
+from nim_router.catalog import get_provider_name, save_working_models
+from nim_router.config import update_setting
 from nim_router.engine import ModelRouter
 
 def get_rainbow_banner() -> str:
@@ -43,52 +45,6 @@ def get_rainbow_banner() -> str:
     lines = [f"{c}{line}\033[0m" for c, line in zip(colors, banner_lines)]
     return "\n".join(lines) + "\n"
 
-def get_provider_name(m_obj: dict | str) -> str:
-    if isinstance(m_obj, dict):
-        if "provider" in m_obj:
-            return m_obj["provider"]
-        mid = m_obj.get("id", "").lower()
-    else:
-        mid = str(m_obj).lower()
-
-    for prefix in ("[nvidia] ", "[openrouter] ", "[opencode] ", "[groq] ", "[cerebras] ", "[bai] ", "[category] "):
-        if mid.startswith(prefix):
-            mid = mid[len(prefix):].strip()
-
-    if mid in ("glm-5.3-flash", "qwen3.8-flash", "hy3") or mid.startswith("bai/") or "b.ai" in mid:
-        return "BAI"
-    elif mid.endswith(":free") or "openrouter/" in mid or mid.startswith("openrouter"):
-        return "OpenRouter"
-    elif mid.startswith("opencode/") or "opencode" in mid or mid.endswith("-free"):
-        return "OpenCode"
-    elif any(k in mid for k in ("llama3-", "mixtral-8x7b", "gemma2-", "groq", "versatile", "instant", "specdec", "orpheus", "allam", "compound")) or mid.startswith("groq/") or mid.startswith("qwen/"):
-        return "Groq"
-    elif "cerebras" in mid or "llama3.1" in mid or "csk" in mid or mid in ("gpt-oss-120b", "qwen-3.8-27b", "gemma-4-31b") or mid.startswith("cerebras/"):
-        return "Cerebras"
-    else:
-        return "NVIDIA"
-
-def save_working_models(models: list[dict | str]):
-    base_dir = os.path.dirname(os.path.dirname(__file__))
-    config_dir = os.path.join(base_dir, "config")
-    os.makedirs(config_dir, exist_ok=True)
-    status_path = os.path.join(config_dir, "models_status.json")
-    saved_list = []
-    for item in models:
-        if isinstance(item, dict):
-            mid = item.get("id")
-            prov = item.get("provider")
-            if mid and prov:
-                saved_list.append({"id": mid, "provider": prov})
-            elif mid:
-                saved_list.append({"id": mid, "provider": get_provider_name(mid)})
-        elif isinstance(item, str):
-            saved_list.append({"id": item, "provider": get_provider_name(item)})
-    try:
-        with open(status_path, "w") as f:
-            json.dump({"working_models": saved_list}, f, indent=2)
-    except Exception:
-        pass
 
 def show_help():
     print(get_rainbow_banner())
@@ -356,25 +312,7 @@ async def interactive_model_selector():
         print("\033[91mInvalid input.\033[0m")
         return
 
-    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
-    if os.path.exists(env_path):
-        with open(env_path, "r") as f:
-            lines = f.readlines()
-        updated = False
-        new_lines = []
-        for line in lines:
-            if line.startswith("PRIMARY_MODEL=") or line.startswith("MODEL="):
-                new_lines.append(f"PRIMARY_MODEL={selected_model}\n")
-                updated = True
-            else:
-                new_lines.append(line)
-        if not updated:
-            new_lines.append(f"PRIMARY_MODEL={selected_model}\n")
-        with open(env_path, "w") as f:
-            f.writelines(new_lines)
-    else:
-        with open(env_path, "w") as f:
-            f.write(f"PRIMARY_MODEL={selected_model}\n")
+    update_setting("primary_model", selected_model)
 
     print(f"\n\033[1;32m[✓] Primary model updated to: {selected_model}\033[0m")
 
@@ -456,8 +394,6 @@ async def async_connect_api_keys():
 
     if "PORT" not in env_vars:
         env_vars["PORT"] = "11435"
-    if "PRIMARY_MODEL" not in env_vars and "MODEL" not in env_vars:
-        env_vars["PRIMARY_MODEL"] = "nim-free"
 
     with open(env_path, "w") as f:
         for k, v in env_vars.items():
@@ -620,25 +556,12 @@ async def interactive_strategy_selector():
         print("\033[91mInvalid choice.\033[0m")
         return
 
-    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
-    env_vars = {}
-    if os.path.exists(env_path):
-        with open(env_path, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line and "=" in line and not line.startswith("#"):
-                    parts = line.split("=", 1)
-                    env_vars[parts[0].strip()] = parts[1].strip()
-
-    env_vars["ROUTING_STRATEGY"] = new_strategy
-    with open(env_path, "w") as f:
-        for k, v in env_vars.items():
-            f.write(f"{k}={v}\n")
+    update_setting("routing_strategy", new_strategy)
 
     print(f"\n\033[1;32m[✓] Routing strategy set to '{new_strategy}'.\033[0m")
 
     try:
-        port = int(env_vars.get("PORT", 11435))
+        port = int(os.getenv("PORT", 11435))
         async with httpx.AsyncClient(timeout=3) as client:
             r = await client.post(f"http://127.0.0.1:{port}/refresh")
             if r.status_code == 200:

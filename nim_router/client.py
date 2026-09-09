@@ -20,6 +20,22 @@ from nim_router.catalog import is_banned_model, load_fallback_models
 
 import email.utils
 
+_shared_client: httpx.AsyncClient | None = None
+
+def get_shared_client() -> httpx.AsyncClient:
+    global _shared_client
+    if _shared_client is None or _shared_client.is_closed:
+        limits = httpx.Limits(max_connections=100, max_keepalive_connections=30, keepalive_expiry=30)
+        timeout = httpx.Timeout(connect=15.0, read=300.0, write=60.0, pool=60.0)
+        _shared_client = httpx.AsyncClient(limits=limits, timeout=timeout)
+    return _shared_client
+
+async def close_shared_client():
+    global _shared_client
+    if _shared_client and not _shared_client.is_closed:
+        await _shared_client.aclose()
+        _shared_client = None
+
 def parse_retry_after(header_val: str | None) -> float | None:
     if not header_val:
         return None
@@ -296,8 +312,7 @@ async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompl
     if request.tools is not None:
         payload["tools"] = request.tools
 
-    timeout_config = httpx.Timeout(connect=15.0, read=300.0, write=60.0, pool=60.0)
-    client = httpx.AsyncClient(timeout=timeout_config)
+    client = get_shared_client()
 
     if request.stream:
         try:
@@ -381,7 +396,6 @@ async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompl
         except HTTPException:
             raise
         except Exception as e:
-            await client.aclose()
             raise HTTPException(status_code=502, detail=str(e))
     else:
         try:
@@ -433,8 +447,3 @@ async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompl
         except Exception as e:
             logger.error(f"Failed to call API for {model_id}: {e}")
             raise HTTPException(status_code=502, detail=str(e))
-        finally:
-            await client.aclose()
-
-async def call_nvidia_endpoint(api_key: str, model_id: str, request: ChatCompletionRequest) -> Response:
-    return await call_provider_endpoint(api_key, model_id, request, NIM_API_BASE)

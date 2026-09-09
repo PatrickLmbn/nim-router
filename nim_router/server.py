@@ -1,6 +1,5 @@
 import asyncio
 from contextlib import asynccontextmanager
-import os
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
@@ -15,9 +14,11 @@ from nim_router.config import (
     get_routing_strategy,
     get_primary_model,
     reload_env,
+    update_setting,
 )
 from nim_router.engine import ModelRouter
 from nim_router.logger import logger
+from nim_router.client import get_shared_client, close_shared_client
 
 _router_instance: Optional[ModelRouter] = None
 
@@ -44,8 +45,10 @@ async def lifespan(app: FastAPI):
         bai_key=bai_key,
         strategy=strategy
     )
+    get_shared_client()
     await _router_instance.initialize()
     yield
+    await close_shared_client()
     logger.info("nim-router shutting down")
 
 def create_app() -> FastAPI:
@@ -197,7 +200,7 @@ def create_app() -> FastAPI:
         return {}
 
     @app.post("/refresh")
-    async def refresh_models(request: Request):
+    async def refresh_models(request: Request, sync: bool = False):
         if not _router_instance:
             raise HTTPException(status_code=500, detail="Router not initialized")
         reload_env()
@@ -206,23 +209,7 @@ def create_app() -> FastAPI:
             if isinstance(body, dict) and "primary_model" in body:
                 val = str(body["primary_model"]).strip()
                 if val:
-                    os.environ["PRIMARY_MODEL"] = val
-                    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
-                    if os.path.exists(env_path):
-                        with open(env_path, "r") as f:
-                            lines = f.readlines()
-                        new_lines = []
-                        updated = False
-                        for line in lines:
-                            if line.startswith("PRIMARY_MODEL=") or line.startswith("MODEL="):
-                                new_lines.append(f"PRIMARY_MODEL={val}\n")
-                                updated = True
-                            else:
-                                new_lines.append(line)
-                        if not updated:
-                            new_lines.append(f"PRIMARY_MODEL={val}\n")
-                        with open(env_path, "w") as f:
-                            f.writelines(new_lines)
+                    update_setting("primary_model", val)
         except Exception:
             pass
         _router_instance.api_keys = get_nvidia_keys()
@@ -231,7 +218,10 @@ def create_app() -> FastAPI:
         _router_instance.groq_keys = get_groq_keys()
         _router_instance.cerebras_keys = get_cerebras_keys()
         _router_instance.bai_key = get_bai_key()
-        asyncio.create_task(_router_instance.refresh_models())
+        if sync:
+            await _router_instance.refresh_models()
+        else:
+            asyncio.create_task(_router_instance.refresh_models())
         return {
             "message": "Models refreshed successfully",
             "primary_model": get_primary_model(),
