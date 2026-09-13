@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-primary: #eef2f7;
+    --card-bg: #f8fafc;
+    --neu-shadow: 6px 6px 14px #c8d3e0, -6px -6px 14px #ffffff;
+    --neu-inset: inset 3px 3px 6px #cad6e4, inset -3px -3px 6px #ffffff;
+    --neu-btn: 4px 4px 10px #cad6e4, -4px -4px 10px #ffffff;
+  }
+  .dark {
+    --bg-primary: #0f1117;
+    --card-bg: #151922;
+    --neu-shadow: 6px 6px 16px rgba(0, 0, 0, 0.7), -4px -4px 12px rgba(255, 255, 255, 0.025);
+    --neu-inset: inset 3px 3px 6px rgba(0, 0, 0, 0.8), inset -2px -2px 4px rgba(255, 255, 255, 0.02);
+    --neu-btn: 4px 4px 10px rgba(0, 0, 0, 0.6), -3px -3px 8px rgba(255, 255, 255, 0.025);
+  }
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(140, 150, 170, 0.25);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(140, 150, 170, 0.45);
+}
+
+.neu-button {
+  transition: all 0.18s ease-in-out;
+}
+.neu-button:active {
+  box-shadow: var(--neu-inset) !important;
+  transform: translateY(1px);
+}

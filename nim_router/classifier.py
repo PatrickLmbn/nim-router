@@ -124,3 +124,49 @@ def estimate_token_count(request: ChatCompletionRequest) -> int:
                 if isinstance(item, dict) and item.get("type") == "text":
                     total_words += len(item.get("text", "").split())
     return int(total_words / 0.75)
+
+
+def extract_model_family(model_id: str) -> str:
+    mid = (model_id or "").lower().strip()
+    for prefix in ("[nvidia] ", "[openrouter] ", "[opencode] ", "[groq] ", "[cerebras] ", "[bai] ", "[category] "):
+        if mid.startswith(prefix):
+            mid = mid[len(prefix):].strip()
+
+    if "nemotron" in mid:
+        return "nemotron"
+    if "qwq" in mid or "qwen" in mid:
+        return "qwen"
+    if "deepseek" in mid:
+        return "deepseek"
+    if any(k in mid for k in ("mistral", "codestral", "mixtral")):
+        return "mistral"
+    if "llama" in mid:
+        return "llama"
+    if "gemma" in mid:
+        return "gemma"
+    if "phi" in mid:
+        return "phi"
+    if "claude" in mid:
+        return "claude"
+    if "gpt" in mid:
+        return "gpt"
+    if "glm" in mid:
+        return "glm"
+    if "command" in mid:
+        return "command"
+    if "nova" in mid:
+        return "nova"
+    if "jamba" in mid:
+        return "jamba"
+    return "unknown"
+
+
+def get_same_family_models(target_model_id: str, candidates: list[str]) -> list[str]:
+    target_family = extract_model_family(target_model_id)
+    if not target_family or target_family == "unknown":
+        return []
+    return [
+        m for m in candidates
+        if m != target_model_id and extract_model_family(m) == target_family
+    ]
+

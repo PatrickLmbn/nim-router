@@ -331,7 +331,6 @@ async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompl
                     sample = first_chunk.decode("utf-8", errors="ignore")
                     if '"error":' in sample and ('"message":' in sample or '"code":' in sample):
                         await response.aclose()
-                        await client.aclose()
                         detail_msg = sample
                         try:
                             clean = sample.strip()
@@ -361,7 +360,6 @@ async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompl
                         yield f"data: {err_msg}\n\n".encode("utf-8")
                     finally:
                         await response.aclose()
-                        await client.aclose()
 
                 return StreamingResponse(
                     stream_generator(),
@@ -377,7 +375,7 @@ async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompl
                 body = await response.aread()
                 retry_sec = parse_retry_after(response.headers.get("Retry-After") or response.headers.get("retry-after"))
                 await response.aclose()
-                await client.aclose()
+
                 try:
                     err_data = json.loads(body.decode())
                     detail = err_data.get("error", {}).get("message", str(err_data))

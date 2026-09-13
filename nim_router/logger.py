@@ -28,10 +28,48 @@ class ColoredFormatter(logging.Formatter):
         msg = record.getMessage()
         return f"{asctime} - {color}{levelname}{reset} - {color}{msg}{reset}"
 
+import asyncio
+from collections import deque
+import time
+
+log_buffer = deque(maxlen=300)
+_log_subscribers: set[asyncio.Queue] = set()
+
+class BufferAndBroadcastHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            entry = {
+                "timestamp": time.strftime("%H:%M:%S", time.localtime(record.created)),
+                "level": record.levelname,
+                "message": record.getMessage(),
+            }
+            log_buffer.append(entry)
+            for q in list(_log_subscribers):
+                try:
+                    q.put_nowait(entry)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+def register_log_subscriber() -> asyncio.Queue:
+    q = asyncio.Queue(maxsize=100)
+    _log_subscribers.add(q)
+    return q
+
+def unregister_log_subscriber(q: asyncio.Queue):
+    _log_subscribers.discard(q)
+
+def get_recent_logs() -> list[dict]:
+    return list(log_buffer)
+
 log_handler = logging.StreamHandler(sys.stdout)
 log_handler.setFormatter(ColoredFormatter())
+broadcast_handler = BufferAndBroadcastHandler()
+
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("nim-router")
 logger.setLevel(logging.INFO)
-logger.handlers = [log_handler]
+logger.handlers = [log_handler, broadcast_handler]
 logger.propagate = False
+

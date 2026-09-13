@@ -1,0 +1,29 @@
+[
+  {
+    "name": "coding-model",
+    "strategy": "fallback",
+    "models": [
+      "qwen3.8-flash",
+      "glm-5.3-flash",
+      "qwen/qwen3.6-27b",
+      "z-ai/glm-5.3-flash",
+      "qwen/qwen3.8-27b",
+      "nvidia/nemotron-3-super-120b-a12b",
+      "openai/gpt-oss-120b"
+    ],
+    "created_at": "2026-09-13T06:44:49Z"
+  },
+  {
+    "name": "round-robin",
+    "strategy": "round_robin",
+    "models": [
+      "qwen/qwen3.6-27b",
+      "qwen/qwen3.8-27b",
+      "qwen3.8-flash",
+      "z-ai/glm-5.3-flash",
+      "glm-5.3-flash",
+      "nvidia/nemotron-3-super-120b-a12b"
+    ],
+    "created_at": "2026-09-13T06:46:08Z"
+  }
+]

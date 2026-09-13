@@ -17,7 +17,7 @@ BAI_API_BASE = "https://api.b.ai/v1"
 
 def _load_settings() -> dict:
     defaults = {
-        "primary_model": "nim-free",
+        "primary_model": "nim-auto",
         "routing_strategy": "fallback",
         "max_latency_threshold": 3.0,
         "health_refresh_interval": 180,
@@ -25,6 +25,7 @@ def _load_settings() -> dict:
         "primary_pool_size": 7,
         "model_max_rpm": 35,
         "model_max_concurrency": 4,
+        "fallback_models": [],
     }
     example = _SETTINGS_FILE.replace(".yaml", ".yaml.example")
     if not os.path.exists(_SETTINGS_FILE) and os.path.exists(example):
@@ -91,10 +92,22 @@ def get_bai_key() -> str:
     return os.getenv("BAI_API_KEY", "").strip()
 
 def get_primary_model() -> str:
-    return _load_settings().get("primary_model", "nim-free") or "nim-free"
+    env_val = os.getenv("PRIMARY_MODEL", "").strip()
+    if env_val:
+        return env_val
+    return _load_settings().get("primary_model", "nim-auto") or "nim-auto"
 
 def get_routing_strategy() -> str:
     return str(_load_settings().get("routing_strategy", "fallback")).strip().lower()
 
+def get_fallback_models() -> list[str]:
+    raw = _load_settings().get("fallback_models", [])
+    if isinstance(raw, str):
+        raw = [m.strip() for m in raw.split(",") if m.strip()]
+    return [str(m).strip() for m in raw if str(m).strip()][:2]
+
 def get_api_keys() -> list[str]:
     return get_nvidia_keys()
+
+def get_health_refresh_interval() -> int:
+    return max(30, int(_load_settings().get("health_refresh_interval", 180)))

@@ -9,5 +9,15 @@ config/models_status.json
 config/settings.yaml
 !config/settings.yaml.example
 config/runtime_state.json
+config/combos.json
+!config/combos.example.json
 README copy.md
 tests/
+node_modules/
+frontend/node_modules/
+frontend/dist/
+.pytest_cache/
+.vscode/
+.DS_Store
+*.zip
+pytest.ini

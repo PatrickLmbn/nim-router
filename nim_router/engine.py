@@ -21,7 +21,9 @@ from nim_router.config import (
     BAI_API_BASE,
     get_primary_model,
     get_routing_strategy,
+    get_health_refresh_interval,
 )
+from nim_router.combos import get_combo, load_combos
 from nim_router.logger import logger
 from nim_router.schemas import ChatCompletionRequest
 from nim_router.catalog import is_banned_model, load_fallback_models
@@ -81,6 +83,10 @@ class ModelRouter:
         self._pool_updated: float = 0
         self._model_providers: dict[str, str] = {}
         self._write_lock = asyncio.Lock()
+        self._is_probing: bool = False
+        self._last_probe_time: float = time.time()
+        self._probe_count: int = 0
+        self._bg_probe_task: asyncio.Task | None = None
 
     def _get_next_api_key(self) -> str:
         key = self.api_keys[self.key_index % len(self.api_keys)]
@@ -343,24 +349,54 @@ class ModelRouter:
                 f"(NVIDIA: {nvidia_count}, OpenRouter: {or_count}, OpenCode: {oc_count}, Groq: {groq_count}, Cerebras: {cerebras_count}, BAI: {bai_count})"
             )
             logger.info(f"Active routing strategy: {self.strategy}")
+            self._last_probe_time = time.time()
+        if self._bg_probe_task is None or self._bg_probe_task.done():
+            self._bg_probe_task = asyncio.create_task(self._background_probe_loop())
         asyncio.create_task(self.refresh_models())
 
+    async def _background_probe_loop(self):
+        await asyncio.sleep(8)
+        while True:
+            try:
+                interval = get_health_refresh_interval()
+                await asyncio.sleep(interval)
+                if not self._is_probing:
+                    logger.info(f"Auto background health prober executing scheduled cycle (interval: {interval}s)...")
+                    await self.refresh_models()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Background health prober error: {e}")
+                await asyncio.sleep(10)
+
     async def refresh_models(self):
-        self.strategy = get_routing_strategy()
-        logger.info("Refreshing model catalog and latency probes across providers in background...")
-        new_models = await self._discover_models()
-        if new_models:
-            async with self._write_lock:
-                self.models = new_models
-                for m in self.models:
-                    mid = m.get("id")
-                    if mid:
-                        self._model_providers[mid] = m.get("provider") or self._get_provider_name(mid)
-                self._healthy_pool = self._build_healthy_pool()
-                self._pool_updated = time.time()
-                logger.success(f"Refreshed pool: {len(self._healthy_pool)} active models available.")
-            save_working_models(new_models)
-            self._save_runtime_state()
+        if self._is_probing:
+            logger.info("Probe already in progress; skipping duplicate run.")
+            return
+        self._is_probing = True
+        try:
+            self.strategy = get_routing_strategy()
+            logger.info("Auto background health prober started: probing model catalog & endpoints...")
+            new_models = await self._discover_models()
+            if new_models:
+                async with self._write_lock:
+                    self.models = new_models
+                    for m in self.models:
+                        mid = m.get("id")
+                        if mid:
+                            self._model_providers[mid] = m.get("provider") or self._get_provider_name(mid)
+                    self._healthy_pool = self._build_healthy_pool()
+                    self._pool_updated = time.time()
+                    logger.success(f"Refreshed pool: {len(self._healthy_pool)} active models available.")
+                save_working_models(new_models)
+                self._save_runtime_state()
+            self._last_probe_time = time.time()
+            self._probe_count += 1
+            logger.success(f"Background health prober finished cycle #{self._probe_count}. Verified {len(self._healthy_pool)} working models.")
+        except Exception as e:
+            logger.error(f"Error during background model probing: {e}")
+        finally:
+            self._is_probing = False
 
     async def handle_request(self, raw_request: Request) -> Response:
         try:
@@ -428,7 +464,7 @@ class ModelRouter:
                 other_candidates = [mid for mid in candidate_pool if mid not in vision_capable]
                 candidate_pool = vision_capable + other_candidates
                 logger.info(f"Vision payload detected: overriding target to {len(vision_capable)} vision-capable models first.")
-            target_model = "nim-free"
+            target_model = "nim-auto"
         elif category_target:
             if category_target == "coding":
                 cat_filtered = [mid for mid in candidate_pool if is_coding_model(mid)]
@@ -447,11 +483,45 @@ class ModelRouter:
                 other_candidates = [mid for mid in candidate_pool if mid not in cat_filtered]
                 candidate_pool = cat_filtered + other_candidates
                 logger.info(f"Purpose category '{category_target}' selected: prioritized {len(cat_filtered)} {category_target} models first.")
-            target_model = "nim-free"
+            target_model = "nim-auto"
         else:
-            target_model = requested_model if (requested_model and requested_model.lower() not in ("nim-free", "nim_free", "auto")) else get_primary_model()
+            target_model = requested_model if (requested_model and requested_model.lower() not in ("nim-auto", "nim_auto", "auto")) else get_primary_model()
 
-        if target_model and target_model.lower() not in ("nim-free", "nim_free", "auto") and not is_vision:
+        combo = get_combo(requested_model) if requested_model else None
+        if combo:
+            combo_models = combo.get("models", [])
+            strategy = combo.get("strategy", "fallback")
+
+            def _resolve(mid: str) -> str:
+                mid_clean = mid.lower().replace("-", "").replace("/", "").replace(".", "")
+                match = next(
+                    (p for p in candidate_pool
+                     if mid_clean in p.lower().replace("-", "").replace("/", "").replace(".", "")
+                     or p.lower().replace("-", "").replace("/", "").replace(".", "") in mid_clean),
+                    mid
+                )
+                return match
+
+            resolved = [_resolve(m) for m in combo_models if m]
+
+            if strategy == "round_robin":
+                if resolved:
+                    start = self.model_index % len(resolved)
+                    self.model_index = (self.model_index + 1) % len(resolved)
+                    ordered = resolved[start:] + resolved[:start]
+                else:
+                    ordered = []
+            else:
+                ordered = resolved
+
+            nim_auto_pool = [m for m in candidate_pool if m not in ordered]
+            candidate_ids = ordered + nim_auto_pool
+            logger.info(
+                f"Combo '{combo['name']}' ({strategy}): routing through "
+                f"{len(ordered)} models → nim-auto pool fallback"
+            )
+
+        elif target_model and target_model.lower() not in ("nim-auto", "nim_auto", "auto") and not is_vision:
             request.model = target_model
             if self._is_banned_model(target_model):
                 logger.warning(f"Target model {target_model} is banned/non-chat; routing to healthy pool.")
@@ -459,7 +529,7 @@ class ModelRouter:
             else:
                 if target_model in candidate_pool:
                     other_candidates = [mid for mid in candidate_pool if mid != target_model]
-                    candidate_ids = [target_model] + other_candidates
+                    primary_ids = [target_model]
                 else:
                     target_clean = target_model.lower().replace("-", "").replace("/", "").replace(".", "")
                     matching = [
@@ -469,11 +539,13 @@ class ModelRouter:
                     ]
                     if matching:
                         logger.info(f"Target model '{target_model}' matched candidate '{matching[0]}' in active pool.")
-                        other = [mid for mid in candidate_pool if mid not in matching]
-                        candidate_ids = matching + other
+                        other_candidates = [mid for mid in candidate_pool if mid not in matching]
+                        primary_ids = matching
                     else:
                         other_candidates = [mid for mid in candidate_pool if mid != target_model]
-                        candidate_ids = [target_model] + other_candidates
+                        primary_ids = [target_model]
+
+                candidate_ids = primary_ids + other_candidates
         else:
             if candidate_pool:
                 fast_candidates = [mid for mid in candidate_pool if self._latencies.get(mid, 0.0) <= MAX_LATENCY_THRESHOLD]
