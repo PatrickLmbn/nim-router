@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Zap, Activity, ArrowUpRight, Play, RefreshCw, Plus, 
   Gauge, Shield, Terminal, Copy, Check, RotateCcw, CheckCircle2,
-  Key, Globe, Sparkles, Server, GitMerge, X, ChevronDown, Radio, Search, Trash2
+  Key, Globe, Sparkles, Server, GitMerge, X, ChevronDown, Radio, Search, Trash2,
+  Eye, EyeOff
 } from 'lucide-react';
 import { ProviderIcon, ModelIcon } from './ModelIcon';
 
@@ -24,6 +25,7 @@ export function BentoGrid({
   const [testResult, setTestResult] = useState(null);
   const [copiedEndpoint, setCopiedEndpoint] = useState(false);
   const [copiedApiKey, setCopiedApiKey] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
   const logsContainerRef = useRef(null);
 
   const isProbingActive = probing || Boolean(stats?.probing_status?.is_probing);
@@ -294,16 +296,29 @@ export function BentoGrid({
                     <Key className="w-3.5 h-3.5 text-[#ff6b35] shrink-0" />
                     <div className="truncate">
                       <div className="text-[8px] uppercase font-semibold text-slate-500 dark:text-slate-400">API Key</div>
-                      <div className="text-[10px] font-mono font-semibold text-slate-800 dark:text-slate-200 truncate">sk-nim-local</div>
+                      <div className="text-[10px] font-mono font-semibold text-slate-800 dark:text-slate-200 truncate">
+                        {showApiKey ? 'sk-nim-local' : '••••••••••••'}
+                      </div>
                     </div>
                   </div>
-                  <button
-                    onClick={handleCopyApiKey}
-                    className="p-1 rounded-md bg-black/5 dark:bg-white/10 hover:bg-black/15 text-slate-700 dark:text-slate-300 transition shrink-0 ml-1"
-                    title="Copy API Key"
-                  >
-                    {copiedApiKey ? <Check className="w-3 h-3 text-[#00f5a0]" /> : <Copy className="w-3 h-3 text-slate-400" />}
-                  </button>
+                  <div className="flex items-center gap-1 shrink-0 ml-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowApiKey(!showApiKey)}
+                      className="p-1 rounded-md bg-black/5 dark:bg-white/10 hover:bg-black/15 text-slate-700 dark:text-slate-300 transition"
+                      title={showApiKey ? "Hide API Key" : "View API Key"}
+                    >
+                      {showApiKey ? <EyeOff className="w-3 h-3 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" /> : <Eye className="w-3 h-3 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCopyApiKey}
+                      className="p-1 rounded-md bg-black/5 dark:bg-white/10 hover:bg-black/15 text-slate-700 dark:text-slate-300 transition"
+                      title="Copy API Key"
+                    >
+                      {copiedApiKey ? <Check className="w-3 h-3 text-[#00f5a0]" /> : <Copy className="w-3 h-3 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" />}
+                    </button>
+                  </div>
                 </div>
               </div>
 
