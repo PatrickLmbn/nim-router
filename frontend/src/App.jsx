@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { 
+import {
   Zap, Sun, Moon, RefreshCw, Key, Server, Sliders, Terminal, Shield, Activity, RotateCcw, CheckCircle2, AlertCircle, GitMerge
 } from 'lucide-react';
 import { BentoGrid } from './components/BentoGrid';
-import { 
-  ModelSelectorModal, 
-  KeysManagerModal, 
-  SettingsModal, 
+import {
+  ModelSelectorModal,
+  KeysManagerModal,
+  SettingsModal,
   FullLogsModal,
   ComboEditorModal
 } from './components/Modals';
@@ -167,7 +167,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen lg:h-screen lg:max-h-screen lg:overflow-hidden flex flex-col justify-between py-2 px-3 sm:px-6 bg-[#eef2f7] dark:bg-[#0f1117] text-slate-800 dark:text-slate-100 transition-colors duration-300">
-      
+
       {toastMessage && (
         <div className="fixed top-4 right-4 z-50 flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-semibold shadow-2xl border border-white/10 animate-bounce">
           {toastMessage.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
@@ -281,6 +281,17 @@ export default function App() {
 
       <footer className="w-full max-w-7xl mx-auto px-3 py-1 flex items-center justify-between text-[10px] text-slate-500 border-t border-black/5 dark:border-white/5 shrink-0">
         <div>NIM Router v1.0.0 — OpenAI Base URL: <code className="text-[#ff6b35] dark:text-[#ff8c42]">http://localhost:11435/v1</code></div>
+        <div className="flex items-center gap-1">
+          <span>Providers Icons by</span>
+          <a
+            href="https://svgl.app/"
+            target="_blank"
+            rel="noreferrer"
+            className="text-slate-400 hover:text-[#00d2ff] transition underline decoration-slate-500/40 underline-offset-2"
+          >
+            svgl.app
+          </a>
+        </div>
       </footer>
 
       {activeModal === 'models' && (

@@ -28,6 +28,7 @@ from nim_router.logger import logger
 from nim_router.schemas import ChatCompletionRequest
 from nim_router.catalog import is_banned_model, load_fallback_models
 from nim_router.classifier import (
+    is_tool_model,
     is_vision_model,
     is_coding_model,
     is_reasoning_model,
@@ -433,7 +434,9 @@ class ModelRouter:
 
         req_lower = requested_model.lower()
         category_target = None
-        if req_lower in ("nim-coding", "coding", "code"):
+        if req_lower in ("nim-tools", "tools", "tool"):
+            category_target = "tools"
+        elif req_lower in ("nim-coding", "coding", "code"):
             category_target = "coding"
         elif req_lower in ("nim-reasoning", "reasoning", "reason"):
             category_target = "reasoning"
@@ -454,6 +457,7 @@ class ModelRouter:
             candidate_pool = [m.get("id") for m in self.models if m.get("id")]
 
         is_vision = self._is_vision_request(request)
+        has_tools = bool(request.tools or getattr(request, "functions", None))
 
         if is_vision:
             vision_capable = [mid for mid in candidate_pool if self._is_vision_model(mid)]
@@ -465,8 +469,20 @@ class ModelRouter:
                 candidate_pool = vision_capable + other_candidates
                 logger.info(f"Vision payload detected: overriding target to {len(vision_capable)} vision-capable models first.")
             target_model = "nim-auto"
+        elif has_tools and not category_target and (not requested_model or requested_model.lower() in ("nim-auto", "nim_auto", "auto")):
+            tool_capable = [mid for mid in candidate_pool if is_tool_model(mid)]
+            if not tool_capable:
+                all_ids = [m.get("id") for m in self.models if m.get("id")]
+                tool_capable = [mid for mid in all_ids if is_tool_model(mid)]
+            if tool_capable:
+                other_candidates = [mid for mid in candidate_pool if mid not in tool_capable]
+                candidate_pool = tool_capable + other_candidates
+                logger.info(f"Tool payload detected: prioritizing {len(tool_capable)} tool-capable models first.")
+            target_model = "nim-auto"
         elif category_target:
-            if category_target == "coding":
+            if category_target == "tools":
+                cat_filtered = [mid for mid in candidate_pool if is_tool_model(mid)]
+            elif category_target == "coding":
                 cat_filtered = [mid for mid in candidate_pool if is_coding_model(mid)]
             elif category_target == "reasoning":
                 cat_filtered = [mid for mid in candidate_pool if is_reasoning_model(mid)]

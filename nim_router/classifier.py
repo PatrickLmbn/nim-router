@@ -13,6 +13,17 @@ CODING_KEYWORDS = (
     "north-mini-code",
 )
 
+CODING_FRONTIER_MODELS = (
+    "llama-3.3-70b",
+    "llama3.3-70b",
+    "nemotron-3-super-120b",
+    "nemotron-4-340b",
+    "qwen-2.5-72b",
+    "qwen2.5-72b",
+    "gpt-oss-120b",
+    "claude-3-5-sonnet",
+)
+
 REASONING_KEYWORDS = (
     "reasoning",
     "r1",
@@ -54,21 +65,67 @@ CHAT_KEYWORDS = (
     "hunyuan",
 )
 
-def is_vision_model(model_id: str) -> bool:
+TOOL_KEYWORDS = (
+    "llama-3.1",
+    "llama-3.2",
+    "llama-3.3",
+    "llama3.1",
+    "llama3.2",
+    "llama3.3",
+    "qwen-2.5",
+    "qwen2.5",
+    "mistral-large",
+    "mistral-small",
+    "mixtral-8x7b",
+    "command-r",
+    "nemotron-4",
+    "nemotron-3-super",
+    "gpt-4",
+    "gpt-3.5",
+    "claude-3",
+    "gemini",
+    "deepseek-v3",
+    "deepseek-chat",
+    "deepseek-coder",
+    "hermes",
+    "function",
+    "tool",
+)
+
+def is_tool_model(model_id: str, provider: str = "", raw_meta: dict | None = None) -> bool:
     if is_banned_model(model_id):
         return False
+    if raw_meta and isinstance(raw_meta, dict):
+        params = raw_meta.get("supported_parameters") or []
+        if "tools" in params or "tool_choice" in params:
+            return True
+    mid = model_id.lower().strip()
+    return any(k in mid for k in TOOL_KEYWORDS)
+
+def is_vision_model(model_id: str, raw_meta: dict | None = None) -> bool:
+    if is_banned_model(model_id):
+        return False
+    if raw_meta and isinstance(raw_meta, dict):
+        arch = raw_meta.get("architecture") or {}
+        modality = str(arch.get("modality", "")).lower()
+        if "image" in modality or "multimodal" in modality:
+            return True
     mid = model_id.lower().strip()
     return any(k in mid for k in VISION_KEYWORDS)
 
-def is_coding_model(model_id: str) -> bool:
+def is_coding_model(model_id: str, raw_meta: dict | None = None) -> bool:
     if is_banned_model(model_id):
         return False
     mid = model_id.lower().strip()
-    return any(k in mid for k in CODING_KEYWORDS)
+    return any(k in mid for k in CODING_KEYWORDS) or any(k in mid for k in CODING_FRONTIER_MODELS)
 
-def is_reasoning_model(model_id: str) -> bool:
+def is_reasoning_model(model_id: str, raw_meta: dict | None = None) -> bool:
     if is_banned_model(model_id):
         return False
+    if raw_meta and isinstance(raw_meta, dict):
+        params = raw_meta.get("supported_parameters") or []
+        if "reasoning" in params:
+            return True
     mid = model_id.lower().strip()
     return any(k in mid for k in REASONING_KEYWORDS)
 
@@ -83,6 +140,20 @@ def is_chat_model(model_id: str) -> bool:
         return False
     mid = model_id.lower().strip()
     return any(k in mid for k in CHAT_KEYWORDS)
+
+def get_model_capabilities(model_id: str, provider: str = "", raw_meta: dict | None = None) -> dict[str, bool]:
+    return {
+        "tools": is_tool_model(model_id, provider, raw_meta),
+        "coding": is_coding_model(model_id, raw_meta),
+        "reasoning": is_reasoning_model(model_id, raw_meta),
+        "vision": is_vision_model(model_id, raw_meta),
+        "chat": is_chat_model(model_id),
+        "moe": is_moe_model(model_id),
+    }
+
+def get_model_tasks(model_id: str, provider: str = "", raw_meta: dict | None = None) -> list[str]:
+    caps = get_model_capabilities(model_id, provider, raw_meta)
+    return [task for task, enabled in caps.items() if enabled]
 
 def is_vision_request(request: ChatCompletionRequest) -> bool:
     for msg in request.messages:
@@ -125,7 +196,6 @@ def estimate_token_count(request: ChatCompletionRequest) -> int:
                     total_words += len(item.get("text", "").split())
     return int(total_words / 0.75)
 
-
 def extract_model_family(model_id: str) -> str:
     mid = (model_id or "").lower().strip()
     for prefix in ("[nvidia] ", "[openrouter] ", "[opencode] ", "[groq] ", "[cerebras] ", "[bai] ", "[category] "):
@@ -160,7 +230,6 @@ def extract_model_family(model_id: str) -> str:
         return "jamba"
     return "unknown"
 
-
 def get_same_family_models(target_model_id: str, candidates: list[str]) -> list[str]:
     target_family = extract_model_family(target_model_id)
     if not target_family or target_family == "unknown":
@@ -169,4 +238,3 @@ def get_same_family_models(target_model_id: str, candidates: list[str]) -> list[
         m for m in candidates
         if m != target_model_id and extract_model_family(m) == target_family
     ]
-

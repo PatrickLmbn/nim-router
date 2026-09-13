@@ -1,15 +1,15 @@
 import React, { useState } from 'react';
 import { 
-  X, Check, Search, Key, Sliders, Terminal, Shield, RefreshCw, Plus, Trash2, Zap, Server, Activity, Copy, CheckCircle, Eye, EyeOff, Edit2
+  X, Check, Search, Key, Sliders, Terminal, Shield, RefreshCw, Plus, Trash2, Zap, Server, Activity, Copy, CheckCircle, Eye, EyeOff, Edit2, Wrench, Code, Brain, MessageSquare, Layers, Sparkles
 } from 'lucide-react';
 import { ModelIcon, ProviderIcon, resolveProvider } from './ModelIcon';
 
 export { ModelIcon, ProviderIcon, resolveProvider };
 
-export function ModalWrapper({ title, icon: Icon, onClose, children }) {
+export function ModalWrapper({ title, icon: Icon, onClose, children, maxWidth = "max-w-2xl" }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-      <div className="relative w-full max-w-2xl max-h-[90vh] flex flex-col bg-white dark:bg-[#151922] text-slate-800 dark:text-slate-100 rounded-3xl border border-black/10 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark overflow-hidden transition-colors duration-300">
+      <div className={`relative w-full ${maxWidth} max-h-[90vh] flex flex-col bg-white dark:bg-[#151922] text-slate-800 dark:text-slate-100 rounded-3xl border border-black/10 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark overflow-hidden transition-colors duration-300`}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-black/5 dark:border-white/5">
           <div className="flex items-center gap-3">
             {Icon && <div className="p-2 rounded-xl bg-black/5 dark:bg-white/5 text-[#ff6b35]"><Icon className="w-5 h-5" /></div>}
@@ -594,16 +594,67 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
   const [models, setModels] = useState(combo?.models || []);
   const [search, setSearch] = useState('');
   const [focused, setFocused] = useState(false);
+  const [taskFilter, setTaskFilter] = useState('ALL');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   const slugify = (s) => s.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
 
+  const matchesTask = (m, task) => {
+    if (!task || task === 'ALL') return true;
+    if (m.tasks && Array.isArray(m.tasks)) {
+      return m.tasks.includes(task);
+    }
+    if (m.capabilities && typeof m.capabilities === 'object') {
+      return !!m.capabilities[task];
+    }
+    const mid = (m.id || '').toLowerCase();
+    if (task === 'tools') {
+      return ['llama-3.1', 'llama-3.2', 'llama-3.3', 'llama3.1', 'llama3.2', 'llama3.3', 'qwen-2.5', 'qwen2.5', 'mistral-large', 'mistral-small', 'mixtral-8x7b', 'command-r', 'nemotron-4', 'nemotron-3-super', 'gpt-4', 'claude-3', 'deepseek-v3', 'hermes'].some(k => mid.includes(k));
+    }
+    if (task === 'coding') {
+      return ['code', 'coder', 'codestral', 'starcoder', 'deepseek-coder', 'qwen-coder', 'dev', 'llama-3.3-70b', 'nemotron-3-super-120b', 'qwen-2.5-72b', 'gpt-oss-120b'].some(k => mid.includes(k));
+    }
+    if (task === 'reasoning') {
+      return ['reasoning', 'r1', 'qwq', 'think', 'o1', 'o3', 'reasoner', 'deepseek-r1'].some(k => mid.includes(k));
+    }
+    if (task === 'vision') {
+      return ['vision', '-vl', 'vl-', '_vl', 'omni', 'paligemma', 'pixtral', 'llava'].some(k => mid.includes(k));
+    }
+    if (task === 'chat') {
+      return ['instruct', 'chat', 'gemma', 'llama', 'mistral', 'qwen', 'glm', 'hy3'].some(k => mid.includes(k));
+    }
+    if (task === 'moe') {
+      return ['moe', 'mixtral', 'dbrx', 'a3b', 'a12b', 'a55b', 'deepseek-v3'].some(k => mid.includes(k));
+    }
+    return true;
+  };
+
+  const TASK_FILTERS = [
+    { id: 'ALL', label: 'All', icon: Sparkles },
+    { id: 'tools', label: 'Tools', icon: Wrench },
+    { id: 'coding', label: 'Coding', icon: Code },
+    { id: 'reasoning', label: 'Reasoning', icon: Brain },
+    { id: 'vision', label: 'Vision', icon: Eye },
+    { id: 'chat', label: 'Chat', icon: MessageSquare },
+    { id: 'moe', label: 'MoE', icon: Layers },
+  ];
+
+  const getTaskCount = (task) => {
+    return allModels.filter(m => matchesTask(m, task) && !models.includes(m.id)).length;
+  };
+
   const filtered = allModels.filter(m =>
-    m.id.toLowerCase().includes(search.toLowerCase()) && !models.includes(m.id)
+    matchesTask(m, taskFilter) &&
+    m.id.toLowerCase().includes(search.toLowerCase()) &&
+    !models.includes(m.id)
   );
 
-  const addModel = (id) => { setModels(prev => [...prev, id]); setSearch(''); setFocused(false); };
+  const addModel = (id) => {
+    setModels(prev => [...prev, id]);
+    setSearch('');
+  };
+
   const removeModel = (id) => setModels(prev => prev.filter(m => m !== id));
   const moveUp = (i) => { if (i === 0) return; const a = [...models]; [a[i-1], a[i]] = [a[i], a[i-1]]; setModels(a); };
 
@@ -689,7 +740,7 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
         </div>
       </div>
 
-      <div className="space-y-1.5">
+      <div className="space-y-2">
         <div className="flex items-center justify-between">
           <label className="text-[10px] uppercase font-semibold text-slate-500 dark:text-slate-400 tracking-wider">
             Models <span className="normal-case text-slate-400">({models.length}){strategy === 'fallback' ? ' — first = primary' : ''}</span>
@@ -746,6 +797,37 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
           </div>
         )}
 
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+          {TASK_FILTERS.map(tf => {
+            const Icon = tf.icon;
+            const count = getTaskCount(tf.id);
+            const active = taskFilter === tf.id;
+            return (
+              <button
+                key={tf.id}
+                type="button"
+                onClick={() => {
+                  setTaskFilter(tf.id);
+                  setFocused(true);
+                }}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[10px] font-semibold border transition whitespace-nowrap shrink-0 ${
+                  active
+                    ? 'bg-[#00d2ff]/15 border-[#00d2ff]/60 text-[#00d2ff] shadow-[0_0_10px_rgba(0,210,255,0.2)]'
+                    : 'bg-slate-100 dark:bg-white/[0.04] border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:border-black/20 dark:hover:border-white/20'
+                }`}
+              >
+                {Icon && <Icon className="w-3 h-3" />}
+                <span>{tf.label}</span>
+                <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-mono ${
+                  active ? 'bg-[#00d2ff]/25 text-[#00d2ff]' : 'bg-black/5 dark:bg-white/5 text-slate-400'
+                }`}>
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
         <div className="relative">
           <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-black/40 border border-black/10 dark:border-white/10">
             <Search className="w-3 h-3 text-slate-400 shrink-0" />
@@ -754,35 +836,61 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
               value={search}
               onChange={e => setSearch(e.target.value)}
               onFocus={() => setFocused(true)}
-              onBlur={() => setTimeout(() => setFocused(false), 150)}
-              placeholder="Search and add a model..."
+              onBlur={() => setTimeout(() => setFocused(false), 200)}
+              placeholder={taskFilter === 'ALL' ? 'Search and add a model...' : `Filter ${taskFilter} models...`}
               className="flex-1 bg-transparent text-[11px] font-mono text-slate-800 dark:text-slate-200 focus:outline-none placeholder:text-slate-400"
             />
+            {search && (
+              <button type="button" onClick={() => setSearch('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-white">
+                <X className="w-3 h-3" />
+              </button>
+            )}
           </div>
-          {focused && filtered.length > 0 && (
-            <div className="absolute left-0 right-0 z-20 mt-1 rounded-xl bg-white dark:bg-[#0f1117] border border-black/10 dark:border-white/10 shadow-xl max-h-44 overflow-y-auto">
-              {filtered.map(m => (
-                <button key={m.id} onMouseDown={() => addModel(m.id)}
-                  className="w-full flex items-center justify-between px-3 py-1.5 text-[10px] font-mono text-slate-700 dark:text-slate-300 hover:bg-[#00d2ff]/10 hover:text-[#00d2ff] transition group"
-                >
-                  <div className="flex items-center gap-1.5 truncate">
-                    <ModelIcon model={m.id} provider={m.provider} className="h-3 w-auto max-w-[38px] max-h-3 shrink-0" />
-                    <span className="truncate">{m.id}</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0 ml-2 font-sans">
-                    {!m.healthy && (
-                      <span className="text-[9px] font-mono text-rose-400 font-bold bg-rose-500/15 px-1 py-0.2 rounded">! Unavailable</span>
-                    )}
-                    {m.healthy && m.latency > maxLatencyThreshold && (
-                      <span className="text-[9px] font-mono text-amber-400 font-bold bg-amber-500/15 px-1 py-0.2 rounded">? {m.latency}s</span>
-                    )}
-                    {m.healthy && m.latency <= maxLatencyThreshold && (
-                      <span className="text-[9px] font-mono text-emerald-400/80">{m.latency}s</span>
-                    )}
-                    <span className="text-[9px] text-slate-400 dark:text-slate-500 group-hover:text-[#00d2ff]/60">{m.provider}</span>
-                  </div>
-                </button>
-              ))}
+          {(focused || search.length > 0 || taskFilter !== 'ALL') && (
+            <div className="absolute left-0 right-0 z-20 mt-1 rounded-xl bg-white dark:bg-[#0f1117] border border-black/10 dark:border-white/10 shadow-xl max-h-60 sm:max-h-64 overflow-y-auto divide-y divide-black/5 dark:divide-white/5">
+              {filtered.length === 0 ? (
+                <div className="p-3 text-center text-xs text-slate-400 font-mono">
+                  No models found matching criteria.
+                </div>
+              ) : (
+                filtered.map(m => (
+                  <button key={m.id} onMouseDown={() => addModel(m.id)}
+                    className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-mono text-slate-700 dark:text-slate-300 hover:bg-[#00d2ff]/10 hover:text-[#00d2ff] transition group text-left"
+                  >
+                    <div className="flex items-center gap-1.5 truncate min-w-0">
+                      <ModelIcon model={m.id} provider={m.provider} className="h-3 w-auto max-w-[38px] max-h-3 shrink-0" />
+                      <span className="truncate">{m.id}</span>
+                      <div className="flex items-center gap-1 shrink-0 ml-1">
+                        {matchesTask(m, 'tools') && (
+                          <span className="text-[7.5px] font-bold px-1 py-0.2 rounded bg-sky-500/15 text-sky-400 border border-sky-500/30">TOOLS</span>
+                        )}
+                        {matchesTask(m, 'coding') && (
+                          <span className="text-[7.5px] font-bold px-1 py-0.2 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">CODE</span>
+                        )}
+                        {matchesTask(m, 'reasoning') && (
+                          <span className="text-[7.5px] font-bold px-1 py-0.2 rounded bg-purple-500/15 text-purple-400 border border-purple-500/30">REASON</span>
+                        )}
+                        {matchesTask(m, 'vision') && (
+                          <span className="text-[7.5px] font-bold px-1 py-0.2 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30">VISION</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0 ml-2 font-sans">
+                      {!m.healthy && (
+                        <span className="text-[9px] font-mono text-rose-400 font-bold bg-rose-500/15 px-1 py-0.2 rounded">! Unavailable</span>
+                      )}
+                      {m.healthy && m.latency > maxLatencyThreshold && (
+                        <span className="text-[9px] font-mono text-amber-400 font-bold bg-amber-500/15 px-1 py-0.2 rounded">? {m.latency}s</span>
+                      )}
+                      {m.healthy && m.latency <= maxLatencyThreshold && (
+                        <span className="text-[9px] font-mono text-emerald-400/80">{m.latency}s</span>
+                      )}
+                      <span className="text-[9px] text-slate-400 dark:text-slate-500 group-hover:text-[#00d2ff]/60">{m.provider}</span>
+                      <span className="text-[9px] font-bold text-[#00d2ff] opacity-0 group-hover:opacity-100 transition ml-1 shrink-0">+ Add</span>
+                    </div>
+                  </button>
+                ))
+              )}
             </div>
           )}
         </div>
@@ -833,6 +941,7 @@ export function ComboEditorModal({ combo, isNew, stats, onClose, onCombosUpdated
       title={isNew ? "Create Routing Combo" : `Combo Settings: ${combo?.name || ''}`} 
       icon={isNew ? Plus : Sliders} 
       onClose={onClose}
+      maxWidth="max-w-3xl sm:max-w-[820px]"
     >
       <ComboEditor 
         combo={combo} 
@@ -880,7 +989,7 @@ export function CombosModal({ stats, onClose, onCombosUpdated }) {
 
   if (editing === 'new') {
     return (
-      <ModalWrapper title="Create Combo" icon={Plus} onClose={onClose}>
+      <ModalWrapper title="Create Combo" icon={Plus} onClose={onClose} maxWidth="max-w-3xl sm:max-w-[820px]">
         <ComboEditor isNew allModels={allModels} maxLatencyThreshold={maxLatencyThreshold} onSave={async () => { await refresh(); setEditing(null); }} onCancel={() => setEditing(null)} />
       </ModalWrapper>
     );
@@ -888,14 +997,14 @@ export function CombosModal({ stats, onClose, onCombosUpdated }) {
 
   if (editing) {
     return (
-      <ModalWrapper title={`Edit: ${editing.name}`} icon={Sliders} onClose={onClose}>
+      <ModalWrapper title={`Edit: ${editing.name}`} icon={Sliders} onClose={onClose} maxWidth="max-w-3xl sm:max-w-[820px]">
         <ComboEditor combo={editing} allModels={allModels} maxLatencyThreshold={maxLatencyThreshold} onSave={async () => { await refresh(); setEditing(null); }} onCancel={() => setEditing(null)} />
       </ModalWrapper>
     );
   }
 
   return (
-    <ModalWrapper title="Routing Combos" icon={Activity} onClose={onClose}>
+    <ModalWrapper title="Routing Combos" icon={Activity} onClose={onClose} maxWidth="max-w-3xl sm:max-w-[820px]">
       <p className="text-xs text-slate-500 dark:text-slate-400">
         Create named routing groups. Use the combo name as the <code className="text-[#00d2ff]">model</code> field in your API calls. All combos fall back to <span className="text-[#00f5a0] font-semibold">nim-auto</span> if all models fail.
       </p>

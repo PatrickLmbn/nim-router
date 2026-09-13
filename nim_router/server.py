@@ -5,7 +5,13 @@ import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from nim_router.classifier import is_vision_model, is_moe_model
+from nim_router.classifier import (
+    is_vision_model,
+    is_moe_model,
+    is_tool_model,
+    get_model_capabilities,
+    get_model_tasks,
+)
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse, FileResponse
@@ -173,6 +179,8 @@ def create_app() -> FastAPI:
                 "healthy": is_healthy and not cooling,
                 "is_primary": (mid == primary_model),
                 "in_flight": _router_instance._in_flight.get(mid, 0),
+                "capabilities": get_model_capabilities(mid, prov, m),
+                "tasks": get_model_tasks(mid, prov, m),
             })
 
         max_lat_threshold = settings.get("max_latency_threshold", 3.0)
@@ -504,12 +512,13 @@ def create_app() -> FastAPI:
     @app.get("/v1/models")
     @app.get("/api/v1/models")
     @app.get("/api/models")
-    async def list_models():
+    async def list_models(task: Optional[str] = None):
         if not _router_instance:
             return {"error": "Router not initialized"}
 
         categories = [
             ("nim-auto", "nim-router"),
+            ("nim-tools", "nim-router"),
             ("nim-coding", "nim-router"),
             ("nim-reasoning", "nim-router"),
             ("nim-vision", "nim-router"),
@@ -530,11 +539,17 @@ def create_app() -> FastAPI:
                 added_ids.add(cname)
                 data.append({"id": cname, "object": "model", "owned_by": "nim-router-combo"})
 
+        target_task = (task or "").strip().lower()
+
         for m in _router_instance.models:
             mid = m.get("id")
             if mid and mid not in added_ids and " " not in mid:
-                added_ids.add(mid)
                 prov = _router_instance._get_provider_name(mid)
+                if target_task:
+                    caps = get_model_capabilities(mid, prov, m)
+                    if not caps.get(target_task, False):
+                        continue
+                added_ids.add(mid)
                 data.append({"id": mid, "object": "model", "owned_by": prov.lower()})
 
         return {"object": "list", "data": data}
@@ -558,6 +573,7 @@ def create_app() -> FastAPI:
 
         categories = [
             "nim-auto",
+            "nim-tools",
             "nim-coding",
             "nim-reasoning",
             "nim-vision",
