@@ -280,7 +280,6 @@ export default function App() {
       </main>
 
       <footer className="w-full max-w-7xl mx-auto px-3 py-1 flex items-center justify-between text-[10px] text-slate-500 border-t border-black/5 dark:border-white/5 shrink-0">
-        <div>NIM Router v1.0.0 — OpenAI Base URL: <code className="text-[#ff6b35] dark:text-[#ff8c42]">http://localhost:11435/v1</code></div>
         <div className="flex items-center gap-1">
           <span>Icons & Logos by</span>
           <a
