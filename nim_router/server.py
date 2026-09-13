@@ -14,7 +14,7 @@ from nim_router.classifier import (
 )
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from nim_router.config import (
@@ -670,18 +670,45 @@ def create_app() -> FastAPI:
 
     base_dir = os.path.dirname(os.path.dirname(__file__))
     dist_dir = os.path.join(base_dir, "frontend", "dist")
+    assets_dir = os.path.join(dist_dir, "assets")
 
-    if os.path.exists(dist_dir):
-        app.mount("/assets", StaticFiles(directory=os.path.join(dist_dir, "assets")), name="assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
-        @app.get("/")
-        @app.get("/ui")
-        @app.get("/dashboard")
-        async def serve_index():
-            index_path = os.path.join(dist_dir, "index.html")
-            if os.path.exists(index_path):
-                return FileResponse(index_path)
-            return {"message": "Frontend build not found. Please build frontend with 'npm run build'."}
+    @app.get("/")
+    @app.get("/ui")
+    @app.get("/dashboard")
+    async def serve_index():
+        index_path = os.path.join(dist_dir, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+        fallback_html = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>NIM Router - Dashboard Build Required</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1117; color: #e2e8f0; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; }
+    .card { background: #1a1f2c; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 32px; max-width: 540px; text-align: center; box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
+    h1 { color: #00d2ff; font-size: 22px; margin-bottom: 12px; }
+    p { color: #94a3b8; font-size: 14px; line-height: 1.6; margin-bottom: 24px; }
+    code { background: rgba(0,210,255,0.1); color: #00f5a0; padding: 3px 8px; border-radius: 6px; font-family: monospace; font-size: 13px; }
+    .box { background: #0b0d13; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 14px; text-align: left; font-family: monospace; font-size: 13px; color: #38bdf8; margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Web Dashboard Build Required</h1>
+    <p>The NIM Router gateway is running, but the frontend distribution assets were not found in <code>frontend/dist/</code>.</p>
+    <div class="box">
+      $ nim build<br>
+      $ cd frontend &amp;&amp; npm install &amp;&amp; npm run build
+    </div>
+    <p style="margin-bottom:0; font-size: 12px; color: #64748b;">Once built, reload this page to access the full web dashboard.</p>
+  </div>
+</body>
+</html>"""
+        return HTMLResponse(content=fallback_html, status_code=200)
 
     return app
 

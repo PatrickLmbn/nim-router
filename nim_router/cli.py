@@ -58,6 +58,7 @@ def show_help():
     print("  \033[1;32mstop\033[0m                   Stop background server process via PM2.")
     print("  \033[1;32mlogs, log\033[0m              Stream live nim server logs.")
     print("  \033[1;32mstrategy, mode\033[0m         Choose routing strategy (fallback or round_robin).")
+    print("  \033[1;32mbuild, ui\033[0m              Build frontend dashboard web UI assets.")
     print("  \033[1;32mhelp, -h, --help\033[0m       Show CLI help documentation and exit.\n")
     print("\033[1;33mDefault (no argument):\033[0m")
     print("  Starts the nim OpenAI-compatible proxy server (Port 11435).\n")
@@ -67,10 +68,42 @@ def show_help():
     print("  nim connect      Set primary provider credentials")
     print("  nim probe        Probe endpoints and refresh active model pool")
     print("  nim restart      Restart background server process")
+    print("  nim build        Build frontend web UI assets")
     print("  nim stop         Stop background server process")
     print("  nim logs         View live background server logs")
     print("  nim strategy     Choose routing strategy (fallback or round_robin)")
     print("  nim --help       Show help documentation\n")
+
+def build_frontend(force: bool = False) -> bool:
+    base_dir = os.path.dirname(os.path.dirname(__file__))
+    frontend_dir = os.path.join(base_dir, "frontend")
+    dist_index = os.path.join(frontend_dir, "dist", "index.html")
+    if not force and os.path.exists(dist_index):
+        return True
+    npm_bin = shutil.which("npm") or shutil.which("npm.cmd")
+    if not npm_bin:
+        if not os.path.exists(dist_index):
+            print("\033[1;33m[!] Node.js/npm not found. Web UI assets cannot be built.\033[0m")
+        return False
+    node_modules_dir = os.path.join(frontend_dir, "node_modules")
+    if not os.path.exists(node_modules_dir):
+        print("\033[1;34m[*] Installing frontend dependencies via npm...\033[0m")
+        res = subprocess.run([npm_bin, "install"], cwd=frontend_dir)
+        if res.returncode != 0:
+            print("\033[91m[!] npm install failed.\033[0m")
+            return False
+    print("\033[1;34m[*] Building frontend web UI assets (Vite)...\033[0m")
+    res = subprocess.run([npm_bin, "run", "build"], cwd=frontend_dir)
+    if res.returncode == 0:
+        print("\033[1;32m[✓] Web UI assets built successfully!\033[0m")
+        return True
+    else:
+        print("\033[91m[!] Failed to build web UI assets.\033[0m")
+        return False
+
+def build_frontend_cli():
+    print(get_rainbow_banner())
+    build_frontend(force=True)
 
 def show_logs():
     print(get_rainbow_banner())
@@ -95,6 +128,7 @@ def start_server():
         os.chdir(base_dir)
     except Exception:
         pass
+    build_frontend(force=False)
     pm2_bin = shutil.which("pm2")
     if pm2_bin:
         res = subprocess.run([pm2_bin, "startOrRestart", "ecosystem.config.js", "--update-env"], cwd=base_dir)
@@ -116,6 +150,8 @@ def restart_server():
         os.chdir(base_dir)
     except Exception:
         pass
+    force_build = any(arg in sys.argv for arg in ("--build", "-b", "build"))
+    build_frontend(force=force_build)
     pm2_bin = shutil.which("pm2")
     if pm2_bin:
         res = subprocess.run([pm2_bin, "startOrRestart", "ecosystem.config.js", "--update-env"], cwd=base_dir)

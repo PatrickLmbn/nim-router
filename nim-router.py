@@ -38,6 +38,9 @@ if __name__ == "__main__":
             elif cmd in ("strategy", "mode"):
                 from nim_router.cli import select_routing_strategy
                 select_routing_strategy()
+            elif cmd in ("build", "ui", "ui-build"):
+                from nim_router.cli import build_frontend_cli
+                build_frontend_cli()
             elif cmd in ("help", "-h", "--help"):
                 from nim_router.cli import show_help
                 show_help()

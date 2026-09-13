@@ -186,19 +186,25 @@ nim probe
 ### **5. Restart Server (`nim restart`)**
 ```bash
 nim restart
+nim restart --build
 ```
 
-### **6. Stop Server (`nim stop`)**
+### **6. Build Web UI (`nim build`)**
+```bash
+nim build
+```
+
+### **7. Stop Server (`nim stop`)**
 ```bash
 nim stop
 ```
 
-### **7. Stream Server Logs (`nim logs`)**
+### **8. Stream Server Logs (`nim logs`)**
 ```bash
 nim logs
 ```
 
-### **8. Command Help (`nim --help`)**
+### **9. Command Help (`nim --help`)**
 ```bash
 nim --help
 ```
