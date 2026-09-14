@@ -675,6 +675,17 @@ def create_app() -> FastAPI:
     if os.path.exists(assets_dir):
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
+    @app.get("/favicon.ico")
+    @app.get("/favicon.svg")
+    async def serve_favicon():
+        fav_path = os.path.join(dist_dir, "favicon.svg")
+        if os.path.exists(fav_path):
+            return FileResponse(fav_path, media_type="image/svg+xml")
+        fallback_fav = os.path.join(base_dir, "frontend", "icons", "nim-cube.svg")
+        if os.path.exists(fallback_fav):
+            return FileResponse(fallback_fav, media_type="image/svg+xml")
+        return Response(status_code=404)
+
     @app.get("/")
     @app.get("/ui")
     @app.get("/dashboard")

@@ -168,13 +168,13 @@ export function BentoGrid({
   };
 
   return (
-    <div className="w-full max-w-7xl mx-auto px-1 sm:px-2 h-full flex flex-col justify-center min-h-0">
-      <div className="rounded-3xl p-3 sm:p-4 bg-[#e8edf5] dark:bg-[#12151c]/95 border border-black/5 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark flex-1 flex flex-col min-h-0 max-h-[620px] justify-between transition-all duration-300">
+    <div className="w-full max-w-7xl mx-auto px-1 sm:px-2 lg:h-full flex flex-col lg:justify-center">
+      <div className="rounded-3xl p-2.5 sm:p-4 bg-[#e8edf5] dark:bg-[#12151c]/95 border border-black/5 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark flex flex-col lg:flex-1 lg:min-h-0 lg:max-h-[620px] lg:justify-between gap-3 sm:gap-3.5 lg:gap-0 transition-all duration-300">
         
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 lg:gap-4 items-stretch flex-1 min-h-0">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 lg:gap-4 items-stretch lg:flex-1 lg:min-h-0">
 
-          <div className="lg:col-span-5 flex flex-col min-h-0">
-            <div className="rounded-3xl p-3.5 sm:p-4 bg-gradient-to-b from-[#ffffff] to-[#e8edf5] dark:from-[#181d28] dark:to-[#121620] border border-black/5 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark flex-1 flex flex-col justify-start gap-2 sm:gap-2.5 relative overflow-hidden transition-colors duration-300 min-h-0">
+          <div className="lg:col-span-5 flex flex-col lg:min-h-0">
+            <div className="rounded-3xl p-3.5 sm:p-4 bg-gradient-to-b from-[#ffffff] to-[#e8edf5] dark:from-[#181d28] dark:to-[#121620] border border-black/5 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark flex flex-col justify-start gap-2.5 sm:gap-2.5 relative transition-colors duration-300 lg:flex-1 lg:min-h-0 lg:overflow-hidden">
               
               <div className="flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-2">
@@ -487,36 +487,38 @@ export function BentoGrid({
             </div>
           </div>
 
-          <div className="lg:col-span-7 flex flex-col gap-3.5 lg:gap-4 min-h-0">
+          <div className="lg:col-span-7 flex flex-col gap-3.5 lg:gap-4 lg:min-h-0">
 
-            <div className="rounded-3xl p-4 sm:p-5 bg-white dark:bg-[#171b24] border border-black/5 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark flex flex-col justify-between transition-colors duration-300 relative overflow-hidden group">
+            <div className="rounded-3xl p-3.5 sm:p-5 bg-white dark:bg-[#171b24] border border-black/5 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark flex flex-col justify-between transition-colors duration-300 relative group">
               <div>
-                <div className="mb-3 space-y-1.5">
-                  <div className="flex items-center justify-between gap-2.5 flex-wrap sm:flex-nowrap">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <div className="p-1.5 rounded-xl bg-[#00d2ff]/15 text-[#00d2ff] shadow-[0_0_10px_rgba(0,210,255,0.2)] shrink-0">
-                        <GitMerge className="w-4 h-4" />
+                <div className="mb-3 space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center justify-between sm:justify-start gap-2 min-w-0">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="p-1.5 rounded-xl bg-[#00d2ff]/15 text-[#00d2ff] shadow-[0_0_10px_rgba(0,210,255,0.2)] shrink-0">
+                          <GitMerge className="w-4 h-4" />
+                        </div>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <h3 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white tracking-tight shrink-0">
+                            Routing Combos
+                          </h3>
+                          {(stats?.combos?.length > 0) && (
+                            <span className="px-2 py-0.5 rounded-full bg-[#00d2ff]/15 text-[#00d2ff] text-[10px] font-bold shrink-0">
+                              {stats.combos.length} Active
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <h3 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white tracking-tight shrink-0">
-                          Routing Combos
-                        </h3>
-                        {(stats?.combos?.length > 0) && (
-                          <span className="px-2 py-0.5 rounded-full bg-[#00d2ff]/15 text-[#00d2ff] text-[10px] font-bold shrink-0">
-                            {stats.combos.length} Active
-                          </span>
-                        )}
-                        {stats?.combos?.some(c => c.has_unavailable) && (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-rose-500/15 border border-rose-500/30 text-rose-500 dark:text-rose-400 text-[9px] font-bold animate-pulse shrink-0">
-                            <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
-                            <span>Action needed</span>
-                          </span>
-                        )}
-                      </div>
+                      {stats?.combos?.some(c => c.has_unavailable) && (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-rose-500/15 border border-rose-500/30 text-rose-500 dark:text-rose-400 text-[9px] font-bold animate-pulse shrink-0">
+                          <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                          <span>Action needed</span>
+                        </span>
+                      )}
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0 ml-auto">
-                      <div className="relative w-32 sm:w-44">
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
+                      <div className="relative flex-1 sm:w-44 sm:flex-none">
                         <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-black/40 border border-black/10 dark:border-white/10 focus-within:border-[#00d2ff]/60 transition">
                           <Search className="w-3 h-3 text-slate-400 shrink-0" />
                           <input
@@ -556,7 +558,7 @@ export function BentoGrid({
                 </div>
 
                 {(!stats?.combos || stats.combos.length === 0) ? (
-                  <div className="h-[215px] sm:h-[235px] flex items-center justify-center">
+                  <div className="min-h-[160px] lg:h-[235px] flex items-center justify-center">
                     <button
                       onClick={() => onOpenComboEditor('new')}
                       className="w-full h-full rounded-2xl border-2 border-dashed border-black/10 dark:border-white/10 text-slate-400 hover:border-[#00d2ff]/40 hover:text-[#00d2ff] transition flex flex-col items-center justify-center gap-1 text-xs font-semibold p-4"
@@ -567,109 +569,138 @@ export function BentoGrid({
                     </button>
                   </div>
                 ) : filteredCombos.length === 0 ? (
-                  <div className="h-[215px] sm:h-[235px] flex items-center justify-center text-xs text-slate-400 font-mono">
+                  <div className="min-h-[160px] lg:h-[235px] flex items-center justify-center text-xs text-slate-400 font-mono">
                     No combos match "<span className="text-[#00d2ff]">{debouncedSearch}</span>"
                   </div>
                 ) : (
-                  <div className="space-y-2 h-[215px] sm:h-[235px] overflow-y-auto pr-1.5">
+                  <div className="space-y-2 max-h-[300px] lg:h-[235px] overflow-y-auto pr-1 sm:pr-1.5">
                     {filteredCombos.map(c => (
                       <div 
                         key={c.name} 
                         onClick={() => onOpenComboEditor(c)}
-                        className="flex items-center justify-between p-2.5 sm:p-3 rounded-2xl bg-slate-100 dark:bg-white/[0.03] hover:bg-slate-200/60 dark:hover:bg-white/[0.06] border border-black/5 dark:border-white/5 transition cursor-pointer group"
+                        className="flex flex-col p-2.5 sm:p-3 rounded-2xl bg-slate-100 dark:bg-white/[0.03] hover:bg-slate-200/60 dark:hover:bg-white/[0.06] border border-black/5 dark:border-white/5 transition cursor-pointer group gap-1.5"
                         title={`Click to edit settings for ${c.name}`}
                       >
-                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                          <span className={`text-[9px] font-bold px-2 py-0.5 rounded-md border shrink-0 ${
-                            c.strategy === 'round_robin'
-                              ? 'bg-[#00d2ff]/15 border-[#00d2ff]/30 text-[#00d2ff]'
-                              : 'bg-[#ff6b35]/15 border-[#ff6b35]/30 text-[#ff6b35]'
-                          }`}>
-                            {c.strategy === 'round_robin' ? '↻ Round Robin' : '⬇ Fallback'}
-                          </span>
+                        <div className="flex items-center justify-between gap-2 min-w-0 w-full">
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <span className={`text-[9px] font-bold px-2 py-0.5 rounded-md border shrink-0 ${
+                              c.strategy === 'round_robin'
+                                ? 'bg-[#00d2ff]/15 border-[#00d2ff]/30 text-[#00d2ff]'
+                                : 'bg-[#ff6b35]/15 border-[#ff6b35]/30 text-[#ff6b35]'
+                            }`}>
+                              {c.strategy === 'round_robin' ? '↻ Round Robin' : '⬇ Fallback'}
+                            </span>
 
-                          <code className="text-xs font-mono font-bold text-slate-900 dark:text-slate-100 group-hover:text-[#00d2ff] transition shrink-0">
-                            {c.name}
-                          </code>
+                            <code className="text-xs font-mono font-bold text-slate-900 dark:text-slate-100 group-hover:text-[#00d2ff] transition truncate">
+                              {c.name}
+                            </code>
 
-                          <div className="flex items-center gap-1 shrink-0">
-                            {c.has_unavailable && (
-                              <span
-                                className="inline-flex items-center justify-center w-4 h-4 rounded bg-rose-500/20 border border-rose-500/50 text-rose-500 dark:text-rose-400 font-black text-[11px] font-mono shadow-[0_0_8px_rgba(244,63,94,0.4)] animate-pulse cursor-help shrink-0"
-                                title={`⚠️ Unavailable model(s) after probing (${c.unavailable_models?.length}): ${c.unavailable_models?.join(', ')}`}
-                              >
-                                !
-                              </span>
-                            )}
-                            {c.has_high_latency && (
-                              <span
-                                className="inline-flex items-center justify-center w-4 h-4 rounded bg-amber-500/20 border border-amber-500/50 text-amber-500 dark:text-amber-400 font-black text-[11px] font-mono shadow-[0_0_8px_rgba(245,158,11,0.35)] cursor-help shrink-0"
-                                title={`⏱️ High latency model(s) >${stats?.max_latency_threshold || 3.0}s (${c.high_latency_models?.length}): ${c.high_latency_models?.map(m => `${m.id} (${m.latency}s)`).join(', ')}`}
-                              >
-                                ?
-                              </span>
-                            )}
+                            <div className="flex items-center gap-1 shrink-0">
+                              {c.has_unavailable && (
+                                <span
+                                  className="inline-flex items-center justify-center w-4 h-4 rounded bg-rose-500/20 border border-rose-500/50 text-rose-500 dark:text-rose-400 font-black text-[11px] font-mono shadow-[0_0_8px_rgba(244,63,94,0.4)] animate-pulse cursor-help shrink-0"
+                                  title={`⚠️ Unavailable model(s) after probing (${c.unavailable_models?.length}): ${c.unavailable_models?.join(', ')}`}
+                                >
+                                  !
+                                </span>
+                              )}
+                              {c.has_high_latency && (
+                                <span
+                                  className="inline-flex items-center justify-center w-4 h-4 rounded bg-amber-500/20 border border-amber-500/50 text-amber-500 dark:text-amber-400 font-black text-[11px] font-mono shadow-[0_0_8px_rgba(245,158,11,0.35)] cursor-help shrink-0"
+                                  title={`⏱️ High latency model(s) >${stats?.max_latency_threshold || 3.0}s (${c.high_latency_models?.length}): ${c.high_latency_models?.map(m => `${m.id} (${m.latency}s)`).join(', ')}`}
+                                >
+                                  ?
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="hidden sm:flex items-center gap-1 overflow-hidden flex-1">
+                              {c.models.slice(0, 3).map((m, i) => {
+                                const isUnavail = c.unavailable_models?.includes(m);
+                                const isHighLat = c.high_latency_models?.some(h => h.id === m);
+                                return (
+                                  <span
+                                    key={m}
+                                    className={`inline-flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded truncate max-w-[130px] ${
+                                      isUnavail
+                                        ? 'bg-rose-500/15 border border-rose-500/30 text-rose-400 font-semibold'
+                                        : isHighLat
+                                        ? 'bg-amber-500/15 border border-amber-500/30 text-amber-400 font-semibold'
+                                        : i === 0 && c.strategy === 'fallback'
+                                        ? 'bg-[#ff6b35]/15 text-[#ff6b35]'
+                                        : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-slate-400'
+                                    }`}
+                                    title={m}
+                                  >
+                                    <ModelIcon model={m} className="h-2.5 w-auto max-w-[28px] max-h-2.5 shrink-0" />
+                                    <span className="truncate">{m.split('/').pop()}</span>
+                                  </span>
+                                );
+                              })}
+                              {c.models.length > 3 && (
+                                <span className="text-[9px] text-slate-400 shrink-0 font-mono">
+                                  +{c.models.length - 3} more
+                                </span>
+                              )}
+                            </div>
                           </div>
 
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 font-mono">
+                              {c.models.length} <span className="hidden sm:inline">models</span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (onDeleteCombo) onDeleteCombo(c.name);
+                              }}
+                              className="p-1 rounded-lg hover:bg-rose-500/15 text-slate-400 hover:text-rose-500 transition neu-button"
+                              title={`Delete combo "${c.name}"`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onOpenComboEditor(c);
+                              }}
+                              className="p-1 rounded-lg hover:bg-[#00d2ff]/15 text-slate-400 hover:text-[#00d2ff] transition neu-button"
+                              title="Open combo settings"
+                            >
+                              <ArrowUpRight className="w-3.5 h-3.5 group-hover:text-[#00d2ff] transition" />
+                            </button>
+                          </div>
+                        </div>
 
-                          <div className="hidden sm:flex items-center gap-1 overflow-hidden flex-1">
-                            {c.models.slice(0, 3).map((m, i) => {
+                        {/* Mobile model preview chips */}
+                        {c.models && c.models.length > 0 && (
+                          <div className="flex sm:hidden items-center gap-1 overflow-x-auto scrollbar-none w-full pt-1 border-t border-black/5 dark:border-white/5">
+                            {c.models.map((m, idx) => {
                               const isUnavail = c.unavailable_models?.includes(m);
                               const isHighLat = c.high_latency_models?.some(h => h.id === m);
                               return (
                                 <span
                                   key={m}
-                                  className={`inline-flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded truncate max-w-[130px] ${
+                                  className={`inline-flex items-center gap-1 text-[8.5px] font-mono px-1.5 py-0.5 rounded shrink-0 ${
                                     isUnavail
                                       ? 'bg-rose-500/15 border border-rose-500/30 text-rose-400 font-semibold'
                                       : isHighLat
                                       ? 'bg-amber-500/15 border border-amber-500/30 text-amber-400 font-semibold'
-                                      : i === 0 && c.strategy === 'fallback'
+                                      : idx === 0 && c.strategy === 'fallback'
                                       ? 'bg-[#ff6b35]/15 text-[#ff6b35]'
-                                      : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-slate-400'
+                                      : 'bg-black/5 dark:bg-white/10 text-slate-600 dark:text-slate-400'
                                   }`}
                                   title={m}
                                 >
-                                  <ModelIcon model={m} className="h-2.5 w-auto max-w-[28px] max-h-2.5 shrink-0" />
-                                  <span className="truncate">{m.split('/').pop()}</span>
+                                  <ModelIcon model={m} className="h-2.5 w-auto max-w-[20px] max-h-2.5 shrink-0" />
+                                  <span className="truncate max-w-[120px]">{m.split('/').pop()}</span>
                                 </span>
                               );
                             })}
-                            {c.models.length > 3 && (
-                              <span className="text-[9px] text-slate-400 shrink-0 font-mono">
-                                +{c.models.length - 3} more
-                              </span>
-                            )}
                           </div>
-                        </div>
-
-                        <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                          <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 font-mono mr-0.5">
-                            {c.models.length} models
-                          </span>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (onDeleteCombo) onDeleteCombo(c.name);
-                            }}
-                            className="p-1 rounded-lg hover:bg-rose-500/15 text-slate-400 hover:text-rose-500 transition neu-button"
-                            title={`Delete combo "${c.name}"`}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onOpenComboEditor(c);
-                            }}
-                            className="p-1 rounded-lg hover:bg-[#00d2ff]/15 text-slate-400 hover:text-[#00d2ff] transition neu-button"
-                            title="Open combo settings"
-                          >
-                            <ArrowUpRight className="w-3.5 h-3.5 group-hover:text-[#00d2ff] transition" />
-                          </button>
-                        </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -685,7 +716,7 @@ export function BentoGrid({
               </div>
             </div>
 
-            <div className="rounded-3xl p-4 sm:p-4.5 bg-white dark:bg-[#171b24] border border-black/5 dark:border-white/5 shadow-neu-light dark:shadow-neu-dark flex-1 flex flex-col min-h-[160px] transition-colors duration-300">
+            <div className="rounded-3xl p-3.5 sm:p-4.5 bg-white dark:bg-[#171b24] border border-black/5 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark flex flex-col min-h-[160px] lg:flex-1 transition-colors duration-300">
               <div className="flex items-center justify-between mb-2.5 shrink-0">
                 <div className="flex items-center gap-1.5">
                   <Terminal className="w-3.5 h-3.5 text-[#00d2ff]" />

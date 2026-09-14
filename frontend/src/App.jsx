@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Zap, Sun, Moon, RefreshCw, Key, Server, Sliders, Terminal, Shield, Activity, RotateCcw, CheckCircle2, AlertCircle, GitMerge
+  Sun, Moon, RefreshCw, Key, Server, Sliders, Terminal, Shield, Activity, RotateCcw, CheckCircle2, AlertCircle, GitMerge
 } from 'lucide-react';
+import nimCubeLogo from '../icons/nim-cube.svg';
 import { BentoGrid } from './components/BentoGrid';
 import {
   ModelSelectorModal,
@@ -166,7 +167,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen lg:h-screen lg:max-h-screen lg:overflow-hidden flex flex-col justify-between py-2 px-3 sm:px-6 bg-[#eef2f7] dark:bg-[#0f1117] text-slate-800 dark:text-slate-100 transition-colors duration-300">
+    <div className="min-h-screen lg:h-screen lg:max-h-screen lg:overflow-hidden flex flex-col justify-between py-2 px-2 sm:px-6 bg-[#eef2f7] dark:bg-[#0f1117] text-slate-800 dark:text-slate-100 transition-colors duration-300">
 
       {toastMessage && (
         <div className="fixed top-4 right-4 z-50 flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-semibold shadow-2xl border border-white/10 animate-bounce">
@@ -179,8 +180,8 @@ export default function App() {
 
       <header className="w-full max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 mb-1.5 px-2 shrink-0">
         <div className="flex items-center gap-2.5">
-          <div className="p-2 rounded-xl bg-[#ff6b35] text-white shadow-glow-orange flex items-center justify-center">
-            <Zap className="w-4 h-4 fill-white" />
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#da7756]/20 to-[#da7756]/5 border border-[#da7756]/30 shadow-[0_0_12px_rgba(218,119,86,0.25)] flex items-center justify-center p-1 shrink-0">
+            <img src={nimCubeLogo} alt="NIM Router" className="w-6 h-6 object-contain select-none" />
           </div>
           <div>
             <div className="flex items-center gap-2">
@@ -262,7 +263,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex-1 min-h-0 flex flex-col justify-center items-center w-full px-2 sm:px-4 lg:px-6 py-2">
+      <main className="flex-1 w-full flex flex-col lg:justify-center items-center px-1 sm:px-4 lg:px-6 py-1.5 sm:py-2 lg:min-h-0">
         <BentoGrid
           stats={stats}
           logs={logs}
