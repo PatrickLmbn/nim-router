@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
-  X, Check, Search, Key, Sliders, Terminal, Shield, RefreshCw, Plus, Trash2, Zap, Server, Activity, Copy, CheckCircle, Eye, EyeOff, Edit2, Wrench, Code, Brain, MessageSquare, Layers, Sparkles, Lock, KeyRound
+  X, Check, Search, Key, Sliders, Terminal, Shield, RefreshCw, Plus, Trash2, Zap, Server, Activity, Copy, CheckCircle, Eye, EyeOff, Edit2, Wrench, Code, Brain, MessageSquare, Layers, Sparkles, Lock, KeyRound, BarChart3, ArrowUpRight, TrendingUp, Clock, AlertCircle, PieChart
 } from 'lucide-react';
 import { ModelIcon, ProviderIcon, resolveProvider } from './ModelIcon';
 import { authFetch } from '../api';
@@ -1208,6 +1208,479 @@ export function CombosModal({ stats, onClose, onCombosUpdated }) {
       >
         <Plus className="w-3.5 h-3.5" /> New Combo
       </button>
+    </ModalWrapper>
+  );
+}
+
+export function UsageAnalyticsModal({ onClose, onResetGateway }) {
+  const [timeRange, setTimeRange] = useState('all');
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [modelSearch, setModelSearch] = useState('');
+  const [activeTab, setActiveTab] = useState('overview');
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [resetting, setResetting] = useState(false);
+
+  const fetchUsage = async () => {
+    setLoading(true);
+    try {
+      const res = await authFetch(`/api/dashboard/usage?time_range=${timeRange}`);
+      if (res.ok) {
+        const json = await res.json();
+        setData(json);
+      }
+    } catch (e) {
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchUsage();
+  }, [timeRange]);
+
+  const handleReset = async () => {
+    setResetting(true);
+    try {
+      const res = await authFetch('/api/dashboard/usage/reset', { method: 'POST' });
+      if (res.ok) {
+        setConfirmReset(false);
+        await fetchUsage();
+        if (onResetGateway) onResetGateway();
+      }
+    } catch (e) {
+    } finally {
+      setResetting(false);
+    }
+  };
+
+  const getProviderColor = (p) => {
+    const norm = (p || '').toLowerCase();
+    if (norm.includes('groq')) return '#f55036';
+    if (norm.includes('cerebras')) return '#00f5a0';
+    if (norm.includes('nvidia')) return '#76b900';
+    if (norm.includes('openrouter')) return '#6366f1';
+    if (norm.includes('opencode')) return '#00d2ff';
+    if (norm.includes('bai')) return '#ff6b35';
+    return '#a855f7';
+  };
+
+  const summary = data?.summary || {
+    total_requests: 0,
+    successful_requests: 0,
+    failed_requests: 0,
+    success_rate: 100.0,
+    total_prompt_tokens: 0,
+    total_completion_tokens: 0,
+    total_tokens: 0,
+    avg_latency_ms: 0.0
+  };
+
+  const providers = data?.providers || [];
+  const models = data?.models || [];
+  const recent = data?.recent_activity || [];
+
+  const filteredModels = models.filter((m) => {
+    if (!modelSearch.trim()) return true;
+    const q = modelSearch.toLowerCase().trim();
+    return m.model.toLowerCase().includes(q) || m.provider.toLowerCase().includes(q);
+  });
+
+  return (
+    <ModalWrapper title="Usage & Analytics Dashboard" icon={BarChart3} onClose={onClose} maxWidth="max-w-4xl">
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-black/5 dark:border-white/5">
+          <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-black/5 dark:bg-white/5 w-fit">
+            {[
+              { id: 'all', label: 'All Time' },
+              { id: '24h', label: 'Past 24h' },
+              { id: '7d', label: 'Past 7d' },
+              { id: '30d', label: 'Past 30d' }
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setTimeRange(tab.id)}
+                className={`px-3 py-1 rounded-xl text-xs font-semibold transition ${
+                  timeRange === tab.id
+                    ? 'bg-white dark:bg-black/60 text-slate-900 dark:text-white shadow-sm'
+                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={fetchUsage}
+              disabled={loading}
+              className="px-2.5 py-1.5 rounded-xl bg-black/5 dark:bg-white/5 text-slate-700 dark:text-slate-300 hover:bg-black/10 dark:hover:bg-white/10 text-xs font-semibold transition flex items-center gap-1.5 disabled:opacity-50"
+              title="Refresh Analytics"
+            >
+              <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin text-[#00d2ff]' : ''}`} />
+              <span>Refresh</span>
+            </button>
+
+            {confirmReset ? (
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={handleReset}
+                  disabled={resetting}
+                  className="px-2.5 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-xs font-semibold transition shadow-sm disabled:opacity-50"
+                >
+                  {resetting ? 'Clearing...' : 'Confirm Reset'}
+                </button>
+                <button
+                  onClick={() => setConfirmReset(false)}
+                  className="px-2 py-1.5 rounded-xl bg-black/5 dark:bg-white/5 text-slate-500 hover:text-slate-800 dark:hover:text-white text-xs"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmReset(true)}
+                className="px-2.5 py-1.5 rounded-xl bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20 text-xs font-semibold transition flex items-center gap-1"
+                title="Reset all recorded usage metrics"
+              >
+                <Trash2 className="w-3 h-3" />
+                <span>Reset</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+          <div className="p-3.5 rounded-2xl bg-black/[0.03] dark:bg-white/[0.03] border border-black/5 dark:border-white/5 space-y-1">
+            <div className="flex items-center justify-between text-[10px] uppercase font-semibold text-slate-500 dark:text-slate-400 tracking-wider">
+              <span>Total Requests</span>
+              <Activity className="w-3.5 h-3.5 text-[#00d2ff]" />
+            </div>
+            <div className="text-xl font-black font-mono text-slate-900 dark:text-white tracking-tight">
+              {summary.total_requests.toLocaleString()}
+            </div>
+            <div className="flex items-center gap-1.5 text-[9.5px]">
+              <span className={`px-1.5 py-0.2 rounded font-mono font-bold ${
+                summary.success_rate >= 95 ? 'bg-emerald-500/15 text-emerald-500' : 'bg-amber-500/15 text-amber-500'
+              }`}>
+                {summary.success_rate}% ok
+              </span>
+              <span className="text-slate-400">({summary.failed_requests} failed)</span>
+            </div>
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-black/[0.03] dark:bg-white/[0.03] border border-black/5 dark:border-white/5 space-y-1">
+            <div className="flex items-center justify-between text-[10px] uppercase font-semibold text-slate-500 dark:text-slate-400 tracking-wider">
+              <span>Total Tokens</span>
+              <Zap className="w-3.5 h-3.5 text-[#00f5a0]" />
+            </div>
+            <div className="text-xl font-black font-mono text-[#00f5a0] tracking-tight">
+              {summary.total_tokens.toLocaleString()}
+            </div>
+            <div className="text-[9.5px] text-slate-500 dark:text-slate-400 font-mono truncate">
+              In: {summary.total_prompt_tokens.toLocaleString()} • Out: {summary.total_completion_tokens.toLocaleString()}
+            </div>
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-black/[0.03] dark:bg-white/[0.03] border border-black/5 dark:border-white/5 space-y-1">
+            <div className="flex items-center justify-between text-[10px] uppercase font-semibold text-slate-500 dark:text-slate-400 tracking-wider">
+              <span>Active Providers</span>
+              <Server className="w-3.5 h-3.5 text-[#ff6b35]" />
+            </div>
+            <div className="text-xl font-black font-mono text-slate-900 dark:text-white tracking-tight">
+              {providers.length}
+            </div>
+            <div className="text-[9.5px] text-slate-500 dark:text-slate-400 truncate">
+              {providers.length > 0 ? `Top: ${providers[0]?.provider}` : 'No traffic yet'}
+            </div>
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-black/[0.03] dark:bg-white/[0.03] border border-black/5 dark:border-white/5 space-y-1">
+            <div className="flex items-center justify-between text-[10px] uppercase font-semibold text-slate-500 dark:text-slate-400 tracking-wider">
+              <span>Avg Latency</span>
+              <Clock className="w-3.5 h-3.5 text-[#a855f7]" />
+            </div>
+            <div className="text-xl font-black font-mono text-slate-900 dark:text-white tracking-tight">
+              {summary.avg_latency_ms ? `${summary.avg_latency_ms}ms` : '--'}
+            </div>
+            <div className="text-[9.5px] text-slate-500 dark:text-slate-400 truncate">
+              {summary.avg_latency_ms ? `${(summary.avg_latency_ms / 1000).toFixed(2)}s per request` : 'Awaiting data'}
+            </div>
+          </div>
+        </div>
+
+        {summary.total_tokens > 0 && providers.length > 0 && (
+          <div className="p-3.5 rounded-2xl bg-black/[0.03] dark:bg-white/[0.03] border border-black/5 dark:border-white/5 space-y-2">
+            <div className="flex items-center justify-between text-xs font-semibold">
+              <span className="text-slate-700 dark:text-slate-300">Provider Token Share</span>
+              <span className="text-[10px] font-mono text-slate-400">{summary.total_tokens.toLocaleString()} total tokens</span>
+            </div>
+            <div className="h-3 w-full rounded-full overflow-hidden flex bg-black/10 dark:bg-white/10 p-0.5">
+              {providers.map((p) => {
+                if (!p.total_tokens || p.token_percentage <= 0) return null;
+                const col = getProviderColor(p.provider);
+                return (
+                  <div
+                    key={p.provider}
+                    style={{ width: `${p.token_percentage}%`, backgroundColor: col }}
+                    className="h-full first:rounded-l-full last:rounded-r-full transition-all duration-500"
+                    title={`${p.provider}: ${p.total_tokens.toLocaleString()} tokens (${p.token_percentage}%)`}
+                  />
+                );
+              })}
+            </div>
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              {providers.map((p) => {
+                const col = getProviderColor(p.provider);
+                return (
+                  <div key={p.provider} className="flex items-center gap-1.5 text-[10px] font-medium">
+                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: col }} />
+                    <span className="text-slate-700 dark:text-slate-300">{p.provider}</span>
+                    <span className="font-mono font-bold text-slate-500 dark:text-slate-400">
+                      {p.token_percentage}%
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 border-b border-black/5 dark:border-white/5 pb-2">
+          <button
+            onClick={() => setActiveTab('overview')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+              activeTab === 'overview'
+                ? 'bg-[#00d2ff]/15 text-[#00d2ff]'
+                : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            Providers ({providers.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('models')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+              activeTab === 'models'
+                ? 'bg-[#00d2ff]/15 text-[#00d2ff]'
+                : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            Models ({models.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('recent')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+              activeTab === 'recent'
+                ? 'bg-[#00d2ff]/15 text-[#00d2ff]'
+                : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            Recent Activity ({recent.length})
+          </button>
+        </div>
+
+        {activeTab === 'overview' && (
+          <div className="overflow-x-auto rounded-2xl border border-black/5 dark:border-white/5">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-black/5 dark:border-white/5 bg-black/[0.02] dark:bg-white/[0.02] text-slate-400 text-[10px] uppercase tracking-wider font-semibold">
+                  <th className="p-3">Provider</th>
+                  <th className="p-3 text-right">Requests</th>
+                  <th className="p-3 text-right">Success</th>
+                  <th className="p-3 text-right">Prompt Tokens</th>
+                  <th className="p-3 text-right">Comp Tokens</th>
+                  <th className="p-3 text-right">Total Tokens</th>
+                  <th className="p-3 text-right">Avg Latency</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-black/5 dark:divide-white/5 font-mono">
+                {providers.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="p-6 text-center text-slate-400 italic">
+                      No usage data recorded for this time range.
+                    </td>
+                  </tr>
+                ) : (
+                  providers.map((p) => (
+                    <tr key={p.provider} className="hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition">
+                      <td className="p-3 font-sans font-semibold flex items-center gap-2">
+                        <ProviderIcon provider={p.provider} className="h-4 w-auto max-w-[32px] max-h-4 shrink-0" />
+                        <span className="text-slate-900 dark:text-white">{p.provider}</span>
+                      </td>
+                      <td className="p-3 text-right text-slate-700 dark:text-slate-300">
+                        {p.requests.toLocaleString()}
+                      </td>
+                      <td className="p-3 text-right">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                          p.success_rate >= 95 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-400'
+                        }`}>
+                          {p.success_rate}%
+                        </span>
+                      </td>
+                      <td className="p-3 text-right text-slate-500 dark:text-slate-400">
+                        {p.prompt_tokens.toLocaleString()}
+                      </td>
+                      <td className="p-3 text-right text-slate-500 dark:text-slate-400">
+                        {p.completion_tokens.toLocaleString()}
+                      </td>
+                      <td className="p-3 text-right font-bold text-[#00f5a0]">
+                        {p.total_tokens.toLocaleString()}
+                      </td>
+                      <td className="p-3 text-right text-slate-600 dark:text-slate-300">
+                        {p.avg_latency_ms}ms
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {activeTab === 'models' && (
+          <div className="space-y-2.5">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5">
+              <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              <input
+                type="text"
+                value={modelSearch}
+                onChange={(e) => setModelSearch(e.target.value)}
+                placeholder="Filter models by ID or provider..."
+                className="w-full bg-transparent text-xs font-mono text-slate-800 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none"
+              />
+              {modelSearch && (
+                <button onClick={() => setModelSearch('')} className="text-slate-400 hover:text-slate-600">
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+
+            <div className="overflow-x-auto rounded-2xl border border-black/5 dark:border-white/5 max-h-[350px]">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead className="sticky top-0 bg-white dark:bg-[#151922] z-10">
+                  <tr className="border-b border-black/5 dark:border-white/5 text-slate-400 text-[10px] uppercase tracking-wider font-semibold">
+                    <th className="p-3">Model</th>
+                    <th className="p-3">Provider</th>
+                    <th className="p-3 text-right">Requests</th>
+                    <th className="p-3 text-right">Success</th>
+                    <th className="p-3 text-right">Prompt</th>
+                    <th className="p-3 text-right">Comp</th>
+                    <th className="p-3 text-right">Total Tokens</th>
+                    <th className="p-3 text-right">Avg Latency</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-black/5 dark:divide-white/5 font-mono">
+                  {filteredModels.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="p-6 text-center text-slate-400 italic">
+                        {models.length === 0 ? 'No model metrics recorded yet.' : 'No models match search filter.'}
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredModels.map((m) => (
+                      <tr key={`${m.provider}-${m.model}`} className="hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition">
+                        <td className="p-3 font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                          <ModelIcon model={m.model} className="h-3 w-auto max-w-[24px] max-h-3 shrink-0" />
+                          <span className="truncate max-w-[200px]" title={m.model}>{m.model}</span>
+                        </td>
+                        <td className="p-3 font-sans text-slate-500 dark:text-slate-400">
+                          {m.provider}
+                        </td>
+                        <td className="p-3 text-right text-slate-700 dark:text-slate-300">
+                          {m.requests.toLocaleString()}
+                        </td>
+                        <td className="p-3 text-right">
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                            m.success_rate >= 95 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-400'
+                          }`}>
+                            {m.success_rate}%
+                          </span>
+                        </td>
+                        <td className="p-3 text-right text-slate-500 dark:text-slate-400">
+                          {m.prompt_tokens.toLocaleString()}
+                        </td>
+                        <td className="p-3 text-right text-slate-500 dark:text-slate-400">
+                          {m.completion_tokens.toLocaleString()}
+                        </td>
+                        <td className="p-3 text-right font-bold text-[#00f5a0]">
+                          {m.total_tokens.toLocaleString()}
+                        </td>
+                        <td className="p-3 text-right text-slate-600 dark:text-slate-300">
+                          {m.avg_latency_ms}ms
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'recent' && (
+          <div className="overflow-x-auto rounded-2xl border border-black/5 dark:border-white/5 max-h-[350px]">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead className="sticky top-0 bg-white dark:bg-[#151922] z-10">
+                <tr className="border-b border-black/5 dark:border-white/5 text-slate-400 text-[10px] uppercase tracking-wider font-semibold">
+                  <th className="p-3">Time</th>
+                  <th className="p-3">Provider</th>
+                  <th className="p-3">Model</th>
+                  <th className="p-3">Type</th>
+                  <th className="p-3 text-right">Tokens</th>
+                  <th className="p-3 text-right">Latency</th>
+                  <th className="p-3 text-right">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-black/5 dark:divide-white/5 font-mono">
+                {recent.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="p-6 text-center text-slate-400 italic">
+                      No recent activity recorded.
+                    </td>
+                  </tr>
+                ) : (
+                  recent.map((r, i) => (
+                    <tr key={i} className="hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition">
+                      <td className="p-3 text-slate-400 text-[11px]">
+                        {new Date(r.timestamp * 1000).toLocaleTimeString()}
+                      </td>
+                      <td className="p-3 font-sans font-semibold text-slate-700 dark:text-slate-300">
+                        {r.provider}
+                      </td>
+                      <td className="p-3 text-slate-900 dark:text-white truncate max-w-[180px]" title={r.model}>
+                        {r.model}
+                      </td>
+                      <td className="p-3">
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                          r.stream ? 'bg-cyan-500/15 text-cyan-400' : 'bg-purple-500/15 text-purple-400'
+                        }`}>
+                          {r.stream ? 'STREAM' : 'SYNC'}
+                        </span>
+                      </td>
+                      <td className="p-3 text-right font-bold text-[#00f5a0]">
+                        {r.total_tokens.toLocaleString()}
+                      </td>
+                      <td className="p-3 text-right text-slate-500 dark:text-slate-400">
+                        {r.latency_ms}ms
+                      </td>
+                      <td className="p-3 text-right">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                          r.status_code >= 200 && r.status_code < 400
+                            ? 'bg-emerald-500/15 text-emerald-400'
+                            : 'bg-rose-500/15 text-rose-400'
+                        }`}>
+                          {r.status_code}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </ModalWrapper>
   );
 }

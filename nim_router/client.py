@@ -19,6 +19,8 @@ from nim_router.schemas import ChatCompletionRequest
 from nim_router.catalog import is_banned_model, load_fallback_models
 
 import email.utils
+from typing import Callable, Optional
+from nim_router.classifier import estimate_token_count
 
 _shared_client: httpx.AsyncClient | None = None
 
@@ -269,7 +271,13 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
     logger.success(f"Multi-provider model discovery complete: {len(all_discovered)} active models in pool.")
     return all_discovered
 
-async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompletionRequest, base_url: str = NIM_API_BASE) -> Response:
+async def call_provider_endpoint(
+    api_key: str,
+    model_id: str,
+    request: ChatCompletionRequest,
+    base_url: str = NIM_API_BASE,
+    on_usage: Optional[Callable[[int, int, int, bool], None]] = None
+) -> Response:
     url = f"{base_url.rstrip('/')}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -312,6 +320,10 @@ async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompl
     if request.tools is not None:
         payload["tools"] = request.tools
 
+    if request.stream:
+        if any(k in base_url for k in ("groq.com", "cerebras.ai", "openrouter.ai")):
+            payload["stream_options"] = {"include_usage": True}
+
     client = get_shared_client()
 
     if request.stream:
@@ -342,11 +354,53 @@ async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompl
                             pass
                         raise HTTPException(status_code=503, detail=detail_msg)
 
+                stream_prompt_tokens = 0
+                stream_comp_tokens = 0
+                stream_total_tokens = 0
+                has_exact_usage = False
+                collected_chars = 0
+                sse_buffer = ""
+
+                def process_chunk_text(text: str):
+                    nonlocal sse_buffer, stream_prompt_tokens, stream_comp_tokens, stream_total_tokens, has_exact_usage, collected_chars
+                    sse_buffer += text
+                    lines = sse_buffer.split("\n")
+                    sse_buffer = lines[-1]
+                    for line in lines[:-1]:
+                        clean_line = line.strip()
+                        if not clean_line.startswith("data:"):
+                            continue
+                        data_body = clean_line[5:].strip()
+                        if not data_body or data_body == "[DONE]":
+                            continue
+                        try:
+                            chunk_data = json.loads(data_body)
+                            usage_data = chunk_data.get("usage")
+                            if usage_data and isinstance(usage_data, dict):
+                                p = usage_data.get("prompt_tokens") or 0
+                                c = usage_data.get("completion_tokens") or 0
+                                t = usage_data.get("total_tokens") or (p + c)
+                                if t > 0:
+                                    stream_prompt_tokens = p
+                                    stream_comp_tokens = c
+                                    stream_total_tokens = t
+                                    has_exact_usage = True
+                            choices = chunk_data.get("choices") or []
+                            for choice in choices:
+                                delta = choice.get("delta") or {}
+                                content = delta.get("content") or delta.get("reasoning_content") or ""
+                                if content:
+                                    collected_chars += len(content)
+                        except Exception:
+                            pass
+
                 async def stream_generator():
                     try:
                         if first_chunk:
+                            process_chunk_text(first_chunk.decode("utf-8", errors="ignore"))
                             yield first_chunk
                         async for chunk in aiter:
+                            process_chunk_text(chunk.decode("utf-8", errors="ignore"))
                             yield chunk
                     except (httpx.ReadTimeout, httpx.RequestError) as e:
                         logger.warning(f"Stream read timeout/error for {model_id}: {e}")
@@ -360,6 +414,21 @@ async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompl
                         yield f"data: {err_msg}\n\n".encode("utf-8")
                     finally:
                         await response.aclose()
+                        if sse_buffer:
+                            process_chunk_text("\n")
+                        final_prompt = stream_prompt_tokens
+                        final_comp = stream_comp_tokens
+                        final_total = stream_total_tokens
+                        is_est = not has_exact_usage
+                        if is_est:
+                            final_prompt = estimate_token_count(request)
+                            final_comp = max(1, int(collected_chars / 3.8)) if collected_chars > 0 else 0
+                            final_total = final_prompt + final_comp
+                        if on_usage:
+                            try:
+                                on_usage(final_prompt, final_comp, final_total, is_est)
+                            except Exception:
+                                pass
 
                 return StreamingResponse(
                     stream_generator(),
@@ -401,8 +470,23 @@ async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompl
             retry_sec = parse_retry_after(response.headers.get("Retry-After") or response.headers.get("retry-after"))
 
             if response.status_code == 200:
+                extracted_usage = None
                 try:
                     resp_json = response.json()
+                    usage_obj = resp_json.get("usage")
+                    if usage_obj and isinstance(usage_obj, dict):
+                        p_tok = usage_obj.get("prompt_tokens") or 0
+                        c_tok = usage_obj.get("completion_tokens") or 0
+                        t_tok = usage_obj.get("total_tokens") or (p_tok + c_tok)
+                        extracted_usage = (p_tok, c_tok, t_tok, False)
+                    else:
+                        est_p = estimate_token_count(request)
+                        comp_text = ""
+                        for c in resp_json.get("choices", []):
+                            comp_text += c.get("message", {}).get("content", "") or ""
+                        est_c = max(1, int(len(comp_text) / 3.8)) if comp_text else 0
+                        extracted_usage = (est_p, est_c, est_p + est_c, True)
+
                     choices = resp_json.get("choices", [])
                     modified = False
                     for c in choices:
@@ -415,10 +499,25 @@ async def call_provider_endpoint(api_key: str, model_id: str, request: ChatCompl
                             elif not msg_obj.get("tool_calls"):
                                 msg_obj["content"] = " "
                                 modified = True
+
+                    usage_dispatched = False
+                    if on_usage and extracted_usage:
+                        try:
+                            on_usage(*extracted_usage)
+                            usage_dispatched = True
+                        except Exception:
+                            pass
+
                     if modified:
                         return Response(content=json.dumps(resp_json), media_type="application/json", status_code=200)
                 except Exception as e:
                     logger.debug(f"Response normalization error: {e}")
+
+                if on_usage and extracted_usage and not usage_dispatched:
+                    try:
+                        on_usage(*extracted_usage)
+                    except Exception:
+                        pass
 
                 return Response(content=response.text, media_type="application/json", status_code=200)
             else:

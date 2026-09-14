@@ -9,6 +9,8 @@ config/models_status.json
 config/settings.yaml
 !config/settings.yaml.example
 config/runtime_state.json
+config/usage.db
+*.db
 config/combos.json
 !config/combos.example.json
 config/.sessions.json

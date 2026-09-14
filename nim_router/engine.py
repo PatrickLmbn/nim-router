@@ -39,9 +39,11 @@ from nim_router.classifier import (
 )
 from nim_router.client import probe_model, discover_models, call_provider_endpoint
 from nim_router.catalog import is_banned_model, load_fallback_models, get_provider_name as _catalog_get_provider_name, save_working_models
+from nim_router.tracker import get_usage_tracker
 
 class ModelRouter:
     def __init__(self, api_key: str | list[str], openrouter_key: str = "", opencode_key: str = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = "", bai_key: str = "", strategy: str = ""):
+        self.tracker = get_usage_tracker()
         if isinstance(api_key, list):
             self.api_keys = [k.strip() for k in api_key if k.strip()]
         else:
@@ -250,6 +252,7 @@ class ModelRouter:
             logger.warning(f"Model {model_id} temporarily marked unhealthy after {self._health[model_id]['failures']} failures")
 
     def _record_success(self, model_id: str, elapsed: float, token_count: int = 0):
+        """Record a successful request. token_count should be generated completion tokens for calculating TPS."""
         if model_id in self._health:
             self._health[model_id]["failures"] = 0
             self._health[model_id]["healthy"] = True
@@ -299,16 +302,37 @@ class ModelRouter:
         try:
             base_dir = os.path.dirname(os.path.dirname(__file__))
             state_path = os.path.join(base_dir, "config", "runtime_state.json")
-            if not os.path.exists(state_path):
-                return
-            age = time.time() - os.path.getmtime(state_path)
-            if age > 3600:
-                return
-            with open(state_path, "r") as f:
-                state = json.load(f)
-            self._latencies.update(state.get("latencies", {}))
-            self._reliability.update(state.get("reliability", {}))
-            self._tps.update(state.get("tps", {}))
+            if os.path.exists(state_path):
+                age = time.time() - os.path.getmtime(state_path)
+                if age <= 3600:
+                    with open(state_path, "r") as f:
+                        state = json.load(f)
+                    self._latencies.update(state.get("latencies", {}))
+                    self._reliability.update(state.get("reliability", {}))
+                    loaded_tps = state.get("tps", {})
+                    # Sanitize any legacy corrupted TPS values that previously included prompt tokens
+                    for mid, tps_val in loaded_tps.items():
+                        if tps_val > 400.0:
+                            loaded_tps[mid] = 40.0
+                    self._tps.update(loaded_tps)
+
+            # Calibrate model TPS from actual completed tokens recorded in usage.db if available
+            if hasattr(self, "tracker") and self.tracker:
+                with self.tracker._get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT model, completion_tokens, latency_ms
+                        FROM request_logs
+                        WHERE status_code >= 200 AND status_code < 400 AND completion_tokens > 0 AND latency_ms > 50
+                        ORDER BY id ASC
+                    """)
+                    for row in cursor.fetchall():
+                        m = row["model"]
+                        c_tok = row["completion_tokens"]
+                        lat_s = row["latency_ms"] / 1000.0
+                        meas = c_tok / lat_s
+                        cur = self._tps.get(m, 40.0)
+                        self._tps[m] = round(0.7 * cur + 0.3 * meas, 2)
         except Exception:
             pass
 
@@ -649,9 +673,43 @@ class ModelRouter:
                         continue
                     try:
                         request.model = selected_id
-                        response = await call_provider_endpoint(current_key, selected_id, request, base_url)
+                        recorded_tokens = [0]
+                        usage_recorded = False
+
+                        def on_request_usage(p_tok: int, c_tok: int, tot_tok: int, is_est: bool):
+                            nonlocal usage_recorded
+                            if usage_recorded:
+                                return
+                            usage_recorded = True
+                            recorded_tokens[0] = c_tok
+                            now_done = time.time()
+                            lat_ms = (now_done - t0) * 1000.0
+                            self.tracker.record_request(
+                                provider=provider,
+                                model=selected_id,
+                                api_key_masked=current_key[-6:] if len(current_key) >= 6 else current_key,
+                                status_code=200,
+                                latency_ms=lat_ms,
+                                stream=bool(request.stream),
+                                prompt_tokens=p_tok,
+                                completion_tokens=c_tok,
+                                total_tokens=tot_tok,
+                                is_estimated=is_est,
+                                timestamp=t0
+                            )
+                            # In LLM metrics, TPS is generation speed (completion tokens / elapsed)
+                            self._record_success(selected_id, now_done - t0, token_count=c_tok)
+
+                        response = await call_provider_endpoint(
+                            current_key,
+                            selected_id,
+                            request,
+                            base_url,
+                            on_usage=on_request_usage
+                        )
                         elapsed = time.time() - t0
-                        self._record_success(selected_id, elapsed)
+                        if not usage_recorded and not request.stream:
+                            self._record_success(selected_id, elapsed, token_count=recorded_tokens[0])
                         self._record_key_success(provider, current_key, selected_id)
                         logger.success(f"Request completed successfully via {provider} :: {selected_id} ({elapsed:.3f}s)")
                         return response
@@ -659,6 +717,19 @@ class ModelRouter:
                         retry_after_hdr = e.headers.get("Retry-After") if e.headers else None
                         retry_sec = float(retry_after_hdr) if retry_after_hdr else None
                         self._record_key_failure(provider, current_key, selected_id, e.status_code, retry_after=retry_sec)
+                        self.tracker.record_request(
+                            provider=provider,
+                            model=selected_id,
+                            api_key_masked=current_key[-6:] if len(current_key) >= 6 else current_key,
+                            status_code=e.status_code,
+                            latency_ms=(time.time() - t0) * 1000.0,
+                            stream=bool(request.stream),
+                            prompt_tokens=0,
+                            completion_tokens=0,
+                            total_tokens=0,
+                            is_estimated=False,
+                            timestamp=t0
+                        )
                         if e.status_code in (429, 400, 404, 500, 502, 503) and k_idx < len(keys_to_try) - 1:
                             logger.warning(f"Model {provider} :: {selected_id} error {e.status_code} on key {current_key[:8]}..., retrying next API key...")
                             await asyncio.sleep(0.1)
@@ -678,6 +749,19 @@ class ModelRouter:
             except Exception as e:
                 last_error = e
                 self._record_failure(selected_id, status_code=500)
+                self.tracker.record_request(
+                    provider=provider,
+                    model=selected_id,
+                    api_key_masked=current_key[-6:] if len(current_key) >= 6 else current_key,
+                    status_code=500,
+                    latency_ms=(time.time() - t0) * 1000.0,
+                    stream=bool(request.stream),
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    total_tokens=0,
+                    is_estimated=False,
+                    timestamp=t0
+                )
                 logger.error(f"Error calling {provider} :: {selected_id}: {e}, failing over...")
             finally:
                 self._in_flight[selected_id] = max(0, self._in_flight.get(selected_id, 1) - 1)

@@ -3,7 +3,7 @@ import {
   Zap, Activity, ArrowUpRight, Play, RefreshCw, Plus, 
   Gauge, Shield, Terminal, Copy, Check, RotateCcw, CheckCircle2,
   Key, Globe, Sparkles, Server, GitMerge, X, ChevronDown, Radio, Search, Trash2,
-  Eye, EyeOff
+  Eye, EyeOff, BarChart3
 } from 'lucide-react';
 import { ProviderIcon, ModelIcon } from './ModelIcon';
 
@@ -15,6 +15,7 @@ export function BentoGrid({
   onOpenSettings,
   onOpenLogs,
   onOpenComboEditor,
+  onOpenAnalytics,
   onDeleteCombo,
   onRunProbe,
   onRestartGateway,
@@ -75,6 +76,17 @@ export function BentoGrid({
     const m = Math.floor(Math.max(0, totalSeconds) / 60);
     const s = Math.floor(Math.max(0, totalSeconds) % 60);
     return `${m}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const getProviderColor = (p) => {
+    const norm = (p || '').toLowerCase();
+    if (norm.includes('groq')) return '#f55036';
+    if (norm.includes('cerebras')) return '#00f5a0';
+    if (norm.includes('nvidia')) return '#76b900';
+    if (norm.includes('openrouter')) return '#6366f1';
+    if (norm.includes('opencode')) return '#00d2ff';
+    if (norm.includes('bai')) return '#ff6b35';
+    return '#a855f7';
   };
 
   const totalInterval = stats?.probing_status?.interval_seconds || 180;
@@ -169,12 +181,12 @@ export function BentoGrid({
 
   return (
     <div className="w-full max-w-7xl mx-auto px-1 sm:px-2 lg:h-full flex flex-col lg:justify-center">
-      <div className="rounded-3xl p-2.5 sm:p-4 bg-[#e8edf5] dark:bg-[#12151c]/95 border border-black/5 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark flex flex-col lg:flex-1 lg:min-h-0 lg:max-h-[620px] lg:justify-between gap-3 sm:gap-3.5 lg:gap-0 transition-all duration-300">
+      <div className="rounded-3xl p-2.5 sm:p-4 bg-[#e8edf5] dark:bg-[#12151c]/95 border border-black/5 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark flex flex-col lg:flex-1 lg:min-h-0 lg:max-h-[700px] lg:justify-between gap-3 sm:gap-3.5 lg:gap-0 transition-all duration-300">
         
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 lg:gap-4 items-stretch lg:flex-1 lg:min-h-0">
 
           <div className="lg:col-span-5 flex flex-col lg:min-h-0">
-            <div className="rounded-3xl p-3.5 sm:p-4 bg-gradient-to-b from-[#ffffff] to-[#e8edf5] dark:from-[#181d28] dark:to-[#121620] border border-black/5 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark flex flex-col justify-start gap-2.5 sm:gap-2.5 relative transition-colors duration-300 lg:flex-1 lg:min-h-0 lg:overflow-hidden">
+            <div className="rounded-3xl p-3 sm:p-3.5 bg-gradient-to-b from-[#ffffff] to-[#e8edf5] dark:from-[#181d28] dark:to-[#121620] border border-black/5 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark flex flex-col justify-start gap-2.5 sm:gap-2.5 relative transition-colors duration-300 lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-none">
               
               <div className="flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-2">
@@ -212,21 +224,35 @@ export function BentoGrid({
                     </span>
                   </div>
 
-                  {testResult && (
-                    <div className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-black/5 dark:bg-white/10 text-[9px] font-mono animate-fade-in shrink-0">
-                      {testResult.success ? (
-                        <>
-                          <CheckCircle2 className="w-3 h-3 text-[#00f5a0]" />
-                          <span className="text-[#00f5a0] font-semibold">{testResult.latency}s</span>
-                          {testResult.tps != null && (
-                            <span className="text-slate-400">({testResult.tps} tps)</span>
-                          )}
-                        </>
-                      ) : (
-                        <span className="text-rose-400 font-semibold truncate max-w-[120px]">{testResult.message}</span>
-                      )}
-                    </div>
-                  )}
+                  <div className="flex items-center gap-1.5">
+                    {stats?.usage_summary?.total_tokens > 0 && (
+                      <button
+                        type="button"
+                        onClick={onOpenAnalytics}
+                        className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-[#00f5a0]/15 hover:bg-[#00f5a0]/25 text-[#00f5a0] text-[9px] font-mono font-bold transition neu-button"
+                        title="View Usage & Analytics"
+                      >
+                        <Zap className="w-2.5 h-2.5" />
+                        <span>{stats.usage_summary.total_tokens.toLocaleString()} tokens</span>
+                      </button>
+                    )}
+
+                    {testResult && (
+                      <div className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-black/5 dark:bg-white/10 text-[9px] font-mono animate-fade-in shrink-0">
+                        {testResult.success ? (
+                          <>
+                            <CheckCircle2 className="w-3 h-3 text-[#00f5a0]" />
+                            <span className="text-[#00f5a0] font-semibold">{testResult.latency}s</span>
+                            {testResult.tps != null && (
+                              <span className="text-slate-400">({testResult.tps} tps)</span>
+                            )}
+                          </>
+                        ) : (
+                          <span className="text-rose-400 font-semibold truncate max-w-[120px]">{testResult.message}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-2">
@@ -445,41 +471,173 @@ export function BentoGrid({
                 </div>
               </div>
 
-              <div 
-                onClick={onOpenSettings}
-                className="rounded-2xl p-2.5 sm:p-3 bg-gradient-to-br from-[#1e3799] to-[#0c2461] dark:from-[#0c2461] dark:to-[#1e3799] text-white border border-white/10 shadow-neu-light dark:shadow-neu-dark cursor-pointer group flex items-center justify-between transition-all hover:scale-[1.01] neu-button shrink-0 mt-auto"
-              >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="p-1.5 sm:p-2 rounded-xl bg-white/15 shrink-0">
-                    <Gauge className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" />
-                  </div>
-                  <div className="truncate">
-                    <div className="text-[11px] sm:text-xs font-bold capitalize flex items-center gap-1.5">
-                      <span>{stats?.routing_strategy || 'Fallback'} Mode</span>
-                      <span className="text-[8px] px-1.5 py-0.2 rounded bg-white/20 font-mono font-semibold uppercase">Active</span>
+              <div className="p-3 sm:p-3.5 rounded-2xl bg-black/[0.03] dark:bg-white/[0.03] border border-black/5 dark:border-white/5 shadow-neu-light-inset dark:shadow-neu-dark-inset flex flex-col justify-between flex-1 min-h-[220px] gap-2">
+                <div className="space-y-2 shrink-0">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <BarChart3 className="w-3.5 h-3.5 text-[#00f5a0]" />
+                      <span className="text-[11px] font-bold text-slate-800 dark:text-slate-200 tracking-tight">
+                        Provider Analytics
+                      </span>
+                      {(stats?.usage_providers?.length > 0) && (
+                        <span className="text-[8.5px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/15 text-emerald-500 font-bold">
+                          {stats.usage_providers.length} Active
+                        </span>
+                      )}
                     </div>
-                    <div className="text-[8.5px] sm:text-[9px] text-white/80 truncate">Click to tune routing strategy & latency settings</div>
+
+                    <div className="flex items-center gap-2">
+                      {stats?.usage_summary?.total_tokens > 0 && (
+                        <span className="text-[9.5px] font-mono font-bold text-[#00f5a0]">
+                          {stats.usage_summary.total_tokens.toLocaleString()} tok
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={onOpenAnalytics}
+                        className="text-[9.5px] font-semibold text-[#00d2ff] hover:underline flex items-center gap-0.5 neu-button"
+                        title="Open full usage & analytics modal"
+                      >
+                        <span>Full</span>
+                        <ArrowUpRight className="w-3 h-3" />
+                      </button>
+                    </div>
                   </div>
+
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <div className="p-1.5 rounded-xl bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5 flex flex-col">
+                      <span className="text-[7.5px] uppercase font-semibold text-slate-500 dark:text-slate-400 tracking-wider">
+                        Requests
+                      </span>
+                      <span className="text-xs font-mono font-bold text-slate-800 dark:text-slate-200">
+                        {stats?.usage_summary?.total_requests?.toLocaleString() || 0}
+                      </span>
+                    </div>
+                    <div className="p-1.5 rounded-xl bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5 flex flex-col">
+                      <span className="text-[7.5px] uppercase font-semibold text-slate-500 dark:text-slate-400 tracking-wider">
+                        Success
+                      </span>
+                      <span className="text-xs font-mono font-bold text-emerald-500 dark:text-emerald-400">
+                        {stats?.usage_summary?.success_rate != null ? `${stats.usage_summary.success_rate}%` : '100%'}
+                      </span>
+                    </div>
+                    <div className="p-1.5 rounded-xl bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5 flex flex-col">
+                      <span className="text-[7.5px] uppercase font-semibold text-slate-500 dark:text-slate-400 tracking-wider">
+                        Avg Latency
+                      </span>
+                      <span className="text-xs font-mono font-bold text-[#00d2ff]">
+                        {stats?.usage_summary?.avg_latency_ms ? `${(stats.usage_summary.avg_latency_ms / 1000).toFixed(2)}s` : '--'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {stats?.usage_summary?.total_tokens > 0 && stats?.usage_providers?.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[8px] font-mono text-slate-500 dark:text-slate-400">
+                        <span>Token Distribution</span>
+                        <span>{stats.usage_summary.total_tokens.toLocaleString()} total</span>
+                      </div>
+                      <div className="h-1.5 w-full rounded-full overflow-hidden flex bg-black/10 dark:bg-white/10 p-0.5">
+                        {stats.usage_providers.map((p) => {
+                          if (!p.total_tokens || p.token_percentage <= 0) return null;
+                          const col = getProviderColor(p.provider);
+                          return (
+                            <div
+                              key={p.provider}
+                              style={{ width: `${p.token_percentage}%`, backgroundColor: col }}
+                              className="h-full first:rounded-l-full last:rounded-r-full transition-all duration-500"
+                              title={`${p.provider}: ${p.total_tokens.toLocaleString()} tokens (${p.token_percentage}%)`}
+                            />
+                          );
+                        })}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                        {stats.usage_providers.map((p) => {
+                          const col = getProviderColor(p.provider);
+                          return (
+                            <div key={p.provider} className="flex items-center gap-1 text-[8px] font-medium">
+                              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: col }} />
+                              <span className="text-slate-600 dark:text-slate-300">{p.provider}</span>
+                              <span className="font-mono font-bold text-slate-500 dark:text-slate-400">
+                                {p.token_percentage}%
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                <div className="flex items-center gap-2.5 shrink-0 ml-2">
-                  <div className="flex items-center gap-2 pr-2 border-r border-white/15">
-                    <div className="text-right">
-                      <div className="text-[7.5px] uppercase font-semibold tracking-wider text-white/70">LATENCY</div>
-                      <div className="text-xs font-mono font-bold text-[#00d2ff]">
-                        {stats?.avg_latency != null ? `${stats.avg_latency}s` : '--'}
-                      </div>
-                    </div>
-                    <div className="text-right pl-1">
-                      <div className="text-[7.5px] uppercase font-semibold tracking-wider text-white/70">SPEED</div>
-                      <div className="text-xs font-mono font-bold text-[#00f5a0]">
-                        {stats?.avg_tps != null ? `${stats.avg_tps} tps` : '--'}
-                      </div>
-                    </div>
-                  </div>
+                <div className="overflow-x-auto overflow-y-auto rounded-xl border border-black/5 dark:border-white/5 flex-1 min-h-[80px] scrollbar-none">
+                  <table className="w-full text-left border-collapse text-[10px]">
+                    <thead className="sticky top-0 bg-[#eef2f7] dark:bg-[#161a22] z-10">
+                      <tr className="border-b border-black/5 dark:border-white/5 text-slate-400 text-[8px] uppercase tracking-wider font-semibold">
+                        <th className="py-1 px-1.5">Provider</th>
+                        <th className="py-1 px-1 text-right">Requests</th>
+                        <th className="py-1 px-1 text-right">Success</th>
+                        <th className="py-1 px-1 text-right">Prompt</th>
+                        <th className="py-1 px-1 text-right">Comp</th>
+                        <th className="py-1 px-1 text-right">Total</th>
+                        <th className="py-1 px-1.5 text-right">Avg Latency</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-black/5 dark:divide-white/5 font-mono">
+                      {(!stats?.usage_providers || stats.usage_providers.length === 0) ? (
+                        <tr>
+                          <td colSpan={7} className="py-3 px-2 text-center text-slate-400 text-[10px] italic">
+                            No requests routed yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        stats.usage_providers.map((p) => (
+                          <tr key={p.provider} className="hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition">
+                            <td className="py-1 px-1.5 font-sans font-semibold flex items-center gap-1.5 whitespace-nowrap">
+                              <ProviderIcon provider={p.provider} className="h-3 w-auto max-w-[26px] max-h-3 shrink-0" />
+                              <span className="text-slate-900 dark:text-white text-[10px]">{p.provider}</span>
+                            </td>
+                            <td className="py-1 px-1 text-right text-slate-700 dark:text-slate-300">
+                              {p.requests.toLocaleString()}
+                            </td>
+                            <td className="py-1 px-1 text-right">
+                              <span className={`px-1 py-0.2 rounded text-[8.5px] font-bold ${
+                                p.success_rate >= 95 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-400'
+                              }`}>
+                                {p.success_rate}%
+                              </span>
+                            </td>
+                            <td className="py-1 px-1 text-right text-slate-500 dark:text-slate-400">
+                              {p.prompt_tokens.toLocaleString()}
+                            </td>
+                            <td className="py-1 px-1 text-right text-slate-500 dark:text-slate-400">
+                              {p.completion_tokens.toLocaleString()}
+                            </td>
+                            <td className="py-1 px-1 text-right font-bold text-[#00f5a0]">
+                              {p.total_tokens.toLocaleString()}
+                            </td>
+                            <td className="py-1 px-1.5 text-right text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                              {p.avg_latency_ms}ms
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
 
-                  <div className="p-1 rounded-full bg-white/20 group-hover:bg-white/30 transition shrink-0">
-                    <ArrowUpRight className="w-3 h-3 text-white" />
+                <div className="flex items-center justify-between pt-1 border-t border-black/5 dark:border-white/5 text-[9.5px] shrink-0">
+                  <button
+                    type="button"
+                    onClick={onOpenSettings}
+                    className="flex items-center gap-1 text-slate-500 hover:text-slate-900 dark:hover:text-white transition font-medium"
+                    title="Click to tune routing strategy"
+                  >
+                    <Gauge className="w-3 h-3 text-[#00d2ff]" />
+                    <span className="capitalize">{stats?.routing_strategy || 'Fallback'} Mode</span>
+                  </button>
+                  <div className="flex items-center gap-2 font-mono text-[9px] text-slate-400">
+                    <span>Latency: <strong className="text-slate-700 dark:text-slate-200">{stats?.avg_latency != null ? `${stats.avg_latency}s` : '--'}</strong></span>
+                    <span>Speed: <strong className="text-slate-700 dark:text-slate-200">{stats?.avg_tps != null ? `${stats.avg_tps} tps` : '--'}</strong></span>
                   </div>
                 </div>
               </div>

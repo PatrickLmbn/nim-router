@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Sun, Moon, RefreshCw, Key, Server, Sliders, Terminal, Shield, Activity, RotateCcw, CheckCircle2, AlertCircle, GitMerge, Lock
+  Sun, Moon, RefreshCw, Key, Server, Sliders, Terminal, Shield, Activity, RotateCcw, CheckCircle2, AlertCircle, GitMerge, Lock, BarChart3
 } from 'lucide-react';
 import nimCubeLogo from '../icons/nim-cube.svg';
 import { BentoGrid } from './components/BentoGrid';
@@ -11,7 +11,8 @@ import {
   KeysManagerModal,
   SettingsModal,
   FullLogsModal,
-  ComboEditorModal
+  ComboEditorModal,
+  UsageAnalyticsModal
 } from './components/Modals';
 
 export default function App() {
@@ -318,6 +319,13 @@ export default function App() {
             <span>Config</span>
           </button>
           <button
+            onClick={() => setActiveModal('analytics')}
+            className="px-2.5 py-1 rounded-xl bg-white dark:bg-white/5 text-slate-700 dark:text-slate-300 text-xs font-semibold hover:bg-slate-50 dark:hover:bg-white/10 transition neu-button flex items-center gap-1 border border-black/5 dark:border-transparent"
+          >
+            <BarChart3 className="w-3 h-3 text-[#00f5a0]" />
+            <span>Analytics</span>
+          </button>
+          <button
             onClick={() => setActiveModal('logs')}
             className="px-2.5 py-1 rounded-xl bg-white dark:bg-white/5 text-slate-700 dark:text-slate-300 text-xs font-semibold hover:bg-slate-50 dark:hover:bg-white/10 transition neu-button flex items-center gap-1 border border-black/5 dark:border-transparent"
           >
@@ -352,6 +360,7 @@ export default function App() {
           onOpenSettings={() => setActiveModal('settings')}
           onOpenLogs={() => setActiveModal('logs')}
           onOpenComboEditor={(comboOrNew) => setEditingCombo(comboOrNew)}
+          onOpenAnalytics={() => setActiveModal('analytics')}
           onDeleteCombo={handleDeleteCombo}
           onRunProbe={handleRunProbe}
           onRestartGateway={handleRestartGateway}
@@ -402,6 +411,13 @@ export default function App() {
           logs={logs}
           onClose={() => setActiveModal(null)}
           onClearLogs={() => setLogs([])}
+        />
+      )}
+
+      {activeModal === 'analytics' && (
+        <UsageAnalyticsModal
+          onClose={() => setActiveModal(null)}
+          onResetGateway={fetchStats}
         />
       )}
 

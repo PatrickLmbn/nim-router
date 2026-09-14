@@ -269,11 +269,28 @@ def create_app() -> FastAPI:
         healthy_pool = _router_instance._healthy_pool
         in_flight_total = sum(_router_instance._in_flight.values())
 
-        latencies = [
-            _router_instance._latencies.get(m.get("id"), 1.0)
-            for m in _router_instance.models if m.get("id") and _router_instance._latencies.get(m.get("id"))
-        ]
-        avg_latency = round(sum(latencies) / len(latencies), 3) if latencies else None
+        tracker = getattr(_router_instance, "tracker", None)
+        analytics = tracker.get_analytics(time_range="all") if tracker else {}
+        usage_summary = analytics.get("summary") or {
+            "total_requests": 0,
+            "successful_requests": 0,
+            "failed_requests": 0,
+            "success_rate": 100.0,
+            "total_prompt_tokens": 0,
+            "total_completion_tokens": 0,
+            "total_tokens": 0,
+            "avg_latency_ms": 0.0
+        }
+        usage_providers = analytics.get("providers", [])
+
+        if usage_summary.get("total_requests", 0) > 0 and usage_summary.get("avg_latency_ms"):
+            avg_latency = round(usage_summary["avg_latency_ms"] / 1000.0, 3)
+        else:
+            latencies = [
+                _router_instance._latencies.get(m.get("id"), 1.0)
+                for m in _router_instance.models if m.get("id") and _router_instance._latencies.get(m.get("id"))
+            ]
+            avg_latency = round(sum(latencies) / len(latencies), 3) if latencies else None
 
         tps_vals = [
             _router_instance._tps[m.get("id")]
@@ -355,8 +372,41 @@ def create_app() -> FastAPI:
                 "OpenRouter": {"keys_count": 1 if or_key else 0, "active": bool(or_key), "models_count": prov_models_count.get("OpenRouter", 0)},
                 "OpenCode": {"keys_count": 1 if oc_key else 0, "active": bool(oc_key), "models_count": prov_models_count.get("OpenCode", 0)},
                 "BAI": {"keys_count": 1 if bai_key else 0, "active": bool(bai_key), "models_count": prov_models_count.get("BAI", 0)},
-            }
+            },
+            "usage_summary": usage_summary,
+            "usage_providers": usage_providers
         }
+
+    @app.get("/api/dashboard/usage")
+    async def get_dashboard_usage(request: Request, time_range: str = "all"):
+        _check_auth(request)
+        tracker = getattr(_router_instance, "tracker", None)
+        if not tracker:
+            return {
+                "time_range": time_range,
+                "summary": {
+                    "total_requests": 0,
+                    "successful_requests": 0,
+                    "failed_requests": 0,
+                    "success_rate": 100.0,
+                    "total_prompt_tokens": 0,
+                    "total_completion_tokens": 0,
+                    "total_tokens": 0,
+                    "avg_latency_ms": 0.0
+                },
+                "providers": [],
+                "models": [],
+                "recent_activity": []
+            }
+        return tracker.get_analytics(time_range=time_range)
+
+    @app.post("/api/dashboard/usage/reset")
+    async def reset_dashboard_usage(request: Request):
+        _check_auth(request)
+        tracker = getattr(_router_instance, "tracker", None)
+        if tracker:
+            tracker.reset_analytics()
+        return {"success": True, "message": "Usage analytics reset"}
 
     @app.get("/api/keys")
     async def get_keys_info(request: Request):
