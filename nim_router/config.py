@@ -1,5 +1,8 @@
 import os
 import yaml
+import hashlib
+import hmac
+import secrets
 from dotenv import load_dotenv
 
 _BASE_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -111,3 +114,44 @@ def get_api_keys() -> list[str]:
 
 def get_health_refresh_interval() -> int:
     return max(30, int(_load_settings().get("health_refresh_interval", 180)))
+
+DEFAULT_DASHBOARD_PASSWORD = "nimrouter"
+
+def hash_password(password: str, salt: str = None) -> str:
+    if not salt:
+        salt = secrets.token_hex(16)
+    key = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 100_000)
+    return f"{salt}${key.hex()}"
+
+def verify_password_hash(password: str, stored_hash: str) -> bool:
+    if not stored_hash or "$" not in stored_hash:
+        return False
+    try:
+        salt, expected_key = stored_hash.split("$", 1)
+        actual_key = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 100_000).hex()
+        return hmac.compare_digest(actual_key, expected_key)
+    except Exception:
+        return False
+
+def is_password_configured() -> bool:
+    env_pw = os.getenv("DASHBOARD_PASSWORD", "").strip()
+    if env_pw:
+        return True
+    settings = _load_settings()
+    return bool(settings.get("dashboard_password_hash"))
+
+def verify_dashboard_password(password: str) -> bool:
+    if not password:
+        return False
+    env_pw = os.getenv("DASHBOARD_PASSWORD", "").strip()
+    if env_pw and hmac.compare_digest(password, env_pw):
+        return True
+    stored_hash = _load_settings().get("dashboard_password_hash", "")
+    if stored_hash:
+        return verify_password_hash(password, str(stored_hash))
+    return hmac.compare_digest(password, DEFAULT_DASHBOARD_PASSWORD)
+
+def set_dashboard_password(new_password: str):
+    new_hash = hash_password(new_password)
+    update_setting("dashboard_password_hash", new_hash)
+

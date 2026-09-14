@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import time
+import secrets
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -31,6 +32,9 @@ from nim_router.config import (
     update_setting,
     _load_settings,
     _ENV_FILE,
+    verify_dashboard_password,
+    set_dashboard_password,
+    is_password_configured,
 )
 from nim_router.combos import (
     load_combos,
@@ -121,8 +125,131 @@ def create_app() -> FastAPI:
             enriched.append(c_copy)
         return enriched
 
+    _SESSIONS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", ".sessions.json")
+    SESSION_TTL_SECONDS = 86400 * 30  # 30 days
+
+    def _load_sessions() -> dict[str, float]:
+        if os.path.exists(_SESSIONS_FILE):
+            try:
+                with open(_SESSIONS_FILE, "r") as f:
+                    data = json.load(f)
+                    now = time.time()
+                    return {k: float(v) for k, v in data.items() if now - float(v) < SESSION_TTL_SECONDS}
+            except Exception:
+                pass
+        return {}
+
+    def _save_sessions(sessions: dict[str, float]):
+        try:
+            os.makedirs(os.path.dirname(_SESSIONS_FILE), exist_ok=True)
+            with open(_SESSIONS_FILE, "w") as f:
+                json.dump(sessions, f)
+        except Exception:
+            pass
+
+    _active_sessions = _load_sessions()
+
+    def _extract_token(request: Request) -> Optional[str]:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            t = auth_header[7:].strip()
+            if t:
+                return t
+        x_tok = request.headers.get("X-Dashboard-Token", "").strip()
+        if x_tok:
+            return x_tok
+        c_tok = request.cookies.get("nim_session", "").strip()
+        if c_tok:
+            return c_tok
+        q_tok = request.query_params.get("token", "").strip()
+        if q_tok:
+            return q_tok
+        return None
+
+    def _is_authenticated(request: Request) -> bool:
+        token = _extract_token(request)
+        if not token:
+            return False
+        session_time = _active_sessions.get(token)
+        if not session_time:
+            return False
+        if time.time() - session_time > SESSION_TTL_SECONDS:
+            _active_sessions.pop(token, None)
+            _save_sessions(_active_sessions)
+            return False
+        return True
+
+    def _check_auth(request: Request):
+        if not _is_authenticated(request):
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+    @app.get("/api/auth/status")
+    async def get_auth_status(request: Request):
+        return {
+            "authenticated": _is_authenticated(request),
+            "password_configured": is_password_configured(),
+        }
+
+    @app.post("/api/auth/login")
+    async def login_endpoint(request: Request, response: Response):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        password = str(body.get("password", "")).strip()
+        if not verify_dashboard_password(password):
+            raise HTTPException(status_code=401, detail="Invalid password")
+
+        token = secrets.token_urlsafe(32)
+        _active_sessions[token] = time.time()
+        _save_sessions(_active_sessions)
+
+        response.set_cookie(
+            key="nim_session",
+            value=token,
+            httponly=True,
+            samesite="lax",
+            max_age=SESSION_TTL_SECONDS,
+            path="/"
+        )
+        return {
+            "success": True,
+            "token": token,
+            "message": "Authenticated successfully"
+        }
+
+    @app.post("/api/auth/logout")
+    async def logout_endpoint(request: Request, response: Response):
+        token = _extract_token(request)
+        if token and token in _active_sessions:
+            _active_sessions.pop(token, None)
+            _save_sessions(_active_sessions)
+        response.delete_cookie(key="nim_session", path="/")
+        return {"success": True, "message": "Logged out successfully"}
+
+    @app.post("/api/auth/change-password")
+    async def change_password_endpoint(request: Request):
+        _check_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        current_pw = str(body.get("current_password", "")).strip()
+        new_pw = str(body.get("new_password", "")).strip()
+
+        if not verify_dashboard_password(current_pw):
+            raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+        if not new_pw or len(new_pw) < 4:
+            raise HTTPException(status_code=400, detail="New password must be at least 4 characters long")
+
+        set_dashboard_password(new_pw)
+        logger.success("Dashboard access password updated successfully.")
+        return {"success": True, "message": "Password updated successfully"}
+
     @app.get("/api/dashboard/stats")
-    async def get_dashboard_stats():
+    async def get_dashboard_stats(request: Request):
+        _check_auth(request)
         if not _router_instance:
             return {"status": "initializing"}
 
@@ -232,7 +359,8 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/api/keys")
-    async def get_keys_info():
+    async def get_keys_info(request: Request):
+        _check_auth(request)
         def mask(k: str) -> str:
             if not k:
                 return ""
@@ -258,6 +386,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/keys")
     async def update_provider_keys(request: Request):
+        _check_auth(request)
         body = await request.json()
         provider = body.get("provider", "").strip().upper()
         action = body.get("action", "set")
@@ -343,6 +472,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/settings")
     async def update_router_settings(request: Request):
+        _check_auth(request)
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Invalid JSON payload")
@@ -364,7 +494,8 @@ def create_app() -> FastAPI:
         return {"success": True, "settings": _load_settings()}
 
     @app.get("/api/combos")
-    async def list_combos_endpoint():
+    async def list_combos_endpoint(request: Request):
+        _check_auth(request)
         raw_combos = load_combos()
         if _router_instance and _router_instance.models:
             now = time.time()
@@ -383,6 +514,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/combos")
     async def create_combo_endpoint(request: Request):
+        _check_auth(request)
         body = await request.json()
         name = body.get("name", "").strip()
         strategy = body.get("strategy", "fallback").strip()
@@ -400,6 +532,7 @@ def create_app() -> FastAPI:
 
     @app.put("/api/combos/{name}")
     async def update_combo_endpoint(name: str, request: Request):
+        _check_auth(request)
         body = await request.json()
         strategy = body.get("strategy", "fallback").strip()
         models = body.get("models", [])
@@ -411,7 +544,8 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(e))
 
     @app.delete("/api/combos/{name}")
-    async def delete_combo_endpoint(name: str):
+    async def delete_combo_endpoint(name: str, request: Request):
+        _check_auth(request)
         ok = delete_combo(name)
         if not ok:
             raise HTTPException(status_code=404, detail=f"Combo '{name}' not found.")
@@ -419,7 +553,8 @@ def create_app() -> FastAPI:
         return {"success": True}
 
     @app.post("/api/server/restart")
-    async def restart_gateway():
+    async def restart_gateway(request: Request):
+        _check_auth(request)
         import subprocess
         import shutil
         reload_env()
@@ -445,7 +580,8 @@ def create_app() -> FastAPI:
         return {"success": True, "message": "Gateway reloaded successfully."}
 
     @app.post("/api/probe")
-    async def run_live_probe():
+    async def run_live_probe(request: Request):
+        _check_auth(request)
         if not _router_instance:
             raise HTTPException(status_code=500, detail="Router not initialized")
 
@@ -466,11 +602,13 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/api/logs/history")
-    async def get_logs_history():
+    async def get_logs_history(request: Request):
+        _check_auth(request)
         return {"logs": get_recent_logs()}
 
     @app.get("/api/logs/stream")
     async def stream_server_logs(request: Request):
+        _check_auth(request)
         q = register_log_subscriber()
 
         async def event_generator():

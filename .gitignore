@@ -11,6 +11,8 @@ config/settings.yaml
 config/runtime_state.json
 config/combos.json
 !config/combos.example.json
+config/.sessions.json
+.sessions.json
 README copy.md
 tests/
 node_modules/

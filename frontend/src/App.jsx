@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Sun, Moon, RefreshCw, Key, Server, Sliders, Terminal, Shield, Activity, RotateCcw, CheckCircle2, AlertCircle, GitMerge
+  Sun, Moon, RefreshCw, Key, Server, Sliders, Terminal, Shield, Activity, RotateCcw, CheckCircle2, AlertCircle, GitMerge, Lock
 } from 'lucide-react';
 import nimCubeLogo from '../icons/nim-cube.svg';
 import { BentoGrid } from './components/BentoGrid';
+import { LoginPage } from './components/LoginPage';
+import { authFetch } from './api';
 import {
   ModelSelectorModal,
   KeysManagerModal,
@@ -16,6 +18,8 @@ export default function App() {
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem('nim_theme') || 'dark';
   });
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [checkingAuth, setCheckingAuth] = useState(true);
   const [stats, setStats] = useState(null);
   const [logs, setLogs] = useState([]);
   const [probing, setProbing] = useState(false);
@@ -43,9 +47,35 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const res = await authFetch('/api/auth/status');
+        if (res.ok) {
+          const data = await res.json();
+          setIsAuthenticated(Boolean(data.authenticated));
+        } else {
+          setIsAuthenticated(false);
+        }
+      } catch (e) {
+        setIsAuthenticated(false);
+      } finally {
+        setCheckingAuth(false);
+      }
+    };
+    checkAuth();
+
+    const onAuthExpired = () => {
+      setIsAuthenticated(false);
+      showToast('Session expired. Please log in again.', 'error');
+    };
+    window.addEventListener('nim-auth-expired', onAuthExpired);
+    return () => window.removeEventListener('nim-auth-expired', onAuthExpired);
+  }, []);
+
   const fetchStats = async () => {
     try {
-      const res = await fetch('/api/dashboard/stats');
+      const res = await authFetch('/api/dashboard/stats');
       if (res.ok) {
         const data = await res.json();
         setStats(data);
@@ -56,15 +86,19 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (!isAuthenticated) return;
     fetchStats();
     const interval = setInterval(fetchStats, 3500);
     return () => clearInterval(interval);
-  }, []);
+  }, [isAuthenticated]);
 
   useEffect(() => {
+    if (!isAuthenticated) return;
     let eventSource;
     try {
-      eventSource = new EventSource('/api/logs/stream');
+      const token = localStorage.getItem('nim_auth_token') || '';
+      const streamUrl = '/api/logs/stream' + (token ? `?token=${encodeURIComponent(token)}` : '');
+      eventSource = new EventSource(streamUrl);
       eventSource.onmessage = (event) => {
         try {
           const entry = JSON.parse(event.data);
@@ -81,16 +115,16 @@ export default function App() {
     return () => {
       if (eventSource) eventSource.close();
     };
-  }, []);
+  }, [isAuthenticated]);
 
   const handleRunProbe = async () => {
     setProbing(true);
     showToast('Starting multi-provider endpoint probing benchmark...', 'info');
     try {
-      const res = await fetch('/api/probe', { method: 'POST' });
+      const res = await authFetch('/api/probe', { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
-        const statsRes = await fetch('/api/dashboard/stats');
+        const statsRes = await authFetch('/api/dashboard/stats');
         let unavailCombos = [];
         let highLatCombos = [];
         if (statsRes.ok) {
@@ -122,7 +156,7 @@ export default function App() {
     setRestarting(true);
     showToast('Restarting nim-router gateway process...', 'info');
     try {
-      const res = await fetch('/api/server/restart', { method: 'POST' });
+      const res = await authFetch('/api/server/restart', { method: 'POST' });
       if (res.ok) {
         showToast('Gateway restarted and active pool refreshed!', 'success');
         setTimeout(fetchStats, 1500);
@@ -138,7 +172,7 @@ export default function App() {
 
   const handleSelectModel = async (modelId) => {
     try {
-      await fetch('/api/settings', {
+      await authFetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ primary_model: modelId })
@@ -153,7 +187,7 @@ export default function App() {
   const handleDeleteCombo = async (name) => {
     if (!window.confirm(`Are you sure you want to delete combo "${name}"?`)) return;
     try {
-      const res = await fetch(`/api/combos/${name}`, { method: 'DELETE' });
+      const res = await authFetch(`/api/combos/${name}`, { method: 'DELETE' });
       if (res.ok) {
         showToast(`Combo "${name}" deleted`, 'info');
         fetchStats();
@@ -165,6 +199,44 @@ export default function App() {
       showToast('Failed to delete combo', 'error');
     }
   };
+
+  const handleLogout = async () => {
+    try {
+      await authFetch('/api/auth/logout', { method: 'POST' });
+    } catch (e) {
+    } finally {
+      localStorage.removeItem('nim_auth_token');
+      setIsAuthenticated(false);
+      showToast('Dashboard locked', 'info');
+    }
+  };
+
+  if (checkingAuth) {
+    return (
+      <div className="min-h-screen w-full flex flex-col items-center justify-center bg-[#eef2f7] dark:bg-[#0f1117] transition-colors duration-300 select-none">
+        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#da7756]/20 to-[#da7756]/5 border border-[#da7756]/30 shadow-[0_0_16px_rgba(218,119,86,0.3)] flex items-center justify-center p-2.5 mb-3.5 animate-pulse">
+          <img src={nimCubeLogo} alt="NIM Router" className="w-9 h-9 object-contain" />
+        </div>
+        <div className="text-xs font-mono text-slate-500 dark:text-slate-400 flex items-center gap-2">
+          <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#da7756]" />
+          <span>Verifying gateway access...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <LoginPage
+        onLoginSuccess={() => {
+          setIsAuthenticated(true);
+          showToast('Welcome back! Dashboard unlocked.', 'success');
+        }}
+        theme={theme}
+        onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen lg:h-screen lg:max-h-screen lg:overflow-hidden flex flex-col justify-between py-2 px-2 sm:px-6 bg-[#eef2f7] dark:bg-[#0f1117] text-slate-800 dark:text-slate-100 transition-colors duration-300">
@@ -178,8 +250,8 @@ export default function App() {
         </div>
       )}
 
-      <header className="w-full max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 mb-1.5 px-2 shrink-0">
-        <div className="flex items-center gap-2.5">
+      <header className="w-full max-w-7xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 mb-1.5 px-2 shrink-0">
+        <div className="flex items-center gap-2.5 w-full sm:w-auto justify-start">
           <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#da7756]/20 to-[#da7756]/5 border border-[#da7756]/30 shadow-[0_0_12px_rgba(218,119,86,0.25)] flex items-center justify-center p-1 shrink-0">
             <img src={nimCubeLogo} alt="NIM Router" className="w-6 h-6 object-contain select-none" />
           </div>
@@ -259,6 +331,14 @@ export default function App() {
             title="Toggle Light / Dark Mode"
           >
             {theme === 'dark' ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-indigo-600" />}
+          </button>
+
+          <button
+            onClick={handleLogout}
+            className="p-1.5 rounded-xl bg-white dark:bg-white/5 text-slate-700 dark:text-slate-300 hover:bg-rose-500/15 hover:text-rose-500 dark:hover:bg-rose-500/15 dark:hover:text-rose-400 transition ml-0.5 neu-button border border-black/5 dark:border-transparent"
+            title="Lock Dashboard / Sign Out"
+          >
+            <Lock className="w-3.5 h-3.5 text-rose-500" />
           </button>
         </div>
       </header>

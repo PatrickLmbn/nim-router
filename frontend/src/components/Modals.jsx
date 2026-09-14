@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { 
-  X, Check, Search, Key, Sliders, Terminal, Shield, RefreshCw, Plus, Trash2, Zap, Server, Activity, Copy, CheckCircle, Eye, EyeOff, Edit2, Wrench, Code, Brain, MessageSquare, Layers, Sparkles
+import {
+  X, Check, Search, Key, Sliders, Terminal, Shield, RefreshCw, Plus, Trash2, Zap, Server, Activity, Copy, CheckCircle, Eye, EyeOff, Edit2, Wrench, Code, Brain, MessageSquare, Layers, Sparkles, Lock, KeyRound
 } from 'lucide-react';
 import { ModelIcon, ProviderIcon, resolveProvider } from './ModelIcon';
+import { authFetch } from '../api';
 
 export { ModelIcon, ProviderIcon, resolveProvider };
 
@@ -15,7 +16,7 @@ export function ModalWrapper({ title, icon: Icon, onClose, children, maxWidth = 
             {Icon && <div className="p-2 rounded-xl bg-black/5 dark:bg-white/5 text-[#ff6b35]"><Icon className="w-5 h-5" /></div>}
             <h2 className="text-sm font-semibold tracking-wide uppercase">{title}</h2>
           </div>
-          <button 
+          <button
             onClick={onClose}
             className="p-2 rounded-xl text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 transition"
           >
@@ -61,11 +62,10 @@ export function ModelSelectorModal({ stats, onClose, onSelectModel }) {
             <div
               key={cat.id}
               onClick={() => { onSelectModel(cat.id); onClose(); }}
-              className={`p-3 rounded-2xl cursor-pointer border transition ${
-                stats?.primary_model === cat.id 
-                  ? 'bg-[#ff6b35]/15 border-[#ff6b35]/50 text-[#ff6b35] dark:text-white font-semibold' 
-                  : 'bg-slate-100 dark:bg-white/5 border-black/5 dark:border-white/5 hover:border-black/20 dark:hover:border-white/20'
-              }`}
+              className={`p-3 rounded-2xl cursor-pointer border transition ${stats?.primary_model === cat.id
+                ? 'bg-[#ff6b35]/15 border-[#ff6b35]/50 text-[#ff6b35] dark:text-white font-semibold'
+                : 'bg-slate-100 dark:bg-white/5 border-black/5 dark:border-white/5 hover:border-black/20 dark:hover:border-white/20'
+                }`}
             >
               <div className="flex items-center justify-between mb-1">
                 <span className="text-xs font-semibold">{cat.name}</span>
@@ -98,11 +98,10 @@ export function ModelSelectorModal({ stats, onClose, onSelectModel }) {
               <button
                 key={p}
                 onClick={() => setProviderFilter(p)}
-                className={`px-2.5 py-1 text-[11px] font-medium rounded-lg transition whitespace-nowrap ${
-                  providerFilter === p 
-                    ? 'bg-[#ff6b35] text-white' 
-                    : 'bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                }`}
+                className={`px-2.5 py-1 text-[11px] font-medium rounded-lg transition whitespace-nowrap ${providerFilter === p
+                  ? 'bg-[#ff6b35] text-white'
+                  : 'bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
               >
                 {p}
               </button>
@@ -115,11 +114,10 @@ export function ModelSelectorModal({ stats, onClose, onSelectModel }) {
             <div
               key={m.id}
               onClick={() => { onSelectModel(m.id); onClose(); }}
-              className={`flex items-center justify-between p-2.5 rounded-xl cursor-pointer border transition ${
-                stats?.primary_model === m.id
-                  ? 'bg-[#ff6b35]/15 border-[#ff6b35]/50 text-slate-900 dark:text-white'
-                  : 'bg-slate-50 dark:bg-white/[0.03] border-black/5 dark:border-white/5 hover:border-black/20 dark:hover:border-white/20'
-              }`}
+              className={`flex items-center justify-between p-2.5 rounded-xl cursor-pointer border transition ${stats?.primary_model === m.id
+                ? 'bg-[#ff6b35]/15 border-[#ff6b35]/50 text-slate-900 dark:text-white'
+                : 'bg-slate-50 dark:bg-white/[0.03] border-black/5 dark:border-white/5 hover:border-black/20 dark:hover:border-white/20'
+                }`}
             >
               <div className="flex items-center gap-2 overflow-hidden">
                 <span className="w-1.5 h-1.5 rounded-full bg-[#00f5a0] shrink-0" />
@@ -165,7 +163,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
 
   const fetchKeys = async () => {
     try {
-      const res = await fetch('/api/keys');
+      const res = await authFetch('/api/keys');
       const data = await res.json();
       setKeysData(data.providers || []);
     } catch (e) {
@@ -190,7 +188,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
       if (index !== null) {
         payload.index = index;
       }
-      const res = await fetch('/api/keys', {
+      const res = await authFetch('/api/keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -237,25 +235,23 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                 borderColor: isSelected ? meta.color : undefined,
                 boxShadow: isSelected ? `0 0 12px ${meta.color}33` : undefined
               }}
-              className={`p-2.5 rounded-2xl text-center transition-all flex flex-col items-center justify-center gap-1.5 border neu-button ${
-                isSelected 
-                  ? 'bg-black/5 dark:bg-white/10 text-slate-900 dark:text-white font-semibold' 
-                  : 'bg-slate-100 dark:bg-white/5 border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-              }`}
+              className={`p-2.5 rounded-2xl text-center transition-all flex flex-col items-center justify-center gap-1.5 border neu-button ${isSelected
+                ? 'bg-black/5 dark:bg-white/10 text-slate-900 dark:text-white font-semibold'
+                : 'bg-slate-100 dark:bg-white/5 border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
             >
-              <div 
+              <div
                 className="h-8 w-full max-w-[84px] px-1.5 rounded-xl flex items-center justify-center transition-transform group-hover:scale-105"
                 style={{ backgroundColor: `${meta.color}18` }}
               >
                 <ProviderIcon provider={p.id} className="h-4 w-auto max-w-[68px] max-h-4" />
               </div>
               <div className="text-[11px] font-semibold tracking-tight">{meta.short}</div>
-              <span 
-                className={`text-[9px] px-1.5 py-0.5 rounded-full font-mono ${
-                  hasKeys
-                    ? 'bg-black/5 dark:bg-white/10 text-slate-700 dark:text-slate-300 font-semibold'
-                    : 'text-slate-400 dark:text-slate-500'
-                }`}
+              <span
+                className={`text-[9px] px-1.5 py-0.5 rounded-full font-mono ${hasKeys
+                  ? 'bg-black/5 dark:bg-white/10 text-slate-700 dark:text-slate-300 font-semibold'
+                  : 'text-slate-400 dark:text-slate-500'
+                  }`}
               >
                 {hasKeys ? `${p.count} key${p.count > 1 ? 's' : ''}` : 'No key'}
               </span>
@@ -268,7 +264,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
         <div className="p-4 sm:p-5 rounded-3xl bg-slate-100 dark:bg-black/40 border border-black/10 dark:border-white/10 space-y-4 mt-2">
           <div className="flex items-center justify-between gap-2 border-b border-black/5 dark:border-white/5 pb-3">
             <div className="flex items-center gap-2.5">
-              <div 
+              <div
                 className="h-9 px-3 rounded-xl flex items-center justify-center"
                 style={{ backgroundColor: `${currentMeta.color}22` }}
               >
@@ -300,13 +296,12 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                 {configuredKeys.map((k, i) => {
                   const isEditingThis = editingIndex === i;
                   return (
-                    <div 
-                      key={i} 
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-mono shadow-sm transition ${
-                        isEditingThis
-                          ? 'bg-[#ff6b35]/15 border-[#ff6b35]/60 text-slate-900 dark:text-white font-semibold'
-                          : 'bg-white dark:bg-white/5 border-black/5 dark:border-white/10 text-slate-800 dark:text-slate-200'
-                      }`}
+                    <div
+                      key={i}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-mono shadow-sm transition ${isEditingThis
+                        ? 'bg-[#ff6b35]/15 border-[#ff6b35]/60 text-slate-900 dark:text-white font-semibold'
+                        : 'bg-white dark:bg-white/5 border-black/5 dark:border-white/10 text-slate-800 dark:text-slate-200'
+                        }`}
                     >
                       <Key className={`w-3 h-3 ${isEditingThis ? 'text-[#ff6b35]' : 'text-slate-400'}`} />
                       <span>{k}</span>
@@ -316,9 +311,8 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                           setEditingIndex(isEditingThis ? null : i);
                           setKeyInput('');
                         }}
-                        className={`ml-1 p-0.5 rounded transition ${
-                          isEditingThis ? 'text-[#ff6b35]' : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
-                        }`}
+                        className={`ml-1 p-0.5 rounded transition ${isEditingThis ? 'text-[#ff6b35]' : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                          }`}
                         title={isEditingThis ? "Cancel update" : "Update this key"}
                       >
                         <Edit2 className="w-3 h-3" />
@@ -345,8 +339,8 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
           <div className="space-y-2 pt-1 border-t border-black/5 dark:border-white/5">
             <div className="flex items-center justify-between">
               <div className="text-[10px] uppercase text-slate-500 dark:text-slate-400 font-bold tracking-wider">
-                {editingIndex !== null 
-                  ? `Updating Key #${editingIndex + 1} (${configuredKeys[editingIndex] || ''})` 
+                {editingIndex !== null
+                  ? `Updating Key #${editingIndex + 1} (${configuredKeys[editingIndex] || ''})`
                   : (configuredKeys.length > 0 ? 'Add or Update API Key' : 'Enter API Key')}
               </div>
               {editingIndex !== null && (
@@ -457,10 +451,17 @@ export function SettingsModal({ stats, onClose, onSettingsUpdated }) {
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState('');
 
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPw, setShowPw] = useState(false);
+  const [changingPw, setChangingPw] = useState(false);
+  const [pwStatus, setPwStatus] = useState(null);
+
   const handleSave = async () => {
     setSaving(true);
     try {
-      const res = await fetch('/api/settings', {
+      const res = await authFetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -480,6 +481,49 @@ export function SettingsModal({ stats, onClose, onSettingsUpdated }) {
     }
   };
 
+  const handleChangePassword = async (e) => {
+    if (e) e.preventDefault();
+    if (!currentPassword) {
+      setPwStatus({ type: 'error', message: 'Please enter your current password.' });
+      return;
+    }
+    if (!newPassword || newPassword.length < 4) {
+      setPwStatus({ type: 'error', message: 'New password must be at least 4 characters long.' });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPwStatus({ type: 'error', message: 'New passwords do not match.' });
+      return;
+    }
+
+    setChangingPw(true);
+    setPwStatus(null);
+    try {
+      const res = await authFetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password: newPassword
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setPwStatus({ type: 'success', message: 'Password updated successfully!' });
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        setTimeout(() => setPwStatus(null), 3500);
+      } else {
+        setPwStatus({ type: 'error', message: data.detail || 'Failed to update password.' });
+      }
+    } catch (err) {
+      setPwStatus({ type: 'error', message: 'Error communicating with server.' });
+    } finally {
+      setChangingPw(false);
+    }
+  };
+
   return (
     <ModalWrapper title="Routing & Engine Settings" icon={Sliders} onClose={onClose}>
       <div className="space-y-2">
@@ -487,22 +531,20 @@ export function SettingsModal({ stats, onClose, onSettingsUpdated }) {
         <div className="grid grid-cols-2 gap-3">
           <div
             onClick={() => setStrategy('fallback')}
-            className={`p-3.5 rounded-2xl cursor-pointer border transition ${
-              strategy === 'fallback' 
-                ? 'bg-[#00d2ff]/15 border-[#00d2ff]/50 text-slate-900 dark:text-white font-semibold' 
-                : 'bg-slate-100 dark:bg-white/5 border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400 hover:border-black/20 dark:hover:border-white/20'
-            }`}
+            className={`p-3.5 rounded-2xl cursor-pointer border transition ${strategy === 'fallback'
+              ? 'bg-[#00d2ff]/15 border-[#00d2ff]/50 text-slate-900 dark:text-white font-semibold'
+              : 'bg-slate-100 dark:bg-white/5 border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400 hover:border-black/20 dark:hover:border-white/20'
+              }`}
           >
             <div className="text-xs font-semibold mb-1">Fallback Mode (Recommended)</div>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">Strict latency & reliability order. Cascades to next candidate on error.</p>
           </div>
           <div
             onClick={() => setStrategy('round_robin')}
-            className={`p-3.5 rounded-2xl cursor-pointer border transition ${
-              strategy === 'round_robin' 
-                ? 'bg-[#00d2ff]/15 border-[#00d2ff]/50 text-slate-900 dark:text-white font-semibold' 
-                : 'bg-slate-100 dark:bg-white/5 border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400 hover:border-black/20 dark:hover:border-white/20'
-            }`}
+            className={`p-3.5 rounded-2xl cursor-pointer border transition ${strategy === 'round_robin'
+              ? 'bg-[#00d2ff]/15 border-[#00d2ff]/50 text-slate-900 dark:text-white font-semibold'
+              : 'bg-slate-100 dark:bg-white/5 border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400 hover:border-black/20 dark:hover:border-white/20'
+              }`}
           >
             <div className="text-xs font-semibold mb-1">Round Robin Mode</div>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">Rotates requests evenly across the primary pool of healthy endpoints.</p>
@@ -527,15 +569,101 @@ export function SettingsModal({ stats, onClose, onSettingsUpdated }) {
         <p className="text-[11px] text-slate-500 dark:text-slate-400">Restricts active pool to endpoints responding in under {maxLatency} seconds.</p>
       </div>
 
-      <div className="flex items-center justify-between pt-4 border-t border-black/10 dark:border-white/10">
+      <div className="flex items-center justify-between pt-3 border-t border-black/10 dark:border-white/10">
         {savedMsg ? <span className="text-xs text-[#00f5a0]">{savedMsg}</span> : <div />}
         <button
           onClick={handleSave}
           disabled={saving}
           className="px-5 py-2 rounded-xl bg-[#00d2ff] hover:bg-[#3a7bd5] text-slate-900 font-bold text-xs transition neu-button"
         >
-          {saving ? 'Saving...' : 'Apply Settings'}
+          {saving ? 'Saving...' : 'Apply Engine Settings'}
         </button>
+      </div>
+
+      {/* Security & Access Password Section */}
+      <div className="space-y-3 pt-4 border-t border-black/10 dark:border-white/10">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Lock className="w-4 h-4 text-[#da7756]" />
+            <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
+              Dashboard Access Password
+            </label>
+          </div>
+        </div>
+
+        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+          Change the password required to access this dashboard and manage routing configurations.
+        </p>
+
+        {pwStatus && (
+          <div
+            className={`p-2.5 rounded-xl text-xs flex items-center gap-2 ${pwStatus.type === 'success'
+              ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
+              : 'bg-rose-500/15 border border-rose-500/30 text-rose-600 dark:text-rose-400'
+              }`}
+          >
+            {pwStatus.type === 'success' ? (
+              <Check className="w-3.5 h-3.5 shrink-0" />
+            ) : (
+              <X className="w-3.5 h-3.5 shrink-0" />
+            )}
+            <span>{pwStatus.message}</span>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <div>
+            <label className="text-[10px] text-slate-400 mb-1 block">Current Password</label>
+            <input
+              type={showPw ? 'text' : 'password'}
+              placeholder="Current password..."
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              className="w-full px-3 py-2 text-xs font-mono rounded-xl bg-slate-100 dark:bg-black/50 border border-black/10 dark:border-white/10 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-[#da7756]"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] text-slate-400 mb-1 block">New Password</label>
+            <input
+              type={showPw ? 'text' : 'password'}
+              placeholder="New password (min 4 chars)..."
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full px-3 py-2 text-xs font-mono rounded-xl bg-slate-100 dark:bg-black/50 border border-black/10 dark:border-white/10 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-[#da7756]"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] text-slate-400 mb-1 block">Confirm New</label>
+            <input
+              type={showPw ? 'text' : 'password'}
+              placeholder="Confirm new password..."
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="w-full px-3 py-2 text-xs font-mono rounded-xl bg-slate-100 dark:bg-black/50 border border-black/10 dark:border-white/10 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-[#da7756]"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between pt-1">
+          <button
+            type="button"
+            onClick={() => setShowPw(!showPw)}
+            className="text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition flex items-center gap-1"
+          >
+            {showPw ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+            <span>{showPw ? 'Hide passwords' : 'Show passwords'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleChangePassword}
+            disabled={changingPw || !currentPassword || !newPassword}
+            className="px-3.5 py-1.5 rounded-xl bg-[#da7756] hover:bg-[#ff8c42] disabled:opacity-40 text-white text-xs font-semibold transition neu-button flex items-center gap-1.5"
+          >
+            {changingPw ? <RefreshCw className="w-3 h-3 animate-spin" /> : <KeyRound className="w-3 h-3" />}
+            <span>Change Password</span>
+          </button>
+        </div>
       </div>
     </ModalWrapper>
   );
@@ -567,12 +695,11 @@ export function FullLogsModal({ logs, onClose, onClearLogs }) {
         {filtered.map((log, i) => (
           <div key={i} className="flex gap-2 leading-relaxed">
             <span className="text-slate-500">{log.timestamp}</span>
-            <span className={`font-semibold ${
-              log.level === 'INFO' ? 'text-[#00d2ff]' :
+            <span className={`font-semibold ${log.level === 'INFO' ? 'text-[#00d2ff]' :
               log.level === 'SUCCESS' ? 'text-[#00f5a0]' :
-              log.level === 'WARNING' ? 'text-[#ffb703]' :
-              log.level === 'ERROR' ? 'text-[#ff4d6d]' : 'text-slate-400'
-            }`}>
+                log.level === 'WARNING' ? 'text-[#ffb703]' :
+                  log.level === 'ERROR' ? 'text-[#ff4d6d]' : 'text-slate-400'
+              }`}>
               [{log.level}]
             </span>
             <span className="text-slate-200">{log.message}</span>
@@ -585,7 +712,7 @@ export function FullLogsModal({ logs, onClose, onClearLogs }) {
 
 const STRATEGY_LABELS = {
   round_robin: { label: 'Round Robin', color: 'text-[#00d2ff]', bg: 'bg-[#00d2ff]/15 border-[#00d2ff]/30' },
-  fallback:    { label: 'Fallback',    color: 'text-[#ff6b35]', bg: 'bg-[#ff6b35]/15 border-[#ff6b35]/30' },
+  fallback: { label: 'Fallback', color: 'text-[#ff6b35]', bg: 'bg-[#ff6b35]/15 border-[#ff6b35]/30' },
 };
 
 function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThreshold = 3.0 }) {
@@ -656,7 +783,7 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
   };
 
   const removeModel = (id) => setModels(prev => prev.filter(m => m !== id));
-  const moveUp = (i) => { if (i === 0) return; const a = [...models]; [a[i-1], a[i]] = [a[i], a[i-1]]; setModels(a); };
+  const moveUp = (i) => { if (i === 0) return; const a = [...models];[a[i - 1], a[i]] = [a[i], a[i - 1]]; setModels(a); };
 
   const handleSave = async () => {
     const finalName = isNew ? slugify(name) : combo.name;
@@ -666,7 +793,7 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
     try {
       const url = isNew ? '/api/combos' : `/api/combos/${combo.name}`;
       const method = isNew ? 'POST' : 'PUT';
-      const res = await fetch(url, {
+      const res = await authFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: finalName, strategy, models }),
@@ -690,7 +817,7 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
     setSaving(true);
     setError('');
     try {
-      const res = await fetch(`/api/combos/${combo.name}`, { method: 'DELETE' });
+      const res = await authFetch(`/api/combos/${combo.name}`, { method: 'DELETE' });
       if (!res.ok) {
         const err = await res.json();
         setError(err.detail || 'Failed to delete combo.');
@@ -810,17 +937,15 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
                   setTaskFilter(tf.id);
                   setFocused(true);
                 }}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[10px] font-semibold border transition whitespace-nowrap shrink-0 ${
-                  active
-                    ? 'bg-[#00d2ff]/15 border-[#00d2ff]/60 text-[#00d2ff] shadow-[0_0_10px_rgba(0,210,255,0.2)]'
-                    : 'bg-slate-100 dark:bg-white/[0.04] border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:border-black/20 dark:hover:border-white/20'
-                }`}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[10px] font-semibold border transition whitespace-nowrap shrink-0 ${active
+                  ? 'bg-[#00d2ff]/15 border-[#00d2ff]/60 text-[#00d2ff] shadow-[0_0_10px_rgba(0,210,255,0.2)]'
+                  : 'bg-slate-100 dark:bg-white/[0.04] border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:border-black/20 dark:hover:border-white/20'
+                  }`}
               >
                 {Icon && <Icon className="w-3 h-3" />}
                 <span>{tf.label}</span>
-                <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-mono ${
-                  active ? 'bg-[#00d2ff]/25 text-[#00d2ff]' : 'bg-black/5 dark:bg-white/5 text-slate-400'
-                }`}>
+                <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-mono ${active ? 'bg-[#00d2ff]/25 text-[#00d2ff]' : 'bg-black/5 dark:bg-white/5 text-slate-400'
+                  }`}>
                   {count}
                 </span>
               </button>
@@ -900,9 +1025,9 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
 
       <div className="flex items-center justify-between pt-2 border-t border-black/10 dark:border-white/10">
         {!isNew ? (
-          <button 
-            type="button" 
-            onClick={handleDeleteCombo} 
+          <button
+            type="button"
+            onClick={handleDeleteCombo}
             disabled={saving}
             className="px-3 py-1.5 rounded-xl text-xs font-semibold text-rose-500 hover:bg-rose-500/10 transition disabled:opacity-50 flex items-center gap-1.5"
           >
@@ -911,16 +1036,16 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
           </button>
         ) : <div />}
         <div className="flex items-center gap-2">
-          <button 
-            type="button" 
-            onClick={onCancel} 
+          <button
+            type="button"
+            onClick={onCancel}
             className="px-4 py-1.5 rounded-xl text-xs text-slate-500 hover:text-slate-800 dark:hover:text-white transition"
           >
             Cancel
           </button>
-          <button 
-            type="button" 
-            onClick={handleSave} 
+          <button
+            type="button"
+            onClick={handleSave}
             disabled={saving}
             className="px-5 py-1.5 rounded-xl bg-[#00d2ff] hover:bg-[#3a7bd5] text-slate-900 font-bold text-xs transition disabled:opacity-50 shadow-md"
           >
@@ -937,22 +1062,22 @@ export function ComboEditorModal({ combo, isNew, stats, onClose, onCombosUpdated
   const maxLatencyThreshold = stats?.max_latency_threshold || 3.0;
 
   return (
-    <ModalWrapper 
-      title={isNew ? "Create Routing Combo" : `Combo Settings: ${combo?.name || ''}`} 
-      icon={isNew ? Plus : Sliders} 
+    <ModalWrapper
+      title={isNew ? "Create Routing Combo" : `Combo Settings: ${combo?.name || ''}`}
+      icon={isNew ? Plus : Sliders}
       onClose={onClose}
       maxWidth="max-w-3xl sm:max-w-[820px]"
     >
-      <ComboEditor 
-        combo={combo} 
-        isNew={isNew} 
-        allModels={allModels} 
-        maxLatencyThreshold={maxLatencyThreshold} 
-        onSave={() => { 
-          if (onCombosUpdated) onCombosUpdated(); 
-          onClose(); 
-        }} 
-        onCancel={onClose} 
+      <ComboEditor
+        combo={combo}
+        isNew={isNew}
+        allModels={allModels}
+        maxLatencyThreshold={maxLatencyThreshold}
+        onSave={() => {
+          if (onCombosUpdated) onCombosUpdated();
+          onClose();
+        }}
+        onCancel={onClose}
       />
     </ModalWrapper>
   );
@@ -968,7 +1093,7 @@ export function CombosModal({ stats, onClose, onCombosUpdated }) {
 
   const refresh = async () => {
     try {
-      const res = await fetch('/api/combos');
+      const res = await authFetch('/api/combos');
       const data = await res.json();
       setCombos(data.combos || []);
       if (onCombosUpdated) onCombosUpdated();
@@ -979,7 +1104,7 @@ export function CombosModal({ stats, onClose, onCombosUpdated }) {
 
   const handleDelete = async (name) => {
     try {
-      await fetch(`/api/combos/${name}`, { method: 'DELETE' });
+      await authFetch(`/api/combos/${name}`, { method: 'DELETE' });
       setDeleting(null);
       await refresh();
     } catch (e) {
@@ -1046,15 +1171,14 @@ export function CombosModal({ stats, onClose, onCombosUpdated }) {
                     return (
                       <span
                         key={m}
-                        className={`text-[9px] font-mono px-1.5 py-0.5 rounded flex items-center gap-1 ${
-                          isUnavail
-                            ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40 font-semibold'
-                            : isHighLat
+                        className={`text-[9px] font-mono px-1.5 py-0.5 rounded flex items-center gap-1 ${isUnavail
+                          ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40 font-semibold'
+                          : isHighLat
                             ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40 font-semibold'
                             : i === 0 && c.strategy === 'fallback'
-                            ? 'bg-[#ff6b35]/15 text-[#ff6b35]'
-                            : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-slate-400'
-                        }`}
+                              ? 'bg-[#ff6b35]/15 text-[#ff6b35]'
+                              : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-slate-400'
+                          }`}
                         title={isUnavail ? 'Unavailable after background probing' : isHighLat ? `High latency (>${maxLatencyThreshold}s)` : m}
                       >
                         {isUnavail && <span className="text-rose-400 font-black">!</span>}
