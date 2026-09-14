@@ -11,13 +11,15 @@
 
 # Universal Multi-Provider Free Model Router
 
-A lightweight, OpenAI-compatible proxy router that aggregates, load-balances, and fails over across **NVIDIA NIM Free Tier**, **Groq LPU Free Tier**, **Cerebras Wafer-Scale Free Tier**, **OpenRouter Free Tier**, and **OpenCode API**. It turns free tier AI endpoints into a single, high-availability, ultra-low latency API endpoint with dynamic latency ranking, account key rotation, and zero-downtime cross-provider failover.
+A lightweight, high-performance, OpenAI- and Ollama-compatible proxy router that aggregates, load-balances, and fails over across **NVIDIA NIM Free Tier**, **Groq LPU Free Tier**, **Cerebras Wafer-Scale Free Tier**, **OpenRouter Free Tier**, **OpenCode API**, and **B.AI Free Tier**.
+
+It turns free-tier AI endpoints into a single, high-availability, ultra-low latency API endpoint (`http://localhost:11435/v1`) with dynamic latency ranking, TPS speed benchmarking, Exponential Moving Average (EMA) reliability scoring, account key rotation, custom model combos, and zero-downtime cross-provider failover.
 
 ---
 
 ## Quick Start (Recommended Installation)
 
-Run the single-line command for your operating system / terminal:
+Run the single-line command for your operating system:
 
 ### **Linux / macOS / Git Bash / WSL (Recommended)**:
 ```bash
@@ -34,90 +36,124 @@ git clone https://github.com/PatrickLmbn/nim-router.git && cd nim-router && inst
 git clone https://github.com/PatrickLmbn/nim-router.git; cd nim-router; .\install.bat
 ```
 
-> **Note**: The installer interactively prompts for your **NVIDIA API Key**, **Groq API Key**, **Cerebras API Key**, **OpenRouter API Key**, and **OpenCode API Key**. Use `nim keys` anytime to add multiple keys per provider for key rotation!
+> **Tip**: The installer interactively prompts for your provider credentials. Use `nim keys` or the built-in Web UI anytime to add multiple keys per provider for automatic key rotation!
 
 ---
 
-## Features
+## Key Features
 
-- **Universal Free Multi-Provider Support**:
-  - **NVIDIA NIM Free Tier** (`NVIDIA_API_KEYS` / `NVIDIA_API_KEY`)
-  - **Groq LPU Free Tier** (`GROQ_API_KEYS` / `GROQ_API_KEY` - 500+ tokens/sec)
-  - **Cerebras Wafer-Scale Free Tier** (`CEREBRAS_API_KEYS` / `CEREBRAS_API_KEY` - 1800+ tokens/sec)
-  - **OpenRouter Free Tier** (`OPENROUTER_API_KEY` - automatically pools all `:free` models)
-  - **OpenCode API** (`OPENCODE_API_KEY`)
-- **Purpose-Based Virtual Category Models**: Select specialized virtual model categories directly in your agent or harness:
-  - **`nim-free`** (Universal lowest-latency auto-balancer across all free models)
-  - **`nim-coding`** (Prioritizes code-specialized models: Codestral, DeepSeek Coder, StarCoder, Qwen Coder)
-  - **`nim-reasoning`** (Prioritizes complex reasoning & math models: DeepSeek R1, QwQ, Reasoning models)
-  - **`nim-vision`** (Prioritizes multimodal / image-capable models)
-  - **`nim-moe`** (Prioritizes Mixture-of-Experts architectures)
-  - **`nim-chat`** (Prioritizes fast conversational & instruction models)
-- **Zero-Downtime Resilience & Routing Rules**:
-  - **Payload-Driven Vision Override**: Image payloads (`image_url`, base64) automatically override model selection to vision-capable endpoints, preventing 400/500 errors on text models.
-  - **Zero-Downtime Cascading Fallback**: If a targeted model or category model returns `400`, `404`, `429`, or `500`, the router automatically cascades through the remaining healthy models in the `nim-free` pool with zero downtime.
-  - **Maximum Latency Threshold Filtering (`MAX_LATENCY_THRESHOLD=3.0`s)**: Restricts active pool to endpoints responding in under 3.0 seconds, automatically filtering out congested/overloaded server endpoints.
-  - **Dynamic EMA Reliability Scoring (0.05–1.0)**: Tracks real-time model stability over time using Exponential Moving Average (EMA) scoring to downweight unstable endpoints smoothly.
-  - **Tokens-Per-Second (TPS) Speed Ranking**: Measures actual text generation throughput (tokens/second) to rank fast-generating endpoints first.
-  - **Multi-Account API Key Round-Robin (`nim keys`)**: Interactively configure and rotate requests across multiple API keys per provider to multiply rate limits.
-  - **Large Context Window Matching**: Automatically detects large prompts (>16,000 tokens) and isolates the pool to 128k+ context models.
-  - **Tool-Calling Compatibility**: Isolates tool-enabled requests to models supporting function calling.
-  - **Real-Time Token Streaming (SSE)**: Full Server-Sent Events support for streaming responses in interactive applications and AI coding assistants.
+### 1. Universal Multi-Provider Aggregation
+- **NVIDIA NIM Free Tier** (`NVIDIA_API_KEYS` / `NVIDIA_API_KEY`)
+- **Groq LPU Free Tier** (`GROQ_API_KEYS` / `GROQ_API_KEY` - 500+ tokens/sec)
+- **Cerebras Wafer-Scale Free Tier** (`CEREBRAS_API_KEYS` / `CEREBRAS_API_KEY` - 1800+ tokens/sec)
+- **OpenRouter Free Tier** (`OPENROUTER_API_KEY` - auto-pools all `:free` models)
+- **OpenCode API** (`OPENCODE_API_KEY`)
+- **B.AI Free Tier** (`BAI_API_KEY` - GLM, Qwen, and Hunyuan endpoints)
+
+### 2. Purpose-Based Virtual Category Models
+Target high-level capabilities in your agent or application without hardcoding specific model identifiers:
+- **`nim-auto`** / **`nim-free`**: Universal lowest-latency auto-balancer across all healthy endpoints in the pool.
+- **`nim-coding`**: Prioritizes code-specialized models (Codestral, DeepSeek Coder, StarCoder, Qwen Coder, etc.).
+- **`nim-reasoning`**: Prioritizes complex reasoning, math, and logic models (DeepSeek R1, QwQ, etc.).
+- **`nim-tools`**: Isolates pool to models verified for function/tool calling (Llama 3.1/3.2/3.3, Qwen 2.5, Mistral, Hermes, etc.).
+- **`nim-vision`**: Prioritizes multimodal and image-capable models (Llama 3.2 Vision, Pixtral, etc.).
+- **`nim-moe`**: Prioritizes Mixture-of-Experts architectures (Mixtral, DeepSeek V3/V4, DBRX, etc.).
+- **`nim-chat`**: Prioritizes fast instruction and conversational models.
+
+### 3. Custom Model Combos
+Define custom, named multi-model groups with tailored routing policies:
+- Group models by project, team, or speed requirements (e.g. `fast-coder`, `heavy-reasoning`).
+- Choose between **`fallback`** (strict priority order with error failover) or **`round_robin`** (load distribution).
+- Seamless integration: specify `"model": "your-combo-name"` in any standard OpenAI request.
+- Automatic safety net: if all models in a combo fail or rate-limit, the router automatically cascades back to the healthy `nim-auto` pool.
+
+### 4. Zero-Downtime Resilience & Routing Intelligence
+- **Payload-Driven Vision Guard**: Inspects incoming messages for image URLs or base64 attachments; automatically routes to vision-capable endpoints to prevent 400/500 errors on text models.
+- **Cascading Fallback**: Catches `400`, `402`, `404`, `429`, `500`, `502`, and `503` errors and instantly retries the next best candidate endpoint with sub-millisecond overhead.
+- **Per-Key Rotation & Cooldowns**: Cycles requests across multiple comma-separated keys per provider. Parses `Retry-After` headers and applies exponential backoff on rate-limited keys while keeping healthy keys active.
+- **Model Family Fallback**: Automatically identifies model families (Qwen, Llama, Nemotron, DeepSeek, Mistral, Gemma, Phi, etc.) and prioritizes fallback to same-family variants.
+- **Dynamic EMA Reliability Scoring (0.05–1.0)**: Uses Exponential Moving Averages to dynamically score endpoint stability and downweight unstable models.
+- **Throughput (TPS) & Latency Ranking**: Combines live latency benchmarks and tokens-per-second throughput to prioritize the fastest endpoints.
+- **Large Context Window Isolation**: Detects prompts exceeding 16,000 tokens and routes exclusively to models supporting large context windows (128k+).
+- **Maximum Latency Filtering (`MAX_LATENCY_THRESHOLD=3.0s`)**: Excludes overloaded or congested endpoints from the active routing pool.
+
+### 5. Built-in Web Dashboard (`http://localhost:11435`)
+A modern, dark/light Neumorphic dashboard served directly by the router:
+- **Featured Route & Live Test**: Test your primary model with real-time latency and TPS calculation.
+- **Background Health Prober Dial**: Visual countdown to the next automated probe cycle with active provider badges.
+- **Combos Manager**: Create, search, filter, edit, and delete named routing combos with health & latency alerts.
+- **Live Server Logs**: Real-time log streaming powered by Server-Sent Events (SSE).
+- **Live Key & Settings Management**: Add/remove/clear keys and tune routing parameters without restarting the server.
+
+### 6. Dual API Protocol Compatibility
+- **OpenAI Compatible**: `/v1/chat/completions`, `/v1/models`, `/chat/completions`, `/models`
+- **Ollama Compatible**: `/api/tags`, `/api/show`, `/api/ps`, `/api/version` (enables seamless use with Open WebUI and Ollama-based harnesses)
 
 ---
 
-## Core Architecture & Routing Rules
+## Core Architecture & Request Flow
 
 ```text
-Client Request (e.g. model: "nim-coding", "nim-reasoning", or "nim-free")
-        │
-        ▼
+Client Request (e.g. model: "nim-coding", "my-combo", or "nim-auto")
+         │
+         ▼
 [Payload Inspection & Vision Guard]
    ├── Image/Multimodal Payload? ──► Override Target to Vision-Capable Endpoints
-   └── Text Payload ───────────────► Continue to Purpose & Category Matching
+   └── Text Payload ───────────────► Continue to Target & Category Matching
                                        │
                                        ▼
-[Purpose Category & Target Model Filter]
-   ├── Purpose Category ("nim-coding") ─► Prioritize Category Models First
-   ├── Specific Model Requested ────────► Attempt Targeted Model First
-   └── Universal ("nim-free") ──────────► Rank All Healthy Models Across Providers
+[Target Model, Combo, or Category Filter]
+   ├── Named Model Combo? ─────────► Route Through Combo Models (Fallback or Round-Robin)
+   ├── Purpose Category ("nim-tools") ─► Prioritize Filtered Category Models First
+   ├── Specific Model Requested ───► Attempt Requested Model (or Same-Family Fallbacks)
+   └── Universal ("nim-auto") ─────► Rank All Healthy Models Across Providers
                                        │
                                        ▼
-                       [Route to Highest Ranked Endpoint]
-               (Combined Latency + TPS Speed + EMA Reliability + <3.0s Threshold)
+                     [Score & Rank Active Candidate Pool]
+             (Latency + TPS Speed + EMA Reliability + Concurrency Limits)
                                        │
-                                       ├── 200 OK ──► Return Response / Stream
-                                       └── 400/429/5xx ──► [Cascading Fallback to Pool]
+                                       ▼
+                     [Route to Highest Ranked Endpoint]
+           (Per-Provider Key Rotation with Per-Key Cooldown Tracking)
+                                       │
+                                       ├── 200 OK ──► Return Response / SSE Stream
+                                       └── 400/429/5xx ──► [Cascading Fallback to Next Candidate]
 ```
 
-### **Summary of Routing Rules:**
-1. **Vision Override Rule**: When an image or multimodal payload is detected in the prompt, `nim-router` automatically isolates candidates to vision-capable endpoints first, preventing unsupported payload errors on text-only models.
-2. **Category Prioritization Rule**: Selecting a category (`nim-coding`, `nim-reasoning`, `nim-vision`, `nim-moe`, `nim-chat`) filters and orders candidate models best suited for the task.
-3. **Cascading Fallback Rule**: If a requested model or category endpoint encounters rate limits (`429`), out-of-credits (`402`), not found (`404`), or server errors (`500`), `nim-router` automatically fails over to the next candidate model in the pool until a successful response is delivered.
-4. **Key Rotation Rule**: Per-provider multi-account key round-robin ensures requests rotate across all configured API keys to maximize request throughput.
+---
+
+## Web UI Dashboard
+
+Open your browser to:
+```
+http://localhost:11435
+```
+
+The Web UI allows you to:
+1. **Manage API Keys**: Add, delete, and inspect keys for NVIDIA, Groq, Cerebras, OpenRouter, OpenCode, and B.AI in real time.
+2. **Configure Combos**: Create custom multi-model combinations with visual health checks for unavailable or high-latency models.
+3. **Tune Router Parameters**: Switch routing strategies (`fallback` vs `round_robin`), adjust max latency thresholds, and change probe intervals.
+4. **Inspect Live Logs**: Watch request routing, failovers, and key rotations stream in real time.
+5. **Quick Test**: Execute single-click completion tests measuring latency and tokens per second.
 
 ---
 
 ## Connecting to AI Agents & Harnesses
 
-The router exposes a standard OpenAI-compatible API base URL (`http://localhost:11435/v1`).
-
-Because your real API keys are loaded securely by the router from `.env`, your client applications only connect locally to the router and do not need your real key. You can use `"local"` as the API key in all client configurations.
+The router exposes a standard OpenAI-compatible API base URL at `http://localhost:11435/v1`. Use `"local"` (or any dummy string) as the API key.
 
 ### 1. Hermes Agent (Recommended)
 
-**Option A: Interactive CLI Setup**
-You can configure NIM Router interactively using the `hermes model` command:
+**Interactive CLI Setup:**
 ```bash
 hermes model
 ```
-Choose **Custom Endpoint** and follow the prompts:
+Choose **Custom Endpoint** and enter:
 - **Base URL**: `http://localhost:11435/v1`
-- **Model**: `nim-free`, `nim-coding`, `nim-reasoning`, `nim-vision`, `nim-moe`, or `nim-chat`
-- **API Key**: `local` (optional)
+- **Model**: `nim-auto`, `nim-coding`, `nim-tools`, `nim-reasoning`, `nim-vision`, or custom combo
+- **API Key**: `local`
 
-**Option B: Manual Configuration (`~/.hermes/config.yaml`)**
-Add the provider directly to `~/.hermes/config.yaml`:
+**Or configure via `~/.hermes/config.yaml`:**
 ```yaml
 providers:
   nim-router:
@@ -126,8 +162,9 @@ providers:
     api_key: "local"
 ```
 
-### 2. Coding Harnesses (Aider, Cline, Continue.dev)
-Configure your assistant or harness to use local custom OpenAI endpoints:
+### 2. Coding Assistants (Aider, Cline, Continue.dev, Roo Code)
+
+Configure your harness to connect to the local OpenAI endpoint:
 ```json
 {
   "model": "nim-coding",
@@ -136,7 +173,13 @@ Configure your assistant or harness to use local custom OpenAI endpoints:
 }
 ```
 
-### 3. OpenAI Python SDK
+### 3. Open WebUI (Ollama or OpenAI Mode)
+
+- **As OpenAI Provider**: Set API URL to `http://localhost:11435/v1` with API Key `local`.
+- **As Ollama Provider**: Set Ollama Base URL to `http://localhost:11435`. The router responds to `/api/tags` and `/api/show` automatically.
+
+### 4. OpenAI Python SDK
+
 ```python
 from openai import OpenAI
 
@@ -145,9 +188,10 @@ client = OpenAI(
     api_key="local"
 )
 
+# Streaming Chat Completion
 response = client.chat.completions.create(
-    model="nim-coding",
-    messages=[{"role": "user", "content": "Write a python script to parse JSON"}],
+    model="nim-auto",
+    messages=[{"role": "user", "content": "Write an async Python web scraper."}],
     stream=True
 )
 
@@ -161,84 +205,155 @@ print()
 
 ## CLI Usage (`nim`)
 
-### **1. Set Primary Priority Model (`nim models`)**
-```bash
-nim models
+The `nim` command-line tool provides full control over the router and service lifecycle:
+
+| Command | Alias | Description |
+| :--- | :--- | :--- |
+| `nim models` | `list`, `select` | Interactively select the primary priority model. |
+| `nim keys` | `key` | View, add, delete, or clear multiple API keys per provider. |
+| `nim connect` | `config` | Interactively configure primary credentials for each provider. |
+| `nim strategy` | `mode` | Select routing strategy (`fallback` or `round_robin`). |
+| `nim probe` | `scan` | Run on-demand probing benchmarks across all active endpoints. |
+| `nim restart` | `reload` | Restart the background router process via PM2 (supports `--build`). |
+| `nim start` | `server` | Start the background router process via PM2. |
+| `nim stop` | `kill`, `down` | Stop the background router process. |
+| `nim run` | `fg`, `foreground` | Run the server directly in the foreground on port 11435. |
+| `nim build` | `ui` | Install frontend dependencies and build production UI assets. |
+| `nim logs` | `log` | Stream live server logs in your terminal. |
+| `nim --help` | `-h`, `help` | Display CLI help documentation. |
+
+---
+
+## Configuration Reference
+
+### Environment Variables (`.env`)
+
+```env
+# Provider Credentials (comma-separated for key rotation)
+NVIDIA_API_KEYS="nvapi-key1,nvapi-key2"
+GROQ_API_KEYS="gsk_key1,gsk_key2"
+CEREBRAS_API_KEYS="csk-key1,csk-key2"
+OPENROUTER_API_KEY="sk-or-v1-..."
+OPENCODE_API_KEY="your-opencode-key"
+BAI_API_KEY="your-bai-key"
+
+# Server Port
+PORT=11435
+
+# Default Model Override (optional)
+PRIMARY_MODEL="nim-auto"
 ```
 
-### **2. Manage Multiple Keys Per Provider (`nim keys`)**
-```bash
-nim keys
-```
-Interactively select a provider (NVIDIA, Groq, Cerebras, OpenRouter, OpenCode) to view current keys and add/append additional API keys for round-robin rotation.
+### Settings File (`config/settings.yaml`)
 
-### **3. Configure API Credentials (`nim connect`)**
-```bash
-nim connect
-```
-Interactively set single primary API keys for each provider.
-
-### **4. Probe Endpoints (`nim probe`)**
-```bash
-nim probe
-```
-
-### **5. Restart Server (`nim restart`)**
-```bash
-nim restart
-nim restart --build
-```
-
-### **6. Build Web UI (`nim build`)**
-```bash
-nim build
-```
-
-### **7. Stop Server (`nim stop`)**
-```bash
-nim stop
-```
-
-### **8. Stream Server Logs (`nim logs`)**
-```bash
-nim logs
-```
-
-### **9. Command Help (`nim --help`)**
-```bash
-nim --help
+```yaml
+primary_model: "nim-auto"
+routing_strategy: "fallback"     # 'fallback' or 'round_robin'
+max_latency_threshold: 3.0       # Exclude endpoints slower than 3.0s
+health_refresh_interval: 180     # Background health probe cycle in seconds
+rate_limit_cooldown: 30          # Fallback cooldown in seconds on 429 errors
+primary_pool_size: 7             # Number of top models used for round_robin
+model_max_rpm: 35                # Maximum requests per minute per endpoint
+model_max_concurrency: 4         # Maximum in-flight requests per endpoint
+fallback_models: []              # Custom fallback chain overrides
 ```
 
 ---
 
-## Testing API Endpoints (`curl`)
+## API Endpoints Reference
 
-### **1. Chat Completion with Category Routing (`/v1/chat/completions`)**
+### AI Completion & Model Endpoints
+- `POST /v1/chat/completions` (or `/chat/completions`): OpenAI-compatible chat completion (streaming and non-streaming).
+- `GET /v1/models` (or `/models`): List virtual categories, custom combos, and discovered healthy models.
+  - Supports task filtering: `GET /v1/models?task=coding`, `?task=tools`, `?task=reasoning`, `?task=vision`.
+- `GET /v1/models/{model_id}`: Retrieve model details.
+
+### Ollama Compatibility Layer
+- `GET /api/tags`: List models in Ollama tag format.
+- `POST /api/show`: Model inspection details.
+- `GET /api/ps`: Running processes status.
+- `GET /api/version`: Gateway version.
+
+### Management & Telemetry Endpoints
+- `GET /api/dashboard/stats`: Complete gateway metrics, healthy pools, provider stats, and probe timers.
+- `GET /api/keys`: Retrieve configured provider key counts and masked key identifiers.
+- `POST /api/keys`: Add, update, remove, or clear API keys per provider in real time.
+- `POST /api/settings`: Update router settings dynamically.
+- `GET /api/combos`: List configured model combos with health and latency status.
+- `POST /api/combos`: Create a new named model combo.
+- `PUT /api/combos/{name}`: Update combo models or strategy (`fallback` / `round_robin`).
+- `DELETE /api/combos/{name}`: Delete a combo.
+- `POST /api/probe`: Trigger an immediate live probe benchmark across all provider endpoints.
+- `GET /api/logs/stream`: Real-time Server-Sent Events (SSE) server log feed.
+- `GET /api/logs/history`: Retrieve recent in-memory log buffer.
+- `POST /api/server/restart`: Reload gateway configuration or restart background process via PM2.
+- `GET /health`: Router health check status.
+
+---
+
+## Testing & Verification
+
+### Chat Completion with Category Routing (`curl`)
 ```bash
 curl http://localhost:11435/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "nim-coding",
     "messages": [
-      {"role": "user", "content": "Write a python function to reverse a string."}
+      {"role": "user", "content": "Write a Python function to reverse a string."}
     ]
   }'
 ```
 
-### **2. Real-Time Token Streaming (`stream: true`)**
+### Real-Time Token Streaming (`curl`)
 ```bash
 curl http://localhost:11435/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "nim-free",
+    "model": "nim-auto",
     "stream": true,
     "messages": [
-      {"role": "user", "content": "Write a short poem about coding."}
+      {"role": "user", "content": "Write a short haiku about low latency."}
     ]
   }'
 ```
 
-### **3. List Available Models (`/v1/models`)**
+### Function & Tool Calling (`curl`)
 ```bash
-curl http://localhost:11435/v1/models
+curl http://localhost:11435/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nim-tools",
+    "messages": [
+      {"role": "user", "content": "What is the weather in Tokyo?"}
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Get current weather for a city",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "city": {"type": "string"}
+            },
+            "required": ["city"]
+          }
+        }
+      }
+    ]
+  }'
 ```
+
+### Run Unit Tests
+```bash
+pytest
+```
+
+---
+
+## License
+
+MIT License. Designed for resilience, developer freedom, and zero-cost LLM orchestration.
+
