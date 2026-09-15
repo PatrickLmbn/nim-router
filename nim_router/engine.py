@@ -96,17 +96,19 @@ class ModelRouter:
         self.key_index = (self.key_index + 1) % len(self.api_keys)
         return key
 
-    def _get_provider_name(self, model_id: str) -> str:
+    def _get_provider_name(self, model_id: str, overrides: dict[str, str] | None = None) -> str:
         mid_clean = model_id
         for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[BAI] ", "[Category] "):
             if mid_clean.startswith(prefix):
                 mid_clean = mid_clean[len(prefix):].strip()
+        if overrides and mid_clean in overrides:
+            return overrides[mid_clean]
         if mid_clean in self._model_providers:
             return self._model_providers[mid_clean]
         return _catalog_get_provider_name(mid_clean)
 
-    def _get_provider_info(self, model_id: str) -> tuple[str, str, list[str]]:
-        provider = self._get_provider_name(model_id)
+    def _get_provider_info(self, model_id: str, overrides: dict[str, str] | None = None) -> tuple[str, str, list[str]]:
+        provider = self._get_provider_name(model_id, overrides)
         now = time.time()
 
         if provider == "OpenRouter":
@@ -230,6 +232,11 @@ class ModelRouter:
 
     def _record_failure(self, model_id: str, status_code: int = 500):
         now = time.time()
+        if status_code in (413, 422):
+            logger.debug(
+                f"Model {model_id} rejected request payload (HTTP {status_code}); not penalizing model health."
+            )
+            return
         cur_rel = self._reliability.get(model_id, 1.0)
         self._reliability[model_id] = max(0.05, 0.7 * cur_rel)
 
@@ -270,6 +277,87 @@ class ModelRouter:
             measured_tps = token_count / elapsed
             cur_tps = self._tps.get(model_id, 40.0)
             self._tps[model_id] = round(0.7 * cur_tps + 0.3 * measured_tps, 2)
+
+    def _resolve_combo_models(self, declared: list[str], pool: list[str]) -> tuple[list[str], dict[str, str]]:
+        def norm(s: str) -> str:
+            return s.lower().replace("-", "").replace("/", "").replace(".", "")
+
+        catalog: list[tuple[str, str]] = []
+        for m in self.models:
+            mid = m.get("id")
+            if mid:
+                catalog.append((mid, (m.get("provider") or self._get_provider_name(mid) or "")))
+
+        targets: list[str] = []
+        overrides: dict[str, str] = {}
+        seen: set[tuple[str, str]] = set()
+        warned = getattr(type(self), "_combo_warn_cache", None)
+        if warned is None:
+            warned = type(self)._combo_warn_cache = set()
+
+        def warn_once(key: str, msg: str):
+            if key not in warned:
+                warned.add(key)
+                logger.warning(msg)
+
+        for raw in declared:
+            entry = (raw or "").strip()
+            if not entry:
+                continue
+
+            want_provider = ""
+            model_part = entry
+            if "::" in entry:
+                want_provider, model_part = entry.split("::", 1)
+                want_provider = want_provider.strip().lower()
+                model_part = model_part.strip()
+
+            npart = norm(model_part)
+
+            def prov_ok(prov: str) -> bool:
+                return not want_provider or prov.lower() == want_provider
+
+            exact = [
+                (mid, prov) for mid, prov in catalog
+                if mid.lower() == model_part.lower() and prov_ok(prov)
+            ]
+            loose = exact or [
+                (mid, prov) for mid, prov in catalog
+                if prov_ok(prov) and (norm(mid.split("/", 1)[-1]) == npart or norm(mid) == npart)
+            ]
+
+            if not loose:
+                in_pool = model_part.lower() in {p.lower() for p in pool}
+                warn_once(
+                    ("nomatch", entry),
+                    f"Combo entry '{entry}' does not match any discovered endpoint"
+                    + (f" for provider '{want_provider}'" if want_provider else "")
+                    + (" (id exists but not in the healthy pool)" if in_pool else "")
+                    + "; skipping it instead of substituting a similarly named model."
+                )
+                continue
+
+            mid, prov = loose[0]
+            if len(loose) > 1 and not want_provider:
+                warn_once(
+                    ("ambiguous", entry),
+                    f"Combo entry '{entry}' is ambiguous across providers "
+                    f"({', '.join(p for _, p in loose)}); using '{prov}'. "
+                    f"Pin it as '{prov}::{entry}' to make this deterministic."
+                )
+            if (mid, prov) in seen or mid in {m for m, _ in seen}:
+                warn_once(
+                    ("dupe", entry),
+                    f"Combo entry '{entry}' resolves to '{prov}::{mid}', already used by an "
+                    f"earlier slot; dropping the duplicate so the chain has no dead repeats."
+                )
+                continue
+            seen.add((mid, prov))
+            targets.append(mid)
+            if prov:
+                overrides[mid] = prov
+
+        return targets, overrides
 
     def _build_healthy_pool(self) -> list[str]:
         now = time.time()
@@ -528,21 +616,12 @@ class ModelRouter:
             target_model = requested_model if (requested_model and requested_model.lower() not in ("nim-auto", "nim_auto", "auto")) else get_primary_model()
 
         combo = get_combo(requested_model) if requested_model else None
+        combo_provider_overrides: dict[str, str] = {}
         if combo:
             combo_models = combo.get("models", [])
             strategy = combo.get("strategy", "fallback")
 
-            def _resolve(mid: str) -> str:
-                mid_clean = mid.lower().replace("-", "").replace("/", "").replace(".", "")
-                match = next(
-                    (p for p in candidate_pool
-                     if mid_clean in p.lower().replace("-", "").replace("/", "").replace(".", "")
-                     or p.lower().replace("-", "").replace("/", "").replace(".", "") in mid_clean),
-                    mid
-                )
-                return match
-
-            resolved = [_resolve(m) for m in combo_models if m]
+            resolved, combo_provider_overrides = self._resolve_combo_models(combo_models, candidate_pool)
 
             if strategy == "round_robin":
                 if resolved:
@@ -648,13 +727,17 @@ class ModelRouter:
         tried_models = set()
         last_error = None
         attempts = len(candidate_ids)
+        context_rejected_providers = set()
 
         for selected_id in candidate_ids:
             if selected_id in tried_models:
                 continue
             tried_models.add(selected_id)
 
-            provider = self._get_provider_name(selected_id)
+            provider = self._get_provider_name(selected_id, combo_provider_overrides)
+            if provider in context_rejected_providers:
+                logger.info(f"Skipping {provider} :: {selected_id}: provider already rejected this payload size (413).")
+                continue
             current_latency = self._latencies.get(selected_id, 0.0)
             current_rpm = self._get_recent_rpm(selected_id, time.time())
             in_flight_num = self._in_flight.get(selected_id, 0)
@@ -664,7 +747,7 @@ class ModelRouter:
             self._record_request_dispatch(selected_id, t0)
             self._in_flight[selected_id] = in_flight_num + 1
             try:
-                base_url, _, keys_to_try = self._get_provider_info(selected_id)
+                base_url, _, keys_to_try = self._get_provider_info(selected_id, combo_provider_overrides)
                 for k_idx, current_key in enumerate(keys_to_try):
                     now_check = time.time()
                     cool_until = self._key_cooldowns.get((provider, current_key), 0.0)
@@ -738,7 +821,10 @@ class ModelRouter:
             except HTTPException as e:
                 last_error = e
                 self._record_failure(selected_id, status_code=e.status_code)
-                if e.status_code in (429, 402):
+                if e.status_code == 413:
+                    context_rejected_providers.add(provider)
+                    logger.warning(f"Model {provider} :: {selected_id} returned 413 (payload too large), skipping remaining {provider} candidates...")
+                elif e.status_code in (429, 402):
                     logger.warning(f"Model {provider} :: {selected_id} returned status {e.status_code} (Rate Limited/Billing), backing off and failing over...")
                 elif e.status_code == 404:
                     logger.warning(f"Model {provider} :: {selected_id} returned 404 (Not Found), removing from pool and failing over...")

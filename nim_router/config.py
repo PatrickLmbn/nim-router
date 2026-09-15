@@ -29,6 +29,7 @@ def _load_settings() -> dict:
         "model_max_rpm": 35,
         "model_max_concurrency": 4,
         "fallback_models": [],
+        "first_token_timeout": 20.0,
     }
     example = _SETTINGS_FILE.replace(".yaml", ".yaml.example")
     if not os.path.exists(_SETTINGS_FILE) and os.path.exists(example):
@@ -72,6 +73,7 @@ PRIMARY_POOL_SIZE: int = int(_s["primary_pool_size"])
 MODEL_MAX_RPM: int = int(_s["model_max_rpm"])
 MODEL_MAX_CONCURRENCY: int = int(_s["model_max_concurrency"])
 MAX_LATENCY_THRESHOLD: float = float(_s["max_latency_threshold"])
+FIRST_TOKEN_TIMEOUT: float = float(_s.get("first_token_timeout") or 20.0)
 
 def get_nvidia_keys() -> list[str]:
     raw_keys = os.getenv("NVIDIA_API_KEYS", "") or os.getenv("NVIDIA_API_KEY", "")
@@ -95,10 +97,19 @@ def get_bai_key() -> str:
     return os.getenv("BAI_API_KEY", "").strip()
 
 def get_primary_model() -> str:
+    file_val = ""
+    if os.path.exists(_SETTINGS_FILE):
+        try:
+            with open(_SETTINGS_FILE, "r") as f:
+                file_val = str((yaml.safe_load(f) or {}).get("primary_model", "") or "").strip()
+        except Exception:
+            file_val = ""
+    if file_val:
+        return file_val
     env_val = os.getenv("PRIMARY_MODEL", "").strip()
     if env_val:
         return env_val
-    return _load_settings().get("primary_model", "nim-auto") or "nim-auto"
+    return "nim-auto"
 
 def get_routing_strategy() -> str:
     return str(_load_settings().get("routing_strategy", "fallback")).strip().lower()

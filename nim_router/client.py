@@ -13,6 +13,7 @@ from nim_router.config import (
     GROQ_API_BASE,
     CEREBRAS_API_BASE,
     BAI_API_BASE,
+    FIRST_TOKEN_TIMEOUT,
 )
 from nim_router.logger import logger
 from nim_router.schemas import ChatCompletionRequest
@@ -335,9 +336,27 @@ async def call_provider_endpoint(
                 aiter = response.aiter_raw()
                 first_chunk = None
                 try:
-                    first_chunk = await aiter.__anext__()
+                    first_chunk = await asyncio.wait_for(
+                        aiter.__anext__(), timeout=FIRST_TOKEN_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    await response.aclose()
+                    logger.warning(
+                        f"No first token from {model_id} within {FIRST_TOKEN_TIMEOUT:.0f}s, failing over..."
+                    )
+                    raise HTTPException(
+                        status_code=504,
+                        detail=f"Upstream model {model_id} accepted the request but produced no output within {FIRST_TOKEN_TIMEOUT:.0f}s.",
+                    )
                 except StopAsyncIteration:
-                    first_chunk = None
+                    await response.aclose()
+                    logger.warning(
+                        f"Model {model_id} returned an empty 200 response (no chunks), failing over..."
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail=f"Upstream model {model_id} returned an empty response with no content chunks.",
+                    )
 
                 if first_chunk:
                     sample = first_chunk.decode("utf-8", errors="ignore")

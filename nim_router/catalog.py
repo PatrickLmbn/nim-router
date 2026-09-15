@@ -52,13 +52,34 @@ BANNED_MODELS = {
     "nvidia/llama-3.1-nemotron-safety-guard-8b-v3",
 }
 
+NON_CHAT_KEYWORDS = (
+    "prompt-guard",
+    "safeguard",
+    "nemoguard",
+    "safety-guard",
+    "content-safety",
+    "topic-control",
+    "ising-calibration",
+    "orpheus",
+    "nemotron-parse",
+    "note-preview",
+    "groq/compound",
+)
+
+def _strip_variant_suffix(mid: str) -> str:
+    return mid.split(":", 1)[0].strip()
+
 def is_banned_model(model_id: str) -> bool:
     if not model_id:
         return True
     mid = model_id.lower().strip()
     if mid in BANNED_MODELS:
         return True
-    return any(k in mid for k in BANNED_KEYWORDS)
+    if _strip_variant_suffix(mid) in BANNED_MODELS:
+        return True
+    if any(k in mid for k in BANNED_KEYWORDS):
+        return True
+    return any(k in mid for k in NON_CHAT_KEYWORDS)
 
 def get_provider_name(m_obj: "dict | str", provider_cache: "dict | None" = None) -> str:
     if isinstance(m_obj, dict):

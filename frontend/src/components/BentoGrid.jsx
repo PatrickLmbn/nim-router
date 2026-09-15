@@ -167,17 +167,36 @@ export function BentoGrid({
   const protocol = typeof window !== 'undefined' ? window.location.protocol : 'http:';
   const endpointUrl = `${protocol}//${host}:${routerPort}/v1`;
 
-  const handleCopyEndpoint = () => {
-    navigator.clipboard.writeText(endpointUrl);
-    setCopiedEndpoint(true);
-    setTimeout(() => setCopiedEndpoint(false), 2000);
+  const copyToClipboard = (text, setCopied) => {
+    const done = () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    };
+    const fallback = () => {
+      const ta = document.createElement('textarea');
+      try {
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        done();
+      } catch (_) {
+        document.body.removeChild(ta);
+      }
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done).catch(fallback);
+    } else {
+      fallback();
+    }
   };
 
-  const handleCopyApiKey = () => {
-    navigator.clipboard.writeText('sk-nim-local');
-    setCopiedApiKey(true);
-    setTimeout(() => setCopiedApiKey(false), 2000);
-  };
+  const handleCopyEndpoint = () => copyToClipboard(endpointUrl, setCopiedEndpoint);
+  const handleCopyApiKey = () => copyToClipboard('sk-nim-local', setCopiedApiKey);
 
   return (
     <div className="w-full max-w-7xl mx-auto px-1 sm:px-2 lg:h-full flex flex-col lg:justify-center">
