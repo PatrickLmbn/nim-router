@@ -313,6 +313,8 @@ def create_app() -> FastAPI:
             lat = round(_router_instance._latencies.get(mid, 0.45), 3)
             tps = round(_router_instance._tps.get(mid, 45.0), 1)
             rel = round(_router_instance._reliability.get(mid, 1.0), 2)
+            quality = round(_router_instance._quality.get(mid, 1.0), 2) if _router_instance._quality_n.get(mid, 0) >= 3 else None
+            quality_samples = _router_instance._quality_n.get(mid, 0)
             cooling = _router_instance._rate_limited_until.get(mid, 0) > now
             model_items.append({
                 "id": mid,
@@ -320,6 +322,8 @@ def create_app() -> FastAPI:
                 "latency": lat,
                 "tps": tps,
                 "reliability": rel,
+                "quality": quality,
+                "quality_samples": quality_samples,
                 "healthy": is_healthy and not cooling,
                 "is_primary": (mid == primary_model),
                 "in_flight": _router_instance._in_flight.get(mid, 0),

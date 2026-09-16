@@ -6,13 +6,13 @@ from fastapi import HTTPException, Request, Response
 import httpx
 
 from nim_router.config import (
-    CACHE_TTL,
-    HEALTH_REFRESH_INTERVAL,
-    MODEL_MAX_CONCURRENCY,
-    MODEL_MAX_RPM,
-    PRIMARY_POOL_SIZE,
-    RATE_LIMIT_COOLDOWN,
-    MAX_LATENCY_THRESHOLD,
+    get_rate_limit_cooldown,
+    get_primary_pool_size,
+    get_model_max_rpm,
+    get_model_max_concurrency,
+    get_max_latency_threshold,
+    get_health_refresh_interval,
+    get_quality_floor,
     NIM_API_BASE,
     OPENROUTER_API_BASE,
     OPENCODE_API_BASE,
@@ -21,7 +21,6 @@ from nim_router.config import (
     BAI_API_BASE,
     get_primary_model,
     get_routing_strategy,
-    get_health_refresh_interval,
 )
 from nim_router.combos import get_combo, load_combos
 from nim_router.logger import logger
@@ -77,6 +76,8 @@ class ModelRouter:
         self._latencies: dict[str, float] = {}
         self._tps: dict[str, float] = {}
         self._reliability: dict[str, float] = {}
+        self._quality: dict[str, float] = {}
+        self._quality_n: dict[str, int] = {}
         self._rate_limited_until: dict[str, float] = {}
         self._key_cooldowns: dict[tuple[str, str], float] = {}
         self._consecutive_failures: dict[str, int] = {}
@@ -194,7 +195,7 @@ class ModelRouter:
             return True
         record = self._health[model_id]
         now = time.time()
-        if now - record.get("last_check", 0) > HEALTH_REFRESH_INTERVAL:
+        if now - record.get("last_check", 0) > get_health_refresh_interval():
             record["failures"] = 0
             record["last_check"] = now
             record["healthy"] = True
@@ -242,7 +243,7 @@ class ModelRouter:
 
         if status_code in (429, 402):
             if model_id not in self._rate_limited_until or self._rate_limited_until[model_id] <= now:
-                self._rate_limited_until[model_id] = now + RATE_LIMIT_COOLDOWN
+                self._rate_limited_until[model_id] = now + get_rate_limit_cooldown()
             current = self._latencies.get(model_id, 1.0)
             self._latencies[model_id] = round(current + 2.5, 3)
         elif status_code == 404:
@@ -359,8 +360,25 @@ class ModelRouter:
 
         return targets, overrides
 
+    def _record_quality_sample(self, model_id: str, degraded: bool):
+        n = self._quality_n.get(model_id, 0)
+        q = self._quality.get(model_id, 1.0) if n else 1.0
+        obs = 0.0 if degraded else 1.0
+        effective_n = min(n, 50)
+        self._quality[model_id] = round((q * effective_n + obs) / (effective_n + 1), 4)
+        self._quality_n[model_id] = n + 1
+
+    def _quality_multiplier(self, model_id: str) -> float:
+        if self._quality_n.get(model_id, 0) < 3:
+            return 1.0
+        floor = get_quality_floor()
+        q = self._quality.get(model_id, 1.0)
+        return floor + (1.0 - floor) * q
+
     def _build_healthy_pool(self) -> list[str]:
         now = time.time()
+        max_rpm = get_model_max_rpm()
+        max_concurrency = get_model_max_concurrency()
         all_ids = [m.get("id") for m in self.models if m.get("id") and not self._is_banned_model(m.get("id"))]
         healthy = [mid for mid in all_ids if self._is_model_healthy(mid)]
 
@@ -372,14 +390,14 @@ class ModelRouter:
 
         def sort_key(mid: str):
             throttled = 1 if self._rate_limited_until.get(mid, 0) > now else 0
-            rpm_over = 1 if self._get_recent_rpm(mid, now) >= MODEL_MAX_RPM else 0
-            busy = 1 if self._in_flight.get(mid, 0) >= MODEL_MAX_CONCURRENCY else 0
+            rpm_over = 1 if self._get_recent_rpm(mid, now) >= max_rpm else 0
+            busy = 1 if self._in_flight.get(mid, 0) >= max_concurrency else 0
             in_flight_count = self._in_flight.get(mid, 0)
 
             lat = self._latencies.get(mid, 1.0)
             rel = self._reliability.get(mid, 1.0)
             tps = self._tps.get(mid, 40.0)
-            perf_score = (1.0 / max(0.01, lat)) * (rel ** 2) * (1.0 + 0.01 * tps)
+            perf_score = (1.0 / max(0.01, lat)) * (rel ** 2) * (1.0 + 0.01 * tps) * self._quality_multiplier(mid)
 
             return (throttled, rpm_over, busy, in_flight_count, -perf_score)
 
@@ -397,6 +415,8 @@ class ModelRouter:
                         state = json.load(f)
                     self._latencies.update(state.get("latencies", {}))
                     self._reliability.update(state.get("reliability", {}))
+                    self._quality.update(state.get("quality", {}))
+                    self._quality_n.update(state.get("quality_n", {}))
                     loaded_tps = state.get("tps", {})
                     # Sanitize any legacy corrupted TPS values that previously included prompt tokens
                     for mid, tps_val in loaded_tps.items():
@@ -435,6 +455,8 @@ class ModelRouter:
                     "latencies": self._latencies,
                     "reliability": self._reliability,
                     "tps": self._tps,
+                    "quality": self._quality,
+                    "quality_n": self._quality_n,
                 }, f)
         except Exception:
             pass
@@ -535,7 +557,7 @@ class ModelRouter:
                     self._healthy_pool = self._build_healthy_pool()
                     self._pool_updated = time.time()
 
-        if now - self._pool_updated > HEALTH_REFRESH_INTERVAL:
+        if now - self._pool_updated > get_health_refresh_interval():
             self._pool_updated = now
             asyncio.create_task(self.refresh_models())
 
@@ -667,7 +689,7 @@ class ModelRouter:
                 candidate_ids = primary_ids + other_candidates
         else:
             if candidate_pool:
-                fast_candidates = [mid for mid in candidate_pool if self._latencies.get(mid, 0.0) <= MAX_LATENCY_THRESHOLD]
+                fast_candidates = [mid for mid in candidate_pool if self._latencies.get(mid, 0.0) <= get_max_latency_threshold()]
                 if fast_candidates:
                     non_fast = [mid for mid in candidate_pool if mid not in fast_candidates]
                     candidate_pool = fast_candidates + non_fast
@@ -690,10 +712,13 @@ class ModelRouter:
                 if tool_capable:
                     candidate_pool = tool_capable
 
+            max_rpm = get_model_max_rpm()
+            max_concurrency = get_model_max_concurrency()
+
             def sort_candidates(mid: str):
                 throttled = 1 if self._rate_limited_until.get(mid, 0) > now else 0
-                rpm_over = 1 if self._get_recent_rpm(mid, now) >= MODEL_MAX_RPM else 0
-                busy = 1 if self._in_flight.get(mid, 0) >= MODEL_MAX_CONCURRENCY else 0
+                rpm_over = 1 if self._get_recent_rpm(mid, now) >= max_rpm else 0
+                busy = 1 if self._in_flight.get(mid, 0) >= max_concurrency else 0
                 in_flight_count = self._in_flight.get(mid, 0)
 
                 is_vision_demotion = 1 if (not is_vision and self._is_vision_model(mid)) else 0
@@ -701,7 +726,7 @@ class ModelRouter:
                 lat = self._latencies.get(mid, 1.0)
                 rel = self._reliability.get(mid, 1.0)
                 tps = self._tps.get(mid, 40.0)
-                perf_score = (1.0 / max(0.01, lat)) * (rel ** 2) * (1.0 + 0.01 * tps)
+                perf_score = (1.0 / max(0.01, lat)) * (rel ** 2) * (1.0 + 0.01 * tps) * self._quality_multiplier(mid)
 
                 return (throttled, rpm_over, busy, is_vision_demotion, in_flight_count, -perf_score)
 
@@ -710,7 +735,7 @@ class ModelRouter:
                 if self.strategy == "fallback":
                     candidate_ids = candidate_pool
                 else:
-                    top_size = min(PRIMARY_POOL_SIZE, len(candidate_pool))
+                    top_size = min(get_primary_pool_size(), len(candidate_pool))
                     if top_size > 0:
                         top_pool = candidate_pool[:top_size]
                         standby_pool = candidate_pool[top_size:]
@@ -741,7 +766,7 @@ class ModelRouter:
             current_latency = self._latencies.get(selected_id, 0.0)
             current_rpm = self._get_recent_rpm(selected_id, time.time())
             in_flight_num = self._in_flight.get(selected_id, 0)
-            logger.info(f"Routing request (attempt {len(tried_models)}/{attempts}) -> {provider} :: {selected_id} (latency: {current_latency:.3f}s, rpm: {current_rpm}/{MODEL_MAX_RPM}, in-flight: {in_flight_num}, stream={request.stream})")
+            logger.info(f"Routing request (attempt {len(tried_models)}/{attempts}) -> {provider} :: {selected_id} (latency: {current_latency:.3f}s, rpm: {current_rpm}/{get_model_max_rpm()}, in-flight: {in_flight_num}, stream={request.stream})")
 
             t0 = time.time()
             self._record_request_dispatch(selected_id, t0)
@@ -759,7 +784,7 @@ class ModelRouter:
                         recorded_tokens = [0]
                         usage_recorded = False
 
-                        def on_request_usage(p_tok: int, c_tok: int, tot_tok: int, is_est: bool):
+                        def on_request_usage(p_tok: int, c_tok: int, tot_tok: int, is_est: bool, degraded: bool = False):
                             nonlocal usage_recorded
                             if usage_recorded:
                                 return
@@ -780,7 +805,7 @@ class ModelRouter:
                                 is_estimated=is_est,
                                 timestamp=t0
                             )
-                            # In LLM metrics, TPS is generation speed (completion tokens / elapsed)
+                            self._record_quality_sample(selected_id, degraded)
                             self._record_success(selected_id, now_done - t0, token_count=c_tok)
 
                         response = await call_provider_endpoint(

@@ -41,12 +41,20 @@ def _load_settings() -> dict:
             pass
     if os.path.exists(_SETTINGS_FILE):
         try:
-            with open(_SETTINGS_FILE, "r") as f:
-                data = yaml.safe_load(f) or {}
-            defaults.update({k: v for k, v in data.items() if v is not None})
+            stamp = os.path.getmtime(_SETTINGS_FILE)
+            global _settings_cache, _settings_stamp
+            if _settings_cache is None or stamp != _settings_stamp:
+                with open(_SETTINGS_FILE, "r") as f:
+                    data = yaml.safe_load(f) or {}
+                _settings_cache = {k: v for k, v in data.items() if v is not None}
+                _settings_stamp = stamp
+            defaults.update(_settings_cache)
         except Exception:
             pass
     return defaults
+
+_settings_cache: dict | None = None
+_settings_stamp: float | None = None
 
 def update_setting(key: str, value):
     data = {}
@@ -66,14 +74,27 @@ def reload_env():
         load_dotenv(dotenv_path=_ENV_FILE, override=True)
 
 _s = _load_settings()
-HEALTH_REFRESH_INTERVAL: int = int(_s["health_refresh_interval"])
-RATE_LIMIT_COOLDOWN: int = int(_s["rate_limit_cooldown"])
-CACHE_TTL: int = 180
-PRIMARY_POOL_SIZE: int = int(_s["primary_pool_size"])
-MODEL_MAX_RPM: int = int(_s["model_max_rpm"])
-MODEL_MAX_CONCURRENCY: int = int(_s["model_max_concurrency"])
-MAX_LATENCY_THRESHOLD: float = float(_s["max_latency_threshold"])
-FIRST_TOKEN_TIMEOUT: float = float(_s.get("first_token_timeout") or 20.0)
+
+def get_rate_limit_cooldown() -> int:
+    return int(_load_settings().get("rate_limit_cooldown", 30))
+
+def get_primary_pool_size() -> int:
+    return int(_load_settings().get("primary_pool_size", 7))
+
+def get_model_max_rpm() -> int:
+    return int(_load_settings().get("model_max_rpm", 35))
+
+def get_model_max_concurrency() -> int:
+    return int(_load_settings().get("model_max_concurrency", 4))
+
+def get_max_latency_threshold() -> float:
+    return float(_load_settings().get("max_latency_threshold", 3.0))
+
+def get_first_token_timeout() -> float:
+    return float(_load_settings().get("first_token_timeout") or 20.0)
+
+def get_quality_floor() -> float:
+    return min(1.0, max(0.0, float(_load_settings().get("quality_floor", 0.6))))
 
 def get_nvidia_keys() -> list[str]:
     raw_keys = os.getenv("NVIDIA_API_KEYS", "") or os.getenv("NVIDIA_API_KEY", "")

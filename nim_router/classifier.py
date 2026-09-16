@@ -63,6 +63,7 @@ CHAT_KEYWORDS = (
     "glm",
     "hy3",
     "hunyuan",
+    "nemotron",
 )
 
 TOOL_KEYWORDS = (

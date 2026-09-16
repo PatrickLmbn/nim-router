@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  X, Check, Search, Key, Sliders, Terminal, Shield, RefreshCw, Plus, Trash2, Zap, Server, Activity, Copy, CheckCircle, Eye, EyeOff, Edit2, Wrench, Code, Brain, MessageSquare, Layers, Sparkles, Lock, KeyRound, BarChart3, ArrowUpRight, TrendingUp, Clock, AlertCircle, PieChart
+  X, Check, Search, Key, Sliders, Terminal, Shield, RefreshCw, Plus, Trash2, Zap, Server, Activity, Copy, CheckCircle, Eye, EyeOff, Edit2, Wrench, Code, Brain, MessageSquare, Layers, Sparkles, Lock, KeyRound, BarChart3, ArrowUpRight, TrendingUp, Clock, AlertCircle, PieChart, GripVertical
 } from 'lucide-react';
 import { ModelIcon, ProviderIcon, resolveProvider } from './ModelIcon';
 import { authFetch } from '../api';
@@ -14,7 +14,7 @@ export function ModalWrapper({ title, icon: Icon, onClose, children, maxWidth = 
         <div className="flex items-center justify-between px-6 py-4 border-b border-black/5 dark:border-white/5">
           <div className="flex items-center gap-3">
             {Icon && <div className="p-2 rounded-xl bg-black/5 dark:bg-white/5 text-[#ff6b35]"><Icon className="w-5 h-5" /></div>}
-            <h2 className="text-sm font-semibold tracking-wide uppercase">{title}</h2>
+            <h2 className="text-lg font-semibold tracking-wide uppercase">{title}</h2>
           </div>
           <button
             onClick={onClose}
@@ -580,7 +580,6 @@ export function SettingsModal({ stats, onClose, onSettingsUpdated }) {
         </button>
       </div>
 
-      {/* Security & Access Password Section */}
       <div className="space-y-3 pt-4 border-t border-black/10 dark:border-white/10">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -719,9 +718,14 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
   const [name, setName] = useState(combo?.name || '');
   const [strategy, setStrategy] = useState(combo?.strategy || 'fallback');
   const [models, setModels] = useState(combo?.models || []);
+  const [draggedIndex, setDraggedIndex] = useState(null);
+  const [dragOverIndex, setDragOverIndex] = useState(null);
   const [search, setSearch] = useState('');
   const [focused, setFocused] = useState(false);
   const [taskFilter, setTaskFilter] = useState('ALL');
+  const [providerFilter, setProviderFilter] = useState('ALL');
+  const [showSortWarning, setShowSortWarning] = useState(false);
+  const [previousOrder, setPreviousOrder] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -767,12 +771,27 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
     { id: 'moe', label: 'MoE', icon: Layers },
   ];
 
+  const availableProviders = ['ALL', ...Array.from(new Set(allModels.map(m => m.provider).filter(Boolean)))];
+
   const getTaskCount = (task) => {
-    return allModels.filter(m => matchesTask(m, task) && !models.includes(m.id)).length;
+    return allModels.filter(m =>
+      matchesTask(m, task) &&
+      (providerFilter === 'ALL' || (m.provider || '').toUpperCase() === providerFilter.toUpperCase()) &&
+      !models.includes(m.id)
+    ).length;
+  };
+
+  const getProviderCount = (prov) => {
+    return allModels.filter(m =>
+      (prov === 'ALL' || (m.provider || '').toUpperCase() === prov.toUpperCase()) &&
+      matchesTask(m, taskFilter) &&
+      !models.includes(m.id)
+    ).length;
   };
 
   const filtered = allModels.filter(m =>
     matchesTask(m, taskFilter) &&
+    (providerFilter === 'ALL' || (m.provider || '').toUpperCase() === providerFilter.toUpperCase()) &&
     m.id.toLowerCase().includes(search.toLowerCase()) &&
     !models.includes(m.id)
   );
@@ -780,10 +799,74 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
   const addModel = (id) => {
     setModels(prev => [...prev, id]);
     setSearch('');
+    setPreviousOrder(null);
   };
 
-  const removeModel = (id) => setModels(prev => prev.filter(m => m !== id));
-  const moveUp = (i) => { if (i === 0) return; const a = [...models];[a[i - 1], a[i]] = [a[i], a[i - 1]]; setModels(a); };
+  const removeModel = (id) => {
+    setModels(prev => prev.filter(m => m !== id));
+    setPreviousOrder(null);
+  };
+
+  const getModelLatency = (id) => {
+    const m = allModels.find(x => x.id === id || x.id.toLowerCase() === id.toLowerCase());
+    if (!m || !m.healthy) return 999999;
+    if (typeof m.latency === 'number' && !isNaN(m.latency)) return m.latency;
+    return 99999;
+  };
+
+  const handleSortByLatency = () => {
+    setPreviousOrder([...models]);
+    const sorted = [...models].sort((a, b) => getModelLatency(a) - getModelLatency(b));
+    setModels(sorted);
+    setShowSortWarning(false);
+  };
+
+  const handleUndoSort = () => {
+    if (previousOrder) {
+      setModels(previousOrder);
+      setPreviousOrder(null);
+    }
+  };
+
+  const handleDragStart = (e, index) => {
+    setDraggedIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(index));
+  };
+
+  const handleDragOver = (e, index) => {
+    e.preventDefault();
+    if (draggedIndex === null) return;
+    e.dataTransfer.dropEffect = 'move';
+    if (dragOverIndex !== index) {
+      setDragOverIndex(index);
+    }
+  };
+
+  const handleDrop = (e, dropIndex) => {
+    e.preventDefault();
+    if (draggedIndex === null || draggedIndex === undefined) return;
+    if (
+      draggedIndex >= 0 &&
+      draggedIndex < models.length &&
+      dropIndex >= 0 &&
+      dropIndex < models.length &&
+      draggedIndex !== dropIndex
+    ) {
+      const updated = [...models];
+      const [movedItem] = updated.splice(draggedIndex, 1);
+      updated.splice(dropIndex, 0, movedItem);
+      setModels(updated);
+      setPreviousOrder(null);
+    }
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  };
 
   const handleSave = async () => {
     const finalName = isNew ? slugify(name) : combo.name;
@@ -831,10 +914,25 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
     }
   };
 
+  const isOptionsOpen = focused || search.length > 0 || taskFilter !== 'ALL' || providerFilter !== 'ALL';
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 relative">
+      {isOptionsOpen && (
+        <div
+          className="fixed inset-0 z-20 bg-black/40 backdrop-blur-sm animate-fade-in"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            setFocused(false);
+            setSearch('');
+            setTaskFilter('ALL');
+            setProviderFilter('ALL');
+          }}
+        />
+      )}
+
       {isNew && (
-        <div className="space-y-1">
+        <div className={`space-y-1 transition-all duration-200 ${isOptionsOpen ? 'filter blur-[2px] opacity-35 pointer-events-none select-none' : ''}`}>
           <label className="text-[10px] uppercase font-semibold text-slate-500 dark:text-slate-400 tracking-wider">Combo Name <span className="text-slate-400 normal-case">(becomes model ID)</span></label>
           <input
             type="text"
@@ -847,7 +945,7 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
         </div>
       )}
 
-      <div className="space-y-1">
+      <div className={`space-y-1 transition-all duration-200 ${isOptionsOpen ? 'filter blur-[2px] opacity-35 pointer-events-none select-none' : ''}`}>
         <label className="text-[10px] uppercase font-semibold text-slate-500 dark:text-slate-400 tracking-wider">Strategy</label>
         <div className="grid grid-cols-2 gap-2">
           {['fallback', 'round_robin'].map(s => (
@@ -867,112 +965,159 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
         </div>
       </div>
 
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <label className="text-[10px] uppercase font-semibold text-slate-500 dark:text-slate-400 tracking-wider">
+      <div className="space-y-2.5">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <label className="text-[11px] uppercase font-bold text-slate-500 dark:text-slate-400 tracking-wider">
             Models <span className="normal-case text-slate-400">({models.length}){strategy === 'fallback' ? ' — first = primary' : ''}</span>
           </label>
-        </div>
 
-        {models.length > 0 && (
-          <div className="space-y-1 max-h-40 overflow-y-auto pr-1">
-            {models.map((id, i) => {
-              const m = allModels.find(x => x.id === id || x.id.toLowerCase() === id.toLowerCase());
-              const isUnavailable = !m || !m.healthy;
-              const isHighLatency = m && m.healthy && m.latency > maxLatencyThreshold;
-
-              return (
-                <div key={id} className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-white/5 border border-black/5 dark:border-white/5">
-                  {strategy === 'fallback' && (
-                    <span className={`text-[9px] font-bold shrink-0 w-12 ${i === 0 ? 'text-[#ff6b35]' : 'text-slate-400'}`}>
-                      {i === 0 ? 'PRIMARY' : `FB ${i}`}
-                    </span>
-                  )}
-                  <ModelIcon model={id} provider={m?.provider} className="h-3 w-auto max-w-[42px] max-h-3 shrink-0" />
-                  <span className="text-[10px] font-mono flex-1 truncate text-slate-800 dark:text-slate-200">{id}</span>
-
-                  {isUnavailable ? (
-                    <span
-                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-500/20 border border-rose-500/40 text-rose-500 dark:text-rose-400 text-[9px] font-bold font-mono shrink-0 animate-pulse"
-                      title="Model unavailable after background probing"
-                    >
-                      ! Unavailable
-                    </span>
-                  ) : isHighLatency ? (
-                    <span
-                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-500 dark:text-amber-400 text-[9px] font-bold font-mono shrink-0"
-                      title={`High latency: ${m.latency}s > ${maxLatencyThreshold}s`}
-                    >
-                      ? {m.latency}s
-                    </span>
-                  ) : m ? (
-                    <span className="text-[9px] font-mono text-emerald-400/90 shrink-0">
-                      {m.latency}s
-                    </span>
-                  ) : null}
-
-                  <span className="text-[9px] text-slate-400 shrink-0">{m?.provider || ''}</span>
-                  {strategy === 'fallback' && i > 0 && (
-                    <button onClick={() => moveUp(i)} className="text-slate-400 hover:text-[#00d2ff] transition shrink-0 text-[10px]" title="Move up">↑</button>
-                  )}
-                  <button onClick={() => removeModel(id)} className="text-slate-400 hover:text-rose-400 transition shrink-0">
-                    <X className="w-3 h-3" />
+          {models.length > 1 && (
+            <div className="flex items-center gap-1.5">
+              {showSortWarning ? (
+                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-amber-500/10 border border-amber-500/40 text-[10px] animate-fade-in shadow-sm">
+                  <AlertCircle className="w-3 h-3 text-amber-500 shrink-0" />
+                  <span className="text-amber-500 font-semibold text-[9.5px]">Breaks current order. Proceed?</span>
+                  <button
+                    type="button"
+                    onClick={handleSortByLatency}
+                    className="px-2 py-0.5 rounded bg-amber-500 hover:bg-amber-600 text-white font-bold text-[9px] transition ml-1"
+                  >
+                    Arrange
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowSortWarning(false)}
+                    className="px-1.5 py-0.5 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-[9px]"
+                  >
+                    Cancel
                   </button>
                 </div>
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  {previousOrder && (
+                    <button
+                      type="button"
+                      onClick={handleUndoSort}
+                      className="px-2 py-0.5 rounded-lg border border-[#00d2ff]/30 bg-[#00d2ff]/10 hover:bg-[#00d2ff]/20 text-[#00d2ff] text-[9.5px] font-semibold transition flex items-center gap-1"
+                      title="Revert to previous custom order"
+                    >
+                      <RefreshCw className="w-2.5 h-2.5" />
+                      <span>Undo</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowSortWarning(true)}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-lg border border-black/10 dark:border-white/10 hover:border-[#00d2ff]/40 bg-slate-100 dark:bg-white/[0.04] hover:bg-[#00d2ff]/10 text-slate-600 dark:text-slate-400 hover:text-[#00d2ff] text-[10px] font-semibold transition"
+                    title="Arrange models by latency (lowest to highest)"
+                  >
+                    <Clock className="w-3 h-3 text-[#00d2ff]" />
+                    <span>Order by Latency</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-1.5 relative z-30">
+          <div className="flex items-center gap-1 overflow-x-auto pb-0.5 scrollbar-none">
+            <span className="text-[9px] uppercase font-bold text-slate-400 dark:text-slate-500 mr-0.5 shrink-0 tracking-wider">Type:</span>
+            {TASK_FILTERS.map(tf => {
+              const Icon = tf.icon;
+              const count = getTaskCount(tf.id);
+              const active = taskFilter === tf.id;
+              return (
+                <button
+                  key={tf.id}
+                  type="button"
+                  onClick={() => {
+                    setTaskFilter(tf.id);
+                    setFocused(true);
+                  }}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9.5px] font-semibold border transition whitespace-nowrap shrink-0 ${active
+                    ? 'bg-[#00d2ff]/15 border-[#00d2ff]/60 text-[#00d2ff] shadow-[0_0_8px_rgba(0,210,255,0.2)]'
+                    : 'bg-slate-100 dark:bg-white/[0.04] border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:border-black/20 dark:hover:border-white/20'
+                    }`}
+                >
+                  {Icon && <Icon className="w-2.5 h-2.5" />}
+                  <span>{tf.label}</span>
+                  <span className={`text-[8.5px] px-1 py-0.1 rounded-full font-mono ${active ? 'bg-[#00d2ff]/25 text-[#00d2ff]' : 'bg-black/5 dark:bg-white/5 text-slate-400'}`}>
+                    {count}
+                  </span>
+                </button>
               );
             })}
           </div>
-        )}
 
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
-          {TASK_FILTERS.map(tf => {
-            const Icon = tf.icon;
-            const count = getTaskCount(tf.id);
-            const active = taskFilter === tf.id;
-            return (
-              <button
-                key={tf.id}
-                type="button"
-                onClick={() => {
-                  setTaskFilter(tf.id);
-                  setFocused(true);
-                }}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[10px] font-semibold border transition whitespace-nowrap shrink-0 ${active
-                  ? 'bg-[#00d2ff]/15 border-[#00d2ff]/60 text-[#00d2ff] shadow-[0_0_10px_rgba(0,210,255,0.2)]'
-                  : 'bg-slate-100 dark:bg-white/[0.04] border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:border-black/20 dark:hover:border-white/20'
-                  }`}
-              >
-                {Icon && <Icon className="w-3 h-3" />}
-                <span>{tf.label}</span>
-                <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-mono ${active ? 'bg-[#00d2ff]/25 text-[#00d2ff]' : 'bg-black/5 dark:bg-white/5 text-slate-400'
-                  }`}>
-                  {count}
-                </span>
-              </button>
-            );
-          })}
+          <div className="flex items-center gap-1 overflow-x-auto pb-0.5 scrollbar-none">
+            <span className="text-[9px] uppercase font-bold text-slate-400 dark:text-slate-500 mr-0.5 shrink-0 tracking-wider">Provider:</span>
+            {availableProviders.map(p => {
+              const count = getProviderCount(p);
+              const active = providerFilter === p;
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => {
+                    setProviderFilter(p);
+                    setFocused(true);
+                  }}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9.5px] font-semibold border transition whitespace-nowrap shrink-0 ${active
+                    ? 'bg-[#ff6b35]/15 border-[#ff6b35]/60 text-[#ff6b35] shadow-[0_0_8px_rgba(255,107,53,0.2)]'
+                    : 'bg-slate-100 dark:bg-white/[0.04] border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:border-black/20 dark:hover:border-white/20'
+                    }`}
+                >
+                  {p !== 'ALL' && <ProviderIcon provider={p} className="h-2.5 w-auto max-w-[28px] max-h-2.5 shrink-0" />}
+                  <span>{p === 'ALL' ? 'All Providers' : p}</span>
+                  <span className={`text-[8.5px] px-1 py-0.1 rounded-full font-mono ${active ? 'bg-[#ff6b35]/25 text-[#ff6b35]' : 'bg-black/5 dark:bg-white/5 text-slate-400'}`}>
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
-        <div className="relative">
-          <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-black/40 border border-black/10 dark:border-white/10">
-            <Search className="w-3 h-3 text-slate-400 shrink-0" />
+        <div className="relative z-30">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-black/60 border border-black/10 dark:border-white/10 focus-within:border-[#00d2ff]/60 shadow-sm transition">
+            <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
             <input
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
               onFocus={() => setFocused(true)}
               onBlur={() => setTimeout(() => setFocused(false), 200)}
-              placeholder={taskFilter === 'ALL' ? 'Search and add a model...' : `Filter ${taskFilter} models...`}
-              className="flex-1 bg-transparent text-[11px] font-mono text-slate-800 dark:text-slate-200 focus:outline-none placeholder:text-slate-400"
+              placeholder={
+                taskFilter !== 'ALL' && providerFilter !== 'ALL'
+                  ? `Filter ${providerFilter} ${taskFilter} models...`
+                  : taskFilter !== 'ALL'
+                    ? `Filter ${taskFilter} models...`
+                    : providerFilter !== 'ALL'
+                      ? `Filter ${providerFilter} models...`
+                      : 'Search and add a model...'
+              }
+              className="flex-1 bg-transparent text-xs font-mono text-slate-800 dark:text-slate-200 focus:outline-none placeholder:text-slate-400"
             />
-            {search && (
-              <button type="button" onClick={() => setSearch('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-white">
-                <X className="w-3 h-3" />
+            {(search || taskFilter !== 'ALL' || providerFilter !== 'ALL') && (
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setSearch('');
+                  setTaskFilter('ALL');
+                  setProviderFilter('ALL');
+                }}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-white p-0.5 rounded"
+                title="Clear search and filters"
+              >
+                <X className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
-          {(focused || search.length > 0 || taskFilter !== 'ALL') && (
-            <div className="absolute left-0 right-0 z-20 mt-1 rounded-xl bg-white dark:bg-[#0f1117] border border-black/10 dark:border-white/10 shadow-xl max-h-60 sm:max-h-64 overflow-y-auto divide-y divide-black/5 dark:divide-white/5">
+
+          {isOptionsOpen && (
+            <div className="absolute left-0 right-0 z-30 mt-1 rounded-2xl bg-white/95 dark:bg-[#0f1117]/95 backdrop-blur-md border border-black/10 dark:border-white/10 shadow-2xl max-h-60 sm:max-h-72 overflow-y-auto divide-y divide-black/5 dark:divide-white/5">
               {filtered.length === 0 ? (
                 <div className="p-3 text-center text-xs text-slate-400 font-mono">
                   No models found matching criteria.
@@ -980,12 +1125,12 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
               ) : (
                 filtered.map(m => (
                   <button key={m.id} onMouseDown={() => addModel(m.id)}
-                    className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-mono text-slate-700 dark:text-slate-300 hover:bg-[#00d2ff]/10 hover:text-[#00d2ff] transition group text-left"
+                    className="w-full flex items-center justify-between gap-2 px-2.5 sm:px-3 py-1.5 text-xs font-mono text-slate-700 dark:text-slate-300 hover:bg-[#00d2ff]/10 hover:text-[#00d2ff] transition group text-left overflow-hidden"
                   >
-                    <div className="flex items-center gap-1.5 truncate min-w-0">
-                      <ModelIcon model={m.id} provider={m.provider} className="h-3 w-auto max-w-[38px] max-h-3 shrink-0" />
-                      <span className="truncate">{m.id}</span>
-                      <div className="flex items-center gap-1 shrink-0 ml-1">
+                    <div className="flex items-center gap-1.5 sm:gap-2 truncate min-w-0 flex-1">
+                      <ModelIcon model={m.id} provider={m.provider} className="h-3 w-auto max-w-[34px] sm:max-w-[40px] max-h-3 shrink-0" />
+                      <span className="truncate min-w-0">{m.id}</span>
+                      <div className="hidden sm:flex items-center gap-1 shrink-0 ml-1">
                         {matchesTask(m, 'tools') && (
                           <span className="text-[7.5px] font-bold px-1 py-0.2 rounded bg-sky-500/15 text-sky-400 border border-sky-500/30">TOOLS</span>
                         )}
@@ -1000,18 +1145,18 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0 ml-2 font-sans">
+                    <div className="flex items-center gap-1.5 shrink-0 ml-1 sm:ml-2 font-sans">
                       {!m.healthy && (
-                        <span className="text-[9px] font-mono text-rose-400 font-bold bg-rose-500/15 px-1 py-0.2 rounded">! Unavailable</span>
+                        <span className="text-[8.5px] font-mono text-rose-400 font-bold bg-rose-500/15 px-1 py-0.2 rounded">! Unavail</span>
                       )}
                       {m.healthy && m.latency > maxLatencyThreshold && (
-                        <span className="text-[9px] font-mono text-amber-400 font-bold bg-amber-500/15 px-1 py-0.2 rounded">? {m.latency}s</span>
+                        <span className="text-[8.5px] font-mono text-amber-400 font-bold bg-amber-500/15 px-1 py-0.2 rounded">? {m.latency}s</span>
                       )}
                       {m.healthy && m.latency <= maxLatencyThreshold && (
-                        <span className="text-[9px] font-mono text-emerald-400/80">{m.latency}s</span>
+                        <span className="text-[8.5px] font-mono text-emerald-400/80">{m.latency}s</span>
                       )}
-                      <span className="text-[9px] text-slate-400 dark:text-slate-500 group-hover:text-[#00d2ff]/60">{m.provider}</span>
-                      <span className="text-[9px] font-bold text-[#00d2ff] opacity-0 group-hover:opacity-100 transition ml-1 shrink-0">+ Add</span>
+                      <span className="text-[8.5px] text-slate-400 dark:text-slate-500 group-hover:text-[#00d2ff]/60 max-w-[50px] sm:max-w-none truncate">{m.provider}</span>
+                      <span className="text-[8.5px] font-bold text-[#00d2ff] opacity-0 group-hover:opacity-100 transition ml-1 shrink-0">+ Add</span>
                     </div>
                   </button>
                 ))
@@ -1019,11 +1164,103 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
             </div>
           )}
         </div>
+
+        {models.length > 0 && (
+          <div
+            className={`space-y-1 max-h-64 sm:max-h-72 overflow-y-auto pr-1 transition-all duration-200 ${isOptionsOpen ? 'filter blur-[2px] opacity-35 pointer-events-none select-none' : ''
+              }`}
+            onDragOver={(e) => e.preventDefault()}
+            onDragLeave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget)) {
+                setDragOverIndex(null);
+              }
+            }}
+          >
+            {models.map((id, i) => {
+              const m = allModels.find(x => x.id === id || x.id.toLowerCase() === id.toLowerCase());
+              const isUnavailable = !m || !m.healthy;
+              const isHighLatency = m && m.healthy && m.latency > maxLatencyThreshold;
+              const isDragging = draggedIndex === i;
+              const isDragOver = dragOverIndex === i && draggedIndex !== null && draggedIndex !== i;
+
+              return (
+                <div
+                  key={id}
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, i)}
+                  onDragOver={(e) => handleDragOver(e, i)}
+                  onDrop={(e) => handleDrop(e, i)}
+                  onDragEnd={handleDragEnd}
+                  className={`w-full flex items-center justify-between gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl border transition-all select-none cursor-grab active:cursor-grabbing overflow-hidden ${isDragging
+                      ? 'opacity-40 border-dashed border-slate-400 dark:border-slate-500 bg-slate-200/50 dark:bg-white/[0.02]'
+                      : isDragOver
+                        ? 'border-[#00d2ff] bg-[#00d2ff]/15 dark:bg-[#00d2ff]/20 ring-1 ring-[#00d2ff]/50 shadow-[0_0_10px_rgba(0,210,255,0.25)]'
+                        : 'bg-slate-100/80 dark:bg-white/[0.04] border-black/5 dark:border-white/5 hover:border-black/20 dark:hover:border-white/20'
+                    }`}
+                >
+                  <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1">
+                    <div className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 shrink-0" title="Drag to reorder">
+                      <GripVertical className="w-3.5 h-3.5" />
+                    </div>
+                    {strategy === 'fallback' && (
+                      <span className={`text-[8.5px] sm:text-[9.5px] font-bold shrink-0 w-11 sm:w-13 text-center ${i === 0 ? 'text-[#ff6b35]' : 'text-slate-400'}`}>
+                        {i === 0 ? 'PRIMARY' : `FB ${i}`}
+                      </span>
+                    )}
+                    <ModelIcon model={id} provider={m?.provider} className="h-3.5 sm:h-4 w-auto max-w-[34px] sm:max-w-[42px] max-h-3.5 sm:max-h-4 shrink-0" />
+                    <span className="text-xs sm:text-sm font-mono font-medium truncate min-w-0 flex-1 text-slate-800 dark:text-slate-200" title={id}>
+                      {id}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1 sm:gap-2 shrink-0 ml-1 sm:ml-2">
+                    {isUnavailable ? (
+                      <span
+                        className="inline-flex items-center gap-0.5 sm:gap-1 px-1.5 py-0.5 rounded bg-rose-500/20 border border-rose-500/40 text-rose-500 dark:text-rose-400 text-[8px] sm:text-[9px] font-bold font-mono shrink-0 animate-pulse"
+                        title="Model unavailable after background probing"
+                      >
+                        ! <span className="hidden sm:inline">Unavailable</span><span className="sm:hidden">Unavail</span>
+                      </span>
+                    ) : isHighLatency ? (
+                      <span
+                        className="inline-flex items-center gap-0.5 sm:gap-1 px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-500 dark:text-amber-400 text-[8px] sm:text-[9px] font-bold font-mono shrink-0"
+                        title={`High latency: ${m.latency}s > ${maxLatencyThreshold}s`}
+                      >
+                        ? {m.latency}s
+                      </span>
+                    ) : m ? (
+                      <span className="text-[8px] sm:text-[9px] font-mono text-emerald-400/90 shrink-0">
+                        {m.latency}s
+                      </span>
+                    ) : null}
+
+                    <span className="text-[8px] sm:text-[9px] text-slate-400 font-mono shrink-0 max-w-[55px] sm:max-w-none truncate">
+                      {m?.provider || ''}
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeModel(id);
+                      }}
+                      className="text-slate-400 hover:text-rose-400 transition shrink-0 p-0.5 rounded hover:bg-black/5 dark:hover:bg-white/5"
+                      title="Remove model"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {error && <p className="text-xs text-rose-400">{error}</p>}
 
-      <div className="flex items-center justify-between pt-2 border-t border-black/10 dark:border-white/10">
+      <div className={`flex items-center justify-between pt-2 border-t border-black/10 dark:border-white/10 transition-all duration-200 ${isOptionsOpen ? 'filter blur-[2px] opacity-35 pointer-events-none select-none' : ''
+        }`}>
         {!isNew ? (
           <button
             type="button"
@@ -1066,7 +1303,7 @@ export function ComboEditorModal({ combo, isNew, stats, onClose, onCombosUpdated
       title={isNew ? "Create Routing Combo" : `Combo Settings: ${combo?.name || ''}`}
       icon={isNew ? Plus : Sliders}
       onClose={onClose}
-      maxWidth="max-w-3xl sm:max-w-[820px]"
+      maxWidth="max-w-4xl sm:max-w-[940px]"
     >
       <ComboEditor
         combo={combo}
@@ -1114,7 +1351,7 @@ export function CombosModal({ stats, onClose, onCombosUpdated }) {
 
   if (editing === 'new') {
     return (
-      <ModalWrapper title="Create Combo" icon={Plus} onClose={onClose} maxWidth="max-w-3xl sm:max-w-[820px]">
+      <ModalWrapper title="Create Combo" icon={Plus} onClose={onClose} maxWidth="max-w-4xl sm:max-w-[940px]">
         <ComboEditor isNew allModels={allModels} maxLatencyThreshold={maxLatencyThreshold} onSave={async () => { await refresh(); setEditing(null); }} onCancel={() => setEditing(null)} />
       </ModalWrapper>
     );
@@ -1122,14 +1359,14 @@ export function CombosModal({ stats, onClose, onCombosUpdated }) {
 
   if (editing) {
     return (
-      <ModalWrapper title={`Edit: ${editing.name}`} icon={Sliders} onClose={onClose} maxWidth="max-w-3xl sm:max-w-[820px]">
+      <ModalWrapper title={`Edit: ${editing.name}`} icon={Sliders} onClose={onClose} maxWidth="max-w-4xl sm:max-w-[940px]">
         <ComboEditor combo={editing} allModels={allModels} maxLatencyThreshold={maxLatencyThreshold} onSave={async () => { await refresh(); setEditing(null); }} onCancel={() => setEditing(null)} />
       </ModalWrapper>
     );
   }
 
   return (
-    <ModalWrapper title="Routing Combos" icon={Activity} onClose={onClose} maxWidth="max-w-3xl sm:max-w-[820px]">
+    <ModalWrapper title="Routing Combos" icon={Activity} onClose={onClose} maxWidth="max-w-4xl sm:max-w-[940px]">
       <p className="text-xs text-slate-500 dark:text-slate-400">
         Create named routing groups. Use the combo name as the <code className="text-[#00d2ff]">model</code> field in your API calls. All combos fall back to <span className="text-[#00f5a0] font-semibold">nim-auto</span> if all models fail.
       </p>
@@ -1300,11 +1537,10 @@ export function UsageAnalyticsModal({ onClose, onResetGateway }) {
               <button
                 key={tab.id}
                 onClick={() => setTimeRange(tab.id)}
-                className={`px-3 py-1 rounded-xl text-xs font-semibold transition ${
-                  timeRange === tab.id
+                className={`px-3 py-1 rounded-xl text-xs font-semibold transition ${timeRange === tab.id
                     ? 'bg-white dark:bg-black/60 text-slate-900 dark:text-white shadow-sm'
                     : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                }`}
+                  }`}
               >
                 {tab.label}
               </button>
@@ -1361,9 +1597,8 @@ export function UsageAnalyticsModal({ onClose, onResetGateway }) {
               {summary.total_requests.toLocaleString()}
             </div>
             <div className="flex items-center gap-1.5 text-[9.5px]">
-              <span className={`px-1.5 py-0.2 rounded font-mono font-bold ${
-                summary.success_rate >= 95 ? 'bg-emerald-500/15 text-emerald-500' : 'bg-amber-500/15 text-amber-500'
-              }`}>
+              <span className={`px-1.5 py-0.2 rounded font-mono font-bold ${summary.success_rate >= 95 ? 'bg-emerald-500/15 text-emerald-500' : 'bg-amber-500/15 text-amber-500'
+                }`}>
                 {summary.success_rate}% ok
               </span>
               <span className="text-slate-400">({summary.failed_requests} failed)</span>
@@ -1450,31 +1685,28 @@ export function UsageAnalyticsModal({ onClose, onResetGateway }) {
         <div className="flex items-center gap-2 border-b border-black/5 dark:border-white/5 pb-2">
           <button
             onClick={() => setActiveTab('overview')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
-              activeTab === 'overview'
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${activeTab === 'overview'
                 ? 'bg-[#00d2ff]/15 text-[#00d2ff]'
                 : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-            }`}
+              }`}
           >
             Providers ({providers.length})
           </button>
           <button
             onClick={() => setActiveTab('models')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
-              activeTab === 'models'
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${activeTab === 'models'
                 ? 'bg-[#00d2ff]/15 text-[#00d2ff]'
                 : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-            }`}
+              }`}
           >
             Models ({models.length})
           </button>
           <button
             onClick={() => setActiveTab('recent')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
-              activeTab === 'recent'
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${activeTab === 'recent'
                 ? 'bg-[#00d2ff]/15 text-[#00d2ff]'
                 : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-            }`}
+              }`}
           >
             Recent Activity ({recent.length})
           </button>
@@ -1512,9 +1744,8 @@ export function UsageAnalyticsModal({ onClose, onResetGateway }) {
                         {p.requests.toLocaleString()}
                       </td>
                       <td className="p-3 text-right">
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                          p.success_rate >= 95 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-400'
-                        }`}>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${p.success_rate >= 95 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-400'
+                          }`}>
                           {p.success_rate}%
                         </span>
                       </td>
@@ -1591,9 +1822,8 @@ export function UsageAnalyticsModal({ onClose, onResetGateway }) {
                           {m.requests.toLocaleString()}
                         </td>
                         <td className="p-3 text-right">
-                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                            m.success_rate >= 95 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-400'
-                          }`}>
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${m.success_rate >= 95 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-400'
+                            }`}>
                             {m.success_rate}%
                           </span>
                         </td>
@@ -1652,9 +1882,8 @@ export function UsageAnalyticsModal({ onClose, onResetGateway }) {
                         {r.model}
                       </td>
                       <td className="p-3">
-                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
-                          r.stream ? 'bg-cyan-500/15 text-cyan-400' : 'bg-purple-500/15 text-purple-400'
-                        }`}>
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${r.stream ? 'bg-cyan-500/15 text-cyan-400' : 'bg-purple-500/15 text-purple-400'
+                          }`}>
                           {r.stream ? 'STREAM' : 'SYNC'}
                         </span>
                       </td>
@@ -1665,11 +1894,10 @@ export function UsageAnalyticsModal({ onClose, onResetGateway }) {
                         {r.latency_ms}ms
                       </td>
                       <td className="p-3 text-right">
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                          r.status_code >= 200 && r.status_code < 400
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${r.status_code >= 200 && r.status_code < 400
                             ? 'bg-emerald-500/15 text-emerald-400'
                             : 'bg-rose-500/15 text-rose-400'
-                        }`}>
+                          }`}>
                           {r.status_code}
                         </span>
                       </td>

@@ -13,7 +13,7 @@ from nim_router.config import (
     GROQ_API_BASE,
     CEREBRAS_API_BASE,
     BAI_API_BASE,
-    FIRST_TOKEN_TIMEOUT,
+    get_first_token_timeout,
 )
 from nim_router.logger import logger
 from nim_router.schemas import ChatCompletionRequest
@@ -272,12 +272,22 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
     logger.success(f"Multi-provider model discovery complete: {len(all_discovered)} active models in pool.")
     return all_discovered
 
+def _looks_degenerate(text: str) -> bool:
+    if len(text) < 400:
+        return False
+    ws = sum(1 for ch in text if ch.isspace())
+    if ws / len(text) > 0.02:
+        return False
+    b64 = sum(1 for ch in text if ch.isalnum() or ch in "+/=_-")
+    return b64 / len(text) > 0.92
+
+
 async def call_provider_endpoint(
     api_key: str,
     model_id: str,
     request: ChatCompletionRequest,
     base_url: str = NIM_API_BASE,
-    on_usage: Optional[Callable[[int, int, int, bool], None]] = None
+    on_usage: Optional[Callable[[int, int, int, bool, bool], None]] = None
 ) -> Response:
     url = f"{base_url.rstrip('/')}/chat/completions"
     headers = {
@@ -335,18 +345,19 @@ async def call_provider_endpoint(
             if response.status_code == 200:
                 aiter = response.aiter_raw()
                 first_chunk = None
+                first_token_timeout = get_first_token_timeout()
                 try:
                     first_chunk = await asyncio.wait_for(
-                        aiter.__anext__(), timeout=FIRST_TOKEN_TIMEOUT
+                        aiter.__anext__(), timeout=first_token_timeout
                     )
                 except asyncio.TimeoutError:
                     await response.aclose()
                     logger.warning(
-                        f"No first token from {model_id} within {FIRST_TOKEN_TIMEOUT:.0f}s, failing over..."
+                        f"No first token from {model_id} within {first_token_timeout:.0f}s, failing over..."
                     )
                     raise HTTPException(
                         status_code=504,
-                        detail=f"Upstream model {model_id} accepted the request but produced no output within {FIRST_TOKEN_TIMEOUT:.0f}s.",
+                        detail=f"Upstream model {model_id} accepted the request but produced no output within {first_token_timeout:.0f}s.",
                     )
                 except StopAsyncIteration:
                     await response.aclose()
@@ -379,9 +390,13 @@ async def call_provider_endpoint(
                 has_exact_usage = False
                 collected_chars = 0
                 sse_buffer = ""
+                stream_sample = []
+                stream_sample_chars = 0
+                has_visible_content = False
+                has_reasoning_content = False
 
                 def process_chunk_text(text: str):
-                    nonlocal sse_buffer, stream_prompt_tokens, stream_comp_tokens, stream_total_tokens, has_exact_usage, collected_chars
+                    nonlocal sse_buffer, stream_prompt_tokens, stream_comp_tokens, stream_total_tokens, has_exact_usage, collected_chars, has_visible_content, has_reasoning_content, stream_sample_chars
                     sse_buffer += text
                     lines = sse_buffer.split("\n")
                     sse_buffer = lines[-1]
@@ -407,7 +422,18 @@ async def call_provider_endpoint(
                             choices = chunk_data.get("choices") or []
                             for choice in choices:
                                 delta = choice.get("delta") or {}
-                                content = delta.get("content") or delta.get("reasoning_content") or ""
+                                vis = delta.get("content") or ""
+                                if vis:
+                                    has_visible_content = True
+                                    if stream_sample_chars < 4000:
+                                        stream_sample.append(vis)
+                                        stream_sample_chars += len(vis)
+                                reasoning = delta.get("reasoning_content") or ""
+                                if reasoning:
+                                    has_reasoning_content = True
+                                if delta.get("tool_calls"):
+                                    has_visible_content = True
+                                content = vis or reasoning
                                 if content:
                                     collected_chars += len(content)
                         except Exception:
@@ -443,9 +469,10 @@ async def call_provider_endpoint(
                             final_prompt = estimate_token_count(request)
                             final_comp = max(1, int(collected_chars / 3.8)) if collected_chars > 0 else 0
                             final_total = final_prompt + final_comp
+                        degraded = (not has_visible_content and not has_reasoning_content) or _looks_degenerate("".join(stream_sample))
                         if on_usage:
                             try:
-                                on_usage(final_prompt, final_comp, final_total, is_est)
+                                on_usage(final_prompt, final_comp, final_total, is_est, degraded)
                             except Exception:
                                 pass
 
@@ -490,6 +517,7 @@ async def call_provider_endpoint(
 
             if response.status_code == 200:
                 extracted_usage = None
+                degraded = False
                 try:
                     resp_json = response.json()
                     usage_obj = resp_json.get("usage")
@@ -507,6 +535,16 @@ async def call_provider_endpoint(
                         extracted_usage = (est_p, est_c, est_p + est_c, True)
 
                     choices = resp_json.get("choices", [])
+                    visible_text = ""
+                    has_tool_calls = False
+                    for c in choices:
+                        msg_obj = c.get("message", {})
+                        if msg_obj.get("tool_calls"):
+                            has_tool_calls = True
+                        visible_text += msg_obj.get("content") or msg_obj.get("reasoning_content") or msg_obj.get("reasoning") or ""
+                    degraded = not has_tool_calls and (
+                        not choices or not visible_text.strip() or _looks_degenerate(visible_text)
+                    )
                     modified = False
                     for c in choices:
                         msg_obj = c.get("message", {})
@@ -522,7 +560,7 @@ async def call_provider_endpoint(
                     usage_dispatched = False
                     if on_usage and extracted_usage:
                         try:
-                            on_usage(*extracted_usage)
+                            on_usage(*extracted_usage, degraded)
                             usage_dispatched = True
                         except Exception:
                             pass
@@ -534,7 +572,7 @@ async def call_provider_endpoint(
 
                 if on_usage and extracted_usage and not usage_dispatched:
                     try:
-                        on_usage(*extracted_usage)
+                        on_usage(*extracted_usage, degraded)
                     except Exception:
                         pass
 
