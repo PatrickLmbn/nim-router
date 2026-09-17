@@ -20,7 +20,11 @@ tests/
 node_modules/
 frontend/node_modules/
 .pytest_cache/
-.vscode/
+.video/
 .DS_Store
 *.zip
 pytest.ini
+# Build outputs
+frontend/dist/
+nim_router.egg-info/
+*.bak

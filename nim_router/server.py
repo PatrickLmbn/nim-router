@@ -304,11 +304,16 @@ def create_app() -> FastAPI:
         moe_pool_size = sum(1 for mid in all_ids if is_moe_model(mid))
 
         model_items = []
+        seen_rows = set()
         for m in _router_instance.models:
             mid = m.get("id")
             if not mid:
                 continue
-            prov = _router_instance._get_provider_name(mid)
+            prov = m.get("provider") or _router_instance._get_provider_name(mid)
+            row_key = (mid, prov)
+            if row_key in seen_rows:
+                continue
+            seen_rows.add(row_key)
             is_healthy = _router_instance._is_model_healthy(mid)
             lat = round(_router_instance._latencies.get(mid, 0.45), 3)
             tps = round(_router_instance._tps.get(mid, 45.0), 1)
@@ -336,7 +341,7 @@ def create_app() -> FastAPI:
 
         prov_models_count = {}
         for m in _router_instance.models:
-            p = _router_instance._get_provider_name(m.get("id", ""))
+            p = m.get("provider") or _router_instance._get_provider_name(m.get("id", ""))
             prov_models_count[p] = prov_models_count.get(p, 0) + 1
 
         interval_sec = get_health_refresh_interval()

@@ -98,12 +98,13 @@ export function ModelSelectorModal({ stats, onClose, onSelectModel }) {
               <button
                 key={p}
                 onClick={() => setProviderFilter(p)}
+                title={p === 'ALL' ? 'All Providers' : p}
                 className={`px-2.5 py-1 text-[11px] font-medium rounded-lg transition whitespace-nowrap ${providerFilter === p
                   ? 'bg-[#ff6b35] text-white'
                   : 'bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
               >
-                {p}
+                {p === 'ALL' ? 'All Providers' : <ProviderIcon provider={p} className="h-2.5 w-auto max-w-[28px] max-h-2.5" />}
               </button>
             ))}
           </div>
@@ -123,7 +124,7 @@ export function ModelSelectorModal({ stats, onClose, onSelectModel }) {
                 <span className="w-1.5 h-1.5 rounded-full bg-[#00f5a0] shrink-0" />
                 <ModelIcon model={m.id} provider={m.provider} className="h-3.5 w-auto max-w-[48px] max-h-3.5 shrink-0" />
                 <span className="text-xs font-mono truncate text-slate-800 dark:text-slate-200">{m.id}</span>
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 dark:bg-white/5 text-slate-600 dark:text-slate-400 font-mono shrink-0">{m.provider}</span>
+                
               </div>
               <div className="flex items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400 shrink-0 ml-2">
                 <span>{m.latency}s</span>
@@ -1069,7 +1070,7 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
                     }`}
                 >
                   {p !== 'ALL' && <ProviderIcon provider={p} className="h-2.5 w-auto max-w-[28px] max-h-2.5 shrink-0" />}
-                  <span>{p === 'ALL' ? 'All Providers' : p}</span>
+                  {p === 'ALL' && <span>All Providers</span>}
                   <span className={`text-[8.5px] px-1 py-0.1 rounded-full font-mono ${active ? 'bg-[#ff6b35]/25 text-[#ff6b35]' : 'bg-black/5 dark:bg-white/5 text-slate-400'}`}>
                     {count}
                   </span>
@@ -1155,7 +1156,7 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
                       {m.healthy && m.latency <= maxLatencyThreshold && (
                         <span className="text-[8.5px] font-mono text-emerald-400/80">{m.latency}s</span>
                       )}
-                      <span className="text-[8.5px] text-slate-400 dark:text-slate-500 group-hover:text-[#00d2ff]/60 max-w-[50px] sm:max-w-none truncate">{m.provider}</span>
+
                       <span className="text-[8.5px] font-bold text-[#00d2ff] opacity-0 group-hover:opacity-100 transition ml-1 shrink-0">+ Add</span>
                     </div>
                   </button>
@@ -1233,10 +1234,6 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
                         {m.latency}s
                       </span>
                     ) : null}
-
-                    <span className="text-[8px] sm:text-[9px] text-slate-400 font-mono shrink-0 max-w-[55px] sm:max-w-none truncate">
-                      {m?.provider || ''}
-                    </span>
 
                     <button
                       type="button"

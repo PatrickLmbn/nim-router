@@ -131,7 +131,19 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                 )
                 if response.status_code == 200:
                     data = response.json()
-                    or_models = [m for m in data.get("data", []) if m.get("id", "").endswith(":free")]
+                    or_models = [
+                        m for m in data.get("data", [])
+                        if (
+                            m.get("id", "").endswith(":free")
+                            or (
+                                m.get("pricing")
+                                and (
+                                    m["pricing"].get("prompt") in ("0", "0.0", 0)
+                                    and m["pricing"].get("completion") in ("0", "0.0", 0)
+                                )
+                            )
+                        )
+                    ]
                     for m in or_models:
                         m_copy = dict(m)
                         m_copy["provider"] = "OpenRouter"

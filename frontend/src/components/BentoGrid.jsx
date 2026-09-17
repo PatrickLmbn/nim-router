@@ -17,6 +17,8 @@ export function BentoGrid({
   onOpenComboEditor,
   onOpenAnalytics,
   onDeleteCombo,
+  onDuplicateCombo,
+  duplicatingCombo = null,
   onRunProbe,
   onRestartGateway,
   probing,
@@ -244,18 +246,6 @@ export function BentoGrid({
                   </div>
 
                   <div className="flex items-center gap-1.5">
-                    {stats?.usage_summary?.total_tokens > 0 && (
-                      <button
-                        type="button"
-                        onClick={onOpenAnalytics}
-                        className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-[#00f5a0]/15 hover:bg-[#00f5a0]/25 text-[#00f5a0] text-[9px] font-mono font-bold transition neu-button"
-                        title="View Usage & Analytics"
-                      >
-                        <Zap className="w-2.5 h-2.5" />
-                        <span>{stats.usage_summary.total_tokens.toLocaleString()} tokens</span>
-                      </button>
-                    )}
-
                     {testResult && (
                       <div className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-black/5 dark:bg-white/10 text-[9px] font-mono animate-fade-in shrink-0">
                         {testResult.success ? (
@@ -826,6 +816,20 @@ export function BentoGrid({
                             <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 font-mono">
                               {c.models.length} <span className="hidden sm:inline">models</span>
                             </span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDuplicateCombo(c.name);
+                              }}
+                              disabled={duplicatingCombo !== null}
+                              aria-label={`Duplicate combo ${c.name}`}
+                              aria-busy={duplicatingCombo === c.name}
+                              title={duplicatingCombo === c.name ? 'Duplicating combo...' : `Duplicate combo "${c.name}"`}
+                              className="p-1 rounded-lg hover:bg-[#00d2ff]/15 text-slate-400 hover:text-[#00d2ff] transition neu-button disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              <Copy className={`w-3.5 h-3.5 ${duplicatingCombo === c.name ? 'animate-pulse' : ''}`} />
+                            </button>
                             <button
                               type="button"
                               onClick={(e) => {
