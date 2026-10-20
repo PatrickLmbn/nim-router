@@ -52,6 +52,12 @@ from nim_router.logger import (
 )
 from nim_router.client import get_shared_client, close_shared_client, get_active_stream_count
 from nim_router.catalog import save_working_models
+from nim_router.updater import (
+    check_update,
+    pull_update,
+    build_frontend,
+    GitUpdateError,
+)
 
 _router_instance: Optional[ModelRouter] = None
 _server_start_time: float = time.time()
@@ -610,6 +616,49 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=f"Combo '{name}' not found.")
         logger.success(f"Combo '{name}' deleted.")
         return {"success": True}
+
+    @app.get("/api/update/check")
+    async def check_for_updates(request: Request, branch: str = "main"):
+        _check_auth(request)
+        try:
+            result = await asyncio.to_thread(check_update, branch)
+        except GitUpdateError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Update check failed: {e}")
+        return result
+
+    @app.post("/api/update/apply")
+    async def apply_update(request: Request, branch: str = "main", force: bool = False):
+        _check_auth(request)
+
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                if body.get("branch"):
+                    branch = str(body["branch"])
+                if "force" in body:
+                    force = bool(body["force"])
+        except Exception:
+            pass
+
+        try:
+            result = await asyncio.to_thread(pull_update, branch, force)
+        except GitUpdateError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Update failed: {e}")
+
+        if result.get("updated"):
+            # The web UI is served from frontend/dist, which is not tracked by
+            # git, so it must be rebuilt for pulled UI changes to take effect.
+            result["ui_rebuilt"] = await asyncio.to_thread(build_frontend, True)
+            result["restart_required"] = True
+            logger.info(
+                "Update applied. A gateway restart is required to load the new Python code."
+            )
+
+        return result
 
     @app.post("/api/server/restart")
     async def restart_gateway(request: Request):

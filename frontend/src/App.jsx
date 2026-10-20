@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Sun, Moon, RefreshCw, Key, Server, Sliders, Terminal, Shield, Activity, RotateCcw, CheckCircle2, AlertCircle, GitMerge, Lock, BarChart3, X, Copy
+  Sun, Moon, RefreshCw, Key, Server, Sliders, Terminal, Shield, Activity, RotateCcw, CheckCircle2, AlertCircle, GitMerge, Lock, BarChart3, X, Copy, CloudDownload
 } from 'lucide-react';
 import nimCubeLogo from '../icons/nim-cube.svg';
 import { BentoGrid } from './components/BentoGrid';
@@ -13,7 +13,8 @@ import {
   SettingsModal,
   FullLogsModal,
   ComboEditorModal,
-  UsageAnalyticsModal
+  UsageAnalyticsModal,
+  UpdateModal
 } from './components/Modals';
 
 export default function App() {
@@ -365,6 +366,15 @@ export default function App() {
           </button>
 
           <button
+            onClick={() => setActiveModal('update')}
+            className="px-2.5 py-1 rounded-xl bg-white dark:bg-white/5 text-slate-700 dark:text-slate-300 text-xs font-semibold hover:bg-slate-50 dark:hover:bg-white/10 transition neu-button flex items-center gap-1 border border-black/5 dark:border-transparent"
+            title="Check for and install updates from main"
+          >
+            <CloudDownload className="w-3 h-3 text-[#f72585]" />
+            <span>Update</span>
+          </button>
+
+          <button
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
             className="p-1.5 rounded-xl bg-white dark:bg-white/5 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/10 transition ml-0.5 neu-button border border-black/5 dark:border-transparent"
             title="Toggle Light / Dark Mode"
@@ -451,6 +461,15 @@ export default function App() {
         <UsageAnalyticsModal
           onClose={() => setActiveModal(null)}
           onResetGateway={fetchStats}
+        />
+      )}
+
+      {activeModal === 'update' && (
+        <UpdateModal
+          onClose={() => setActiveModal(null)}
+          onUpdateApplied={(body) => {
+            showToast(body.message || 'Update applied. Restart the gateway to finish.', 'success');
+          }}
         />
       )}
 
