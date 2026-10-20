@@ -50,7 +50,7 @@ from nim_router.logger import (
     unregister_log_subscriber,
     get_recent_logs,
 )
-from nim_router.client import get_shared_client, close_shared_client
+from nim_router.client import get_shared_client, close_shared_client, get_active_stream_count
 from nim_router.catalog import save_working_models
 
 _router_instance: Optional[ModelRouter] = None
@@ -270,7 +270,7 @@ def create_app() -> FastAPI:
         in_flight_total = sum(_router_instance._in_flight.values())
 
         tracker = getattr(_router_instance, "tracker", None)
-        analytics = tracker.get_analytics(time_range="all") if tracker else {}
+        analytics = await asyncio.to_thread(tracker.get_analytics, time_range="all") if tracker else {}
         usage_summary = analytics.get("summary") or {
             "total_requests": 0,
             "successful_requests": 0,
@@ -407,14 +407,14 @@ def create_app() -> FastAPI:
                 "models": [],
                 "recent_activity": []
             }
-        return tracker.get_analytics(time_range=time_range)
+        return await asyncio.to_thread(tracker.get_analytics, time_range=time_range)
 
     @app.post("/api/dashboard/usage/reset")
     async def reset_dashboard_usage(request: Request):
         _check_auth(request)
         tracker = getattr(_router_instance, "tracker", None)
         if tracker:
-            tracker.reset_analytics()
+            await asyncio.to_thread(tracker.reset_analytics)
         return {"success": True, "message": "Usage analytics reset"}
 
     @app.get("/api/keys")
@@ -702,7 +702,9 @@ def create_app() -> FastAPI:
         return {
             "status": "healthy",
             "total_models": len(_router_instance.models) if _router_instance else 0,
-            "healthy_pool_size": len(_router_instance._healthy_pool) if _router_instance else 0
+            "healthy_pool_size": len(_router_instance._healthy_pool) if _router_instance else 0,
+            "in_flight": sum(_router_instance._in_flight.values()) if _router_instance else 0,
+            "active_streams": get_active_stream_count(),
         }
 
     @app.get("/models")

@@ -30,6 +30,7 @@ def _load_settings() -> dict:
         "model_max_concurrency": 4,
         "fallback_models": [],
         "first_token_timeout": 20.0,
+        "stream_idle_timeout": 120.0,
     }
     example = _SETTINGS_FILE.replace(".yaml", ".yaml.example")
     if not os.path.exists(_SETTINGS_FILE) and os.path.exists(example):
@@ -92,6 +93,9 @@ def get_max_latency_threshold() -> float:
 
 def get_first_token_timeout() -> float:
     return float(_load_settings().get("first_token_timeout") or 20.0)
+
+def get_stream_idle_timeout() -> float:
+    return float(_load_settings().get("stream_idle_timeout") or 120.0)
 
 def get_quality_floor() -> float:
     return min(1.0, max(0.0, float(_load_settings().get("quality_floor", 0.6))))

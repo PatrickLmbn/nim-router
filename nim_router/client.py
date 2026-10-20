@@ -2,6 +2,7 @@ import asyncio
 import json
 import sys
 import time
+import anyio
 import httpx
 from fastapi import HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -14,6 +15,7 @@ from nim_router.config import (
     CEREBRAS_API_BASE,
     BAI_API_BASE,
     get_first_token_timeout,
+    get_stream_idle_timeout,
 )
 from nim_router.logger import logger
 from nim_router.schemas import ChatCompletionRequest
@@ -24,20 +26,41 @@ from typing import Callable, Optional
 from nim_router.classifier import estimate_token_count
 
 _shared_client: httpx.AsyncClient | None = None
+_active_streams: int = 0
 
 def get_shared_client() -> httpx.AsyncClient:
     global _shared_client
     if _shared_client is None or _shared_client.is_closed:
-        limits = httpx.Limits(max_connections=100, max_keepalive_connections=30, keepalive_expiry=30)
+        limits = httpx.Limits(max_connections=200, max_keepalive_connections=50, keepalive_expiry=30)
         timeout = httpx.Timeout(connect=15.0, read=300.0, write=60.0, pool=60.0)
         _shared_client = httpx.AsyncClient(limits=limits, timeout=timeout)
     return _shared_client
+
+def get_active_stream_count() -> int:
+    return _active_streams
 
 async def close_shared_client():
     global _shared_client
     if _shared_client and not _shared_client.is_closed:
         await _shared_client.aclose()
         _shared_client = None
+
+async def _safe_aclose(response) -> None:
+    """Close an upstream response, guaranteeing release even when the
+    surrounding task is being cancelled (e.g. downstream client disconnected)."""
+    if response is None:
+        return
+    try:
+        await response.aclose()
+    except asyncio.CancelledError:
+        try:
+            with anyio.CancelScope(shield=True):
+                await response.aclose()
+        except Exception:
+            pass
+        raise
+    except Exception:
+        pass
 
 def parse_retry_after(header_val: str | None) -> float | None:
     if not header_val:
@@ -369,20 +392,26 @@ async def call_provider_endpoint(
     client = get_shared_client()
 
     if request.stream:
+        response = None
+        handed_off = False
+        first_token_timeout = get_first_token_timeout()
+        idle_timeout = get_stream_idle_timeout()
         try:
             req = client.build_request("POST", url, headers=headers, json=payload)
-            response = await client.send(req, stream=True)
+            # Bound time-to-first-headers so a connected-but-silent upstream
+            # cannot pin a pooled connection for the full read timeout.
+            response = await asyncio.wait_for(
+                client.send(req, stream=True), timeout=first_token_timeout
+            )
 
             if response.status_code == 200:
                 aiter = response.aiter_raw()
                 first_chunk = None
-                first_token_timeout = get_first_token_timeout()
                 try:
                     first_chunk = await asyncio.wait_for(
                         aiter.__anext__(), timeout=first_token_timeout
                     )
                 except asyncio.TimeoutError:
-                    await response.aclose()
                     logger.warning(
                         f"No first token from {model_id} within {first_token_timeout:.0f}s, failing over..."
                     )
@@ -391,7 +420,6 @@ async def call_provider_endpoint(
                         detail=f"Upstream model {model_id} accepted the request but produced no output within {first_token_timeout:.0f}s.",
                     )
                 except StopAsyncIteration:
-                    await response.aclose()
                     logger.warning(
                         f"Model {model_id} returned an empty 200 response (no chunks), failing over..."
                     )
@@ -403,7 +431,6 @@ async def call_provider_endpoint(
                 if first_chunk:
                     sample = first_chunk.decode("utf-8", errors="ignore")
                     if '"error":' in sample and ('"message":' in sample or '"code":' in sample):
-                        await response.aclose()
                         detail_msg = sample
                         try:
                             clean = sample.strip()
@@ -471,11 +498,32 @@ async def call_provider_endpoint(
                             pass
 
                 async def stream_generator():
+                    global _active_streams
+                    _active_streams += 1
                     try:
                         if first_chunk:
                             process_chunk_text(first_chunk.decode("utf-8", errors="ignore"))
                             yield first_chunk
-                        async for chunk in aiter:
+                        while True:
+                            try:
+                                chunk = await asyncio.wait_for(
+                                    aiter.__anext__(), timeout=idle_timeout
+                                )
+                            except StopAsyncIteration:
+                                break
+                            except asyncio.TimeoutError:
+                                logger.warning(
+                                    f"Stream stalled for {model_id}: no data for {idle_timeout:.0f}s, closing."
+                                )
+                                err_msg = json.dumps({
+                                    "error": {
+                                        "message": f"Stream connection stalled from upstream model ({model_id}) for {idle_timeout:.0f}s.",
+                                        "type": "upstream_timeout",
+                                        "code": 504
+                                    }
+                                })
+                                yield f"data: {err_msg}\n\n".encode("utf-8")
+                                break
                             process_chunk_text(chunk.decode("utf-8", errors="ignore"))
                             yield chunk
                     except (httpx.ReadTimeout, httpx.RequestError) as e:
@@ -489,7 +537,8 @@ async def call_provider_endpoint(
                         })
                         yield f"data: {err_msg}\n\n".encode("utf-8")
                     finally:
-                        await response.aclose()
+                        _active_streams = max(0, _active_streams - 1)
+                        await _safe_aclose(response)
                         if sse_buffer:
                             process_chunk_text("\n")
                         final_prompt = stream_prompt_tokens
@@ -507,6 +556,7 @@ async def call_provider_endpoint(
                             except Exception:
                                 pass
 
+                handed_off = True
                 return StreamingResponse(
                     stream_generator(),
                     status_code=200,
@@ -520,7 +570,6 @@ async def call_provider_endpoint(
             else:
                 body = await response.aread()
                 retry_sec = parse_retry_after(response.headers.get("Retry-After") or response.headers.get("retry-after"))
-                await response.aclose()
 
                 try:
                     err_data = json.loads(body.decode())
@@ -541,6 +590,12 @@ async def call_provider_endpoint(
             raise
         except Exception as e:
             raise HTTPException(status_code=502, detail=str(e))
+        finally:
+            # If we never handed the stream to the caller, make sure the
+            # upstream connection is always released (covers read/protocol
+            # errors during first-token acquisition and cancellation).
+            if response is not None and not handed_off:
+                await _safe_aclose(response)
     else:
         try:
             response = await client.post(url, headers=headers, json=payload)

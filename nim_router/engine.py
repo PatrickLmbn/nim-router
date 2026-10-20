@@ -1013,14 +1013,28 @@ class ModelRouter:
             t0 = time.time()
             self._record_request_dispatch(selected_id, t0)
             self._in_flight[selected_id] = in_flight_num + 1
+            released = [False]
+            defer_release = [False]
+
+            _release_key: str = selected_id if selected_id else ""
+
+            def release_in_flight(_mid: str = _release_key):
+                # Idempotent: streaming requests release only when the stream
+                # actually finishes; everything else releases on attempt exit.
+                if released[0]:
+                    return
+                released[0] = True
+                self._in_flight[_mid] = max(0, self._in_flight.get(_mid, 1) - 1)
+
             try:
                 base_url, _, keys_to_try = self._get_provider_info(selected_id, combo_provider_overrides)
-                for k_idx, current_key in enumerate(keys_to_try):
-                    now_check = time.time()
-                    cool_until = self._key_cooldowns.get((provider, current_key), 0.0)
-                    if cool_until > now_check and len(keys_to_try) > 1:
-                        logger.debug(f"Skipping key {current_key[:8]}... for {provider} (cooling down for {cool_until - now_check:.1f}s)")
-                        continue
+                now_check = time.time()
+                _healthy_keys = [k for k in keys_to_try if self._key_cooldowns.get((provider, k), 0.0) <= now_check]
+                _cooling_keys = [k for k in keys_to_try if k not in _healthy_keys]
+                # Prefer non-cooling keys, but never skip every key: falling back
+                # to cooling keys beats reporting the whole model as unavailable.
+                ordered_keys = (_healthy_keys + _cooling_keys) if _healthy_keys else list(keys_to_try)
+                for k_idx, current_key in enumerate(ordered_keys):
                     try:
                         request.model = selected_id
                         recorded_tokens = [0]
@@ -1062,6 +1076,20 @@ class ModelRouter:
                             self._record_success(selected_id, elapsed, token_count=recorded_tokens[0])
                         self._record_key_success(provider, current_key, selected_id)
                         logger.success(f"Request completed successfully via {provider} :: {selected_id} ({elapsed:.3f}s)")
+                        if isinstance(response, StreamingResponse):
+                            # Hold the in-flight slot until the stream is fully
+                            # consumed or closed, so concurrency limits are real.
+                            defer_release[0] = True
+                            _original_iter = response.body_iterator
+
+                            async def _tracked_stream(_orig=_original_iter, _release=release_in_flight):
+                                try:
+                                    async for _chunk in _orig:
+                                        yield _chunk
+                                finally:
+                                    _release()
+
+                            response.body_iterator = _tracked_stream()
                         return response
                     except HTTPException as e:
                         retry_after_hdr = e.headers.get("Retry-After") if e.headers else None
@@ -1080,7 +1108,7 @@ class ModelRouter:
                             is_estimated=False,
                             timestamp=t0
                         )
-                        if e.status_code in (429, 400, 404, 500, 502, 503) and k_idx < len(keys_to_try) - 1:
+                        if e.status_code in (429, 400, 404, 500, 502, 503) and k_idx < len(ordered_keys) - 1:
                             logger.warning(f"Model {provider} :: {selected_id} error {e.status_code} on key {current_key[:8]}..., retrying next API key...")
                             await asyncio.sleep(0.1)
                             continue
@@ -1117,7 +1145,8 @@ class ModelRouter:
                 )
                 logger.error(f"Error calling {provider} :: {selected_id}: {e}, failing over...")
             finally:
-                self._in_flight[selected_id] = max(0, self._in_flight.get(selected_id, 1) - 1)
+                if not defer_release[0]:
+                    release_in_flight()
 
         if last_error:
             raise last_error

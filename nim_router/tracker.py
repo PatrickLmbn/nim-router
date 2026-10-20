@@ -15,10 +15,21 @@ class UsageTracker:
             self.db_path = os.path.join(config_dir, "usage.db")
         self._lock = threading.Lock()
         self._init_db()
+        # Bound unbounded growth so analytics scans stay fast over time.
+        try:
+            self.prune_old_logs(30)
+        except Exception:
+            pass
 
     def _get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=15.0)
         conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=15000")
+        except Exception:
+            pass
         return conn
 
     def _init_db(self):
@@ -240,6 +251,17 @@ class UsageTracker:
             "models": models,
             "recent_activity": recent_activity
         }
+
+    def prune_old_logs(self, max_age_days: int = 30) -> int:
+        """Delete request logs older than max_age_days. Returns rows removed."""
+        cutoff = time.time() - (max_age_days * 86400.0)
+        with self._lock:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM request_logs WHERE timestamp < ?", (cutoff,))
+                deleted = cursor.rowcount or 0
+                conn.commit()
+        return deleted
 
     def reset_analytics(self):
         with self._lock:
