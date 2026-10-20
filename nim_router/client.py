@@ -59,7 +59,7 @@ def parse_retry_after(header_val: str | None) -> float | None:
         pass
     return None
 
-async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, sem: asyncio.Semaphore, base_url: str = NIM_API_BASE, timeout_sec: float = 8.0) -> tuple[bool, float]:
+async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, sem: asyncio.Semaphore, base_url: str = NIM_API_BASE, probe_endpoint: str = "chat/completions", timeout_sec: float = 8.0) -> tuple[bool, float]:
     if is_banned_model(model_id):
         return False, 999.0
     async with sem:
@@ -72,15 +72,31 @@ async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, se
             headers["HTTP-Referer"] = "https://github.com/patricklmbn/nim-router"
             headers["X-Title"] = "NIM Router"
         try:
-            resp = await client.post(
-                f"{base_url.rstrip('/')}/chat/completions",
-                headers=headers,
-                json={
+            # Determine endpoint and payload based on probe_endpoint
+            if probe_endpoint == "systemone":
+                payload = {
+                    "model": model_id,
+                    "state": "",
+                    "questions": {}
+                }
+            elif probe_endpoint == "responses":
+                payload = {
                     "model": model_id,
                     "messages": [{"role": "user", "content": "hi"}],
                     "max_tokens": 5,
                     "temperature": 0.0
-                },
+                }
+            else:
+                payload = {
+                    "model": model_id,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": 5,
+                    "temperature": 0.0
+                }
+            resp = await client.post(
+                f"{base_url.rstrip('/')}/{probe_endpoint}",
+                headers=headers,
+                json=payload,
                 timeout=timeout_sec
             )
             elapsed = round(time.time() - t0, 3)
@@ -93,10 +109,12 @@ async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, se
         except Exception:
             return False, 999.0
 
-async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_key: str = "", opencode_key: str = "", groq_keys: list[str] | str = "", cerebras_keys: list[str] | str = "", bai_key: str = "") -> list[dict]:
+async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_keys: list[str] | str = "", opencode_key: str = "", groq_keys: list[str] | str = "", cerebras_keys: list[str] | str = "", bai_key: str = "") -> list[dict]:
     primary_nvidia_key = api_keys[0] if isinstance(api_keys, list) and api_keys else (api_keys if isinstance(api_keys, str) else "")
     primary_groq_key = groq_keys[0] if isinstance(groq_keys, list) and groq_keys else (groq_keys if isinstance(groq_keys, str) else "")
     primary_cerebras_key = cerebras_keys[0] if isinstance(cerebras_keys, list) and cerebras_keys else (cerebras_keys if isinstance(cerebras_keys, str) else "")
+    openrouter_keys_list = [k.strip() for k in openrouter_keys if k.strip()] if isinstance(openrouter_keys, list) else [k.strip() for k in (openrouter_keys or "").split(",") if k.strip()]
+    primary_openrouter_key = openrouter_keys_list[0] if openrouter_keys_list else ""
 
     all_discovered = []
     candidates_to_probe = []
@@ -122,12 +140,12 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
         except Exception as e:
             logger.error(f"NVIDIA model discovery failed: {e}")
 
-    if openrouter_key:
+    if primary_openrouter_key:
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.get(
                     f"{OPENROUTER_API_BASE}/models",
-                    headers={"Authorization": f"Bearer {openrouter_key}"},
+                    headers={"Authorization": f"Bearer {primary_openrouter_key}"},
                 )
                 if response.status_code == 200:
                     data = response.json()
@@ -147,7 +165,8 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                     for m in or_models:
                         m_copy = dict(m)
                         m_copy["provider"] = "OpenRouter"
-                        candidates_to_probe.append((openrouter_key, m_copy, OPENROUTER_API_BASE))
+                        for or_key in openrouter_keys_list:
+                            candidates_to_probe.append((or_key, m_copy, OPENROUTER_API_BASE))
         except Exception as e:
             logger.error(f"OpenRouter discovery failed: {e}")
 

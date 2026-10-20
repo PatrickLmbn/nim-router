@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from nim_router.config import (
     get_nvidia_keys,
-    get_openrouter_key,
+    get_openrouter_keys,
     get_opencode_key,
     get_groq_keys,
     get_cerebras_keys,
@@ -61,19 +61,19 @@ async def lifespan(app: FastAPI):
     global _router_instance, _server_start_time
     _server_start_time = time.time()
     nvidia_keys = get_nvidia_keys()
-    openrouter_key = get_openrouter_key()
+    openrouter_keys = get_openrouter_keys()
     opencode_key = get_opencode_key()
     groq_keys = get_groq_keys()
     cerebras_keys = get_cerebras_keys()
     bai_key = get_bai_key()
     strategy = get_routing_strategy()
 
-    if not nvidia_keys and not openrouter_key and not opencode_key and not groq_keys and not cerebras_keys and not bai_key:
+    if not nvidia_keys and not openrouter_keys and not opencode_key and not groq_keys and not cerebras_keys and not bai_key:
         logger.warning("No API keys found in environment (.env). Please configure NVIDIA_API_KEYS, OPENROUTER_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or BAI_API_KEY.")
 
     _router_instance = ModelRouter(
         api_key=nvidia_keys,
-        openrouter_key=openrouter_key,
+        openrouter_keys=openrouter_keys,
         opencode_key=opencode_key,
         groq_keys=groq_keys,
         cerebras_keys=cerebras_keys,
@@ -261,7 +261,7 @@ def create_app() -> FastAPI:
         nv_keys = get_nvidia_keys()
         groq_keys = get_groq_keys()
         cerebras_keys = get_cerebras_keys()
-        or_key = get_openrouter_key()
+        or_keys = get_openrouter_keys()
         oc_key = get_opencode_key()
         bai_key = get_bai_key()
 
@@ -378,7 +378,7 @@ def create_app() -> FastAPI:
                 "NVIDIA": {"keys_count": len(nv_keys), "active": len(nv_keys) > 0, "models_count": prov_models_count.get("NVIDIA", 0)},
                 "Groq": {"keys_count": len(groq_keys), "active": len(groq_keys) > 0, "models_count": prov_models_count.get("Groq", 0)},
                 "Cerebras": {"keys_count": len(cerebras_keys), "active": len(cerebras_keys) > 0, "models_count": prov_models_count.get("Cerebras", 0)},
-                "OpenRouter": {"keys_count": 1 if or_key else 0, "active": bool(or_key), "models_count": prov_models_count.get("OpenRouter", 0)},
+                "OpenRouter": {"keys_count": len(or_keys), "active": len(or_keys) > 0, "models_count": prov_models_count.get("OpenRouter", 0)},
                 "OpenCode": {"keys_count": 1 if oc_key else 0, "active": bool(oc_key), "models_count": prov_models_count.get("OpenCode", 0)},
                 "BAI": {"keys_count": 1 if bai_key else 0, "active": bool(bai_key), "models_count": prov_models_count.get("BAI", 0)},
             },
@@ -428,7 +428,7 @@ def create_app() -> FastAPI:
         nv_keys = get_nvidia_keys()
         groq_keys = get_groq_keys()
         cerebras_keys = get_cerebras_keys()
-        or_key = get_openrouter_key()
+        or_keys = get_openrouter_keys()
         oc_key = get_opencode_key()
         bai_key = get_bai_key()
 
@@ -437,7 +437,7 @@ def create_app() -> FastAPI:
                 {"id": "NVIDIA", "name": "NVIDIA NIM", "env_var": "NVIDIA_API_KEYS", "keys": [mask(k) for k in nv_keys], "count": len(nv_keys)},
                 {"id": "Groq", "name": "Groq LPU", "env_var": "GROQ_API_KEYS", "keys": [mask(k) for k in groq_keys], "count": len(groq_keys)},
                 {"id": "Cerebras", "name": "Cerebras Wafer-Scale", "env_var": "CEREBRAS_API_KEYS", "keys": [mask(k) for k in cerebras_keys], "count": len(cerebras_keys)},
-                {"id": "OpenRouter", "name": "OpenRouter Free", "env_var": "OPENROUTER_API_KEY", "keys": [mask(or_key)] if or_key else [], "count": 1 if or_key else 0},
+                {"id": "OpenRouter", "name": "OpenRouter Free", "env_var": "OPENROUTER_API_KEYS", "keys": [mask(k) for k in or_keys], "count": len(or_keys)},
                 {"id": "OpenCode", "name": "OpenCode Zen", "env_var": "OPENCODE_API_KEY", "keys": [mask(oc_key)] if oc_key else [], "count": 1 if oc_key else 0},
                 {"id": "BAI", "name": "B.AI Free", "env_var": "BAI_API_KEY", "keys": [mask(bai_key)] if bai_key else [], "count": 1 if bai_key else 0},
             ]
@@ -455,7 +455,7 @@ def create_app() -> FastAPI:
             "NVIDIA": "NVIDIA_API_KEYS",
             "GROQ": "GROQ_API_KEYS",
             "CEREBRAS": "CEREBRAS_API_KEYS",
-            "OPENROUTER": "OPENROUTER_API_KEY",
+            "OPENROUTER": "OPENROUTER_API_KEYS",
             "OPENCODE": "OPENCODE_API_KEY",
             "BAI": "BAI_API_KEY",
         }
@@ -520,7 +520,7 @@ def create_app() -> FastAPI:
         reload_env()
         if _router_instance:
             _router_instance.api_keys = get_nvidia_keys()
-            _router_instance.openrouter_key = get_openrouter_key()
+            _router_instance.openrouter_keys = get_openrouter_keys()
             _router_instance.opencode_key = get_opencode_key()
             _router_instance.groq_keys = get_groq_keys()
             _router_instance.cerebras_keys = get_cerebras_keys()
@@ -619,7 +619,7 @@ def create_app() -> FastAPI:
         reload_env()
         if _router_instance:
             _router_instance.api_keys = get_nvidia_keys()
-            _router_instance.openrouter_key = get_openrouter_key()
+            _router_instance.openrouter_keys = get_openrouter_keys()
             _router_instance.opencode_key = get_opencode_key()
             _router_instance.groq_keys = get_groq_keys()
             _router_instance.cerebras_keys = get_cerebras_keys()
@@ -842,7 +842,7 @@ def create_app() -> FastAPI:
         except Exception:
             pass
         _router_instance.api_keys = get_nvidia_keys()
-        _router_instance.openrouter_key = get_openrouter_key()
+        _router_instance.openrouter_keys = get_openrouter_keys()
         _router_instance.opencode_key = get_opencode_key()
         _router_instance.groq_keys = get_groq_keys()
         _router_instance.cerebras_keys = get_cerebras_keys()
@@ -864,6 +864,11 @@ def create_app() -> FastAPI:
     @app.post("/api/chat/completions")
     async def chat_completions(request: Request):
         return await _router_instance.handle_request(request)
+
+    @app.post("/v1/responses")
+    @app.post("/responses")
+    async def responses(request: Request):
+        return await _router_instance.handle_responses_request(request)
 
     base_dir = os.path.dirname(os.path.dirname(__file__))
     dist_dir = os.path.join(base_dir, "frontend", "dist")

@@ -100,8 +100,9 @@ def get_nvidia_keys() -> list[str]:
     raw_keys = os.getenv("NVIDIA_API_KEYS", "") or os.getenv("NVIDIA_API_KEY", "")
     return [k.strip() for k in raw_keys.split(",") if k.strip()]
 
-def get_openrouter_key() -> str:
-    return os.getenv("OPENROUTER_API_KEY", "").strip()
+def get_openrouter_keys() -> list[str]:
+    raw_keys = os.getenv("OPENROUTER_API_KEYS", "") or os.getenv("OPENROUTER_API_KEY", "")
+    return [k.strip() for k in raw_keys.split(",") if k.strip()]
 
 def get_opencode_key() -> str:
     return os.getenv("OPENCODE_API_KEY", "").strip()

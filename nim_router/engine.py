@@ -2,7 +2,10 @@ import asyncio
 import json
 import os
 import time
+import secrets
+from typing import Optional
 from fastapi import HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 import httpx
 
 from nim_router.config import (
@@ -24,7 +27,7 @@ from nim_router.config import (
 )
 from nim_router.combos import get_combo, load_combos
 from nim_router.logger import logger
-from nim_router.schemas import ChatCompletionRequest
+from nim_router.schemas import ChatCompletionRequest, ResponsesRequest
 from nim_router.catalog import is_banned_model, load_fallback_models
 from nim_router.classifier import (
     is_tool_model,
@@ -41,7 +44,7 @@ from nim_router.catalog import is_banned_model, load_fallback_models, get_provid
 from nim_router.tracker import get_usage_tracker
 
 class ModelRouter:
-    def __init__(self, api_key: str | list[str], openrouter_key: str = "", opencode_key: str = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = "", bai_key: str = "", strategy: str = ""):
+    def __init__(self, api_key: str | list[str], openrouter_keys: str | list[str] = "", opencode_key: str = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = "", bai_key: str = "", strategy: str = ""):
         self.tracker = get_usage_tracker()
         if isinstance(api_key, list):
             self.api_keys = [k.strip() for k in api_key if k.strip()]
@@ -52,7 +55,10 @@ class ModelRouter:
         self.api_key = self.api_keys[0]
 
         self.strategy = (strategy or get_routing_strategy()).strip().lower()
-        self.openrouter_key = openrouter_key.strip()
+        if isinstance(openrouter_keys, list):
+            self.openrouter_keys = [k.strip() for k in openrouter_keys if k.strip()]
+        else:
+            self.openrouter_keys = [k.strip() for k in (openrouter_keys or "").split(",") if k.strip()]
         self.opencode_key = opencode_key.strip()
         self.bai_key = bai_key.strip()
 
@@ -67,6 +73,7 @@ class ModelRouter:
             self.cerebras_keys = [k.strip() for k in (cerebras_keys or "").split(",") if k.strip()]
 
         self.key_index = 0
+        self.openrouter_key_index = 0
         self.groq_key_index = 0
         self.cerebras_key_index = 0
         self.models: list[dict] = []
@@ -113,8 +120,11 @@ class ModelRouter:
         now = time.time()
 
         if provider == "OpenRouter":
-            keys = [self.openrouter_key] if self.openrouter_key else [""]
+            keys = self.openrouter_keys if self.openrouter_keys else [""]
             base_url = OPENROUTER_API_BASE
+            rotated = keys[self.openrouter_key_index:] + keys[:self.openrouter_key_index]
+            self.openrouter_key_index = (self.openrouter_key_index + 1) % len(keys)
+            keys = rotated
         elif provider == "OpenCode":
             keys = [self.opencode_key] if self.opencode_key else [""]
             base_url = OPENCODE_API_BASE
@@ -173,7 +183,7 @@ class ModelRouter:
         discovered = await discover_models(
             self.api_keys,
             self._latencies,
-            self.openrouter_key,
+            self.openrouter_keys,
             self.opencode_key,
             self.groq_keys,
             self.cerebras_keys,
@@ -540,6 +550,238 @@ class ModelRouter:
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid chat completions JSON payload: {e}")
         return await self._route_request(chat_req, raw_request)
+
+    def _responses_input_to_messages(self, input_data, instructions: Optional[str] = None) -> list[dict]:
+        """Translate OpenAI Responses API `input` into Chat Completions `messages`."""
+        messages: list[dict] = []
+        if instructions:
+            messages.append({"role": "system", "content": instructions})
+
+        if input_data is None:
+            return messages
+
+        if isinstance(input_data, str):
+            messages.append({"role": "user", "content": input_data})
+            return messages
+
+        if isinstance(input_data, list):
+            for item in input_data:
+                role = item.get("role", "user")
+                content = item.get("content")
+                if content is None:
+                    continue
+                if isinstance(content, str):
+                    messages.append({"role": role, "content": content})
+                elif isinstance(content, list):
+                    parts = []
+                    for part in content:
+                        if part.get("type") == "input_text":
+                            parts.append({"type": "text", "text": part.get("text", "")})
+                        elif part.get("type") == "input_image":
+                            parts.append({
+                                "type": "image_url",
+                                "image_url": {"url": part.get("image_url", "")},
+                            })
+                    messages.append({"role": role, "content": parts})
+                else:
+                    messages.append({"role": role, "content": str(content)})
+        return messages
+
+    def _chat_to_responses_response(self, chat_resp: dict, model: str, request_id: str) -> dict:
+        """Translate a Chat Completions response into OpenAI Responses API format."""
+        created = int(time.time())
+        output_items = []
+        text_parts = []
+        tool_calls_parts = []
+
+        for choice in chat_resp.get("choices", []) or []:
+            msg = choice.get("message", {}) or {}
+            content = msg.get("content") or ""
+            if content:
+                text_parts.append(content)
+                output_items.append({
+                    "type": "message",
+                    "role": msg.get("role", "assistant"),
+                    "content": [{"type": "output_text", "text": content}],
+                })
+            tc = msg.get("tool_calls") or []
+            for call in tc:
+                tool_calls_parts.append(call)
+                output_items.append({
+                    "type": "function_call",
+                    "call_id": call.get("id", ""),
+                    "name": call.get("function", {}).get("name", ""),
+                    "arguments": call.get("function", {}).get("arguments", "{}"),
+                })
+
+        usage = chat_resp.get("usage") or {}
+        return {
+            "id": request_id,
+            "object": "response",
+            "created": created,
+            "model": model,
+            "output": output_items,
+            "usage": {
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "completion_tokens": usage.get("completion_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
+            },
+        }
+
+    async def handle_responses_request(self, raw_request: Request) -> Response:
+        try:
+            body = await raw_request.json()
+            resp_req = ResponsesRequest(**body)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid responses JSON payload: {e}")
+
+        request_id = f"resp_{secrets.token_urlsafe(16)}"
+        model = resp_req.model or ""
+        stream = bool(resp_req.stream)
+
+        messages = self._responses_input_to_messages(resp_req.input, resp_req.instructions)
+
+        chat_req = ChatCompletionRequest(
+            model=model,
+            messages=messages,
+            temperature=resp_req.temperature,
+            top_p=resp_req.top_p,
+            max_tokens=resp_req.max_output_tokens,
+            stream=stream,
+            stop=resp_req.stop,
+            tools=resp_req.tools,
+        )
+
+        if not stream:
+            chat_resp = await self._route_request(chat_req, raw_request)
+            body_bytes = b""
+            if isinstance(chat_resp, Response):
+                body_bytes = chat_resp.body if hasattr(chat_resp, "body") else b""
+            else:
+                body_bytes = json.dumps(chat_resp).encode()
+            try:
+                chat_json = json.loads(body_bytes.decode())
+            except Exception:
+                chat_json = {}
+            responses_json = self._chat_to_responses_response(chat_json, model, request_id)
+            return Response(
+                content=json.dumps(responses_json),
+                media_type="application/json",
+                status_code=200,
+            )
+
+        # Streaming path: translate chat-completions SSE into Responses SSE events.
+        async def sse_event(event: str, data: dict) -> bytes:
+            return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode("utf-8")
+
+        async def responses_stream_generator(inner):
+            try:
+                yield await sse_event("response.created", {
+                    "id": request_id,
+                    "object": "response",
+                    "created": int(time.time()),
+                    "model": model,
+                    "status": "in_progress",
+                    "output": [],
+                    "usage": None,
+                })
+
+                output_index = 0
+                text_buffer = ""
+                first = True
+                async for chunk in inner:
+                    text = chunk.decode("utf-8", errors="ignore")
+                    if first:
+                        first = False
+                        sample = text.strip()
+                        if sample.startswith("data:"):
+                            sample = sample[5:].strip()
+                        if sample and sample != "[DONE]":
+                            try:
+                                data = json.loads(sample)
+                                if data.get("error"):
+                                    yield await sse_event("response.error", {
+                                        "id": request_id,
+                                        "error": data["error"],
+                                    })
+                                    return
+                            except Exception:
+                                pass
+
+                    for line in text.split("\n"):
+                        line = line.strip()
+                        if not line.startswith("data:"):
+                            continue
+                        payload = line[5:].strip()
+                        if not payload or payload == "[DONE]":
+                            continue
+                        try:
+                            data = json.loads(payload)
+                        except Exception:
+                            continue
+
+                        choices = data.get("choices") or []
+                        for choice in choices:
+                            delta = choice.get("delta") or {}
+                            content = delta.get("content") or ""
+                            if content:
+                                text_buffer += content
+                                yield await sse_event("response.output_text.delta", {
+                                    "id": request_id,
+                                    "output_index": output_index,
+                                    "content_index": 0,
+                                    "delta": content,
+                                })
+                            if delta.get("tool_calls"):
+                                for tc in delta["tool_calls"]:
+                                    yield await sse_event("response.function_call.delta", {
+                                        "id": request_id,
+                                        "output_index": output_index,
+                                        "delta": tc,
+                                    })
+
+                yield await sse_event("response.completed", {
+                    "id": request_id,
+                    "object": "response",
+                    "created": int(time.time()),
+                    "model": model,
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": text_buffer}],
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 0,
+                        "completion_tokens": max(1, int(len(text_buffer) / 3.8)) if text_buffer else 0,
+                        "total_tokens": max(1, int(len(text_buffer) / 3.8)) if text_buffer else 0,
+                    },
+                })
+            except Exception as e:
+                logger.error(f"Responses stream translation error: {e}")
+                try:
+                    yield await sse_event("response.error", {
+                        "id": request_id,
+                        "error": {"message": str(e), "type": "upstream_error"},
+                    })
+                except Exception:
+                    pass
+
+        inner = await self._route_request(chat_req, raw_request)
+        if not isinstance(inner, StreamingResponse):
+            raise HTTPException(status_code=502, detail="Upstream did not return a stream for Responses request")
+
+        return StreamingResponse(
+            responses_stream_generator(inner.body_iterator),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     async def route_request(self, chat_req: ChatCompletionRequest, raw_request: Request = None) -> Response:
         return await self._route_request(chat_req, raw_request)

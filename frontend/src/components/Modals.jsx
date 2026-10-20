@@ -157,7 +157,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
     NVIDIA: { name: 'NVIDIA NIM', short: 'NVIDIA', color: '#76B900', env: 'NVIDIA_API_KEYS', multi: true, placeholder: 'nvapi-...' },
     Groq: { name: 'Groq LPU', short: 'Groq', color: '#F55036', env: 'GROQ_API_KEYS', multi: true, placeholder: 'gsk_...' },
     Cerebras: { name: 'Cerebras Wafer', short: 'Cerebras', color: '#FF6B35', env: 'CEREBRAS_API_KEYS', multi: true, placeholder: 'csk-...' },
-    OpenRouter: { name: 'OpenRouter Free', short: 'OpenRouter', color: '#6366F1', env: 'OPENROUTER_API_KEY', multi: false, placeholder: 'sk-or-v1-...' },
+    OpenRouter: { name: 'OpenRouter Free', short: 'OpenRouter', color: '#6366F1', env: 'OPENROUTER_API_KEYS', multi: true, placeholder: 'sk-or-v1-...' },
     OpenCode: { name: 'OpenCode Zen', short: 'OpenCode', color: '#00D2FF', env: 'OPENCODE_API_KEY', multi: false, placeholder: 'opencode_...' },
     BAI: { name: 'B.AI Free', short: 'B.AI', color: '#A855F7', env: 'BAI_API_KEY', multi: false, placeholder: 'bai_...' }
   };
@@ -808,6 +808,19 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
     setPreviousOrder(null);
   };
 
+  const isModelUnavailable = (id) => {
+    const m = allModels.find(x => x.id === id || x.id.toLowerCase() === id.toLowerCase());
+    return !m || !m.healthy;
+  };
+
+  const unavailableIds = models.filter(isModelUnavailable);
+
+  const handleRemoveUnavailable = () => {
+    if (unavailableIds.length === 0) return;
+    setPreviousOrder([...models]);
+    setModels(prev => prev.filter(m => !isModelUnavailable(m)));
+  };
+
   const getModelLatency = (id) => {
     const m = allModels.find(x => x.id === id || x.id.toLowerCase() === id.toLowerCase());
     if (!m || !m.healthy) return 999999;
@@ -1015,6 +1028,21 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
                     <Clock className="w-3 h-3 text-[#00d2ff]" />
                     <span>Order by Latency</span>
                   </button>
+                  <button
+                    type="button"
+                    onClick={handleRemoveUnavailable}
+                    disabled={unavailableIds.length === 0}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-lg border border-black/10 dark:border-white/10 hover:border-rose-500/40 bg-slate-100 dark:bg-white/[0.04] hover:bg-rose-500/10 text-slate-600 dark:text-slate-400 hover:text-rose-400 disabled:opacity-40 disabled:hover:border-black/10 disabled:hover:bg-slate-100 dark:disabled:hover:bg-white/[0.04] disabled:hover:text-slate-400 text-[10px] font-semibold transition disabled:cursor-not-allowed"
+                    title={`Remove all unavailable models from this combo (${unavailableIds.length})`}
+                  >
+                    <AlertCircle className="w-3 h-3 text-rose-400" />
+                    <span>Remove Unavailable</span>
+                    {unavailableIds.length > 0 && (
+                      <span className="text-[8.5px] px-1 py-0.1 rounded-full font-mono bg-rose-500/20 text-rose-400">
+                        {unavailableIds.length}
+                      </span>
+                    )}
+                  </button>
                 </div>
               )}
             </div>
@@ -1179,7 +1207,7 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
           >
             {models.map((id, i) => {
               const m = allModels.find(x => x.id === id || x.id.toLowerCase() === id.toLowerCase());
-              const isUnavailable = !m || !m.healthy;
+              const isUnavailable = isModelUnavailable(id);
               const isHighLatency = m && m.healthy && m.latency > maxLatencyThreshold;
               const isDragging = draggedIndex === i;
               const isDragOver = dragOverIndex === i && draggedIndex !== null && draggedIndex !== i;

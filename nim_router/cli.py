@@ -9,7 +9,7 @@ import httpx
 
 from nim_router.config import (
     get_nvidia_keys,
-    get_openrouter_key,
+    get_openrouter_keys,
     get_opencode_key,
     get_groq_keys,
     get_cerebras_keys,
@@ -181,7 +181,7 @@ def stop_server():
 
 async def async_probe_models():
     nvidia_keys = get_nvidia_keys()
-    openrouter_key = get_openrouter_key()
+    openrouter_keys = get_openrouter_keys()
     opencode_key = get_opencode_key()
     groq_keys = get_groq_keys()
     cerebras_keys = get_cerebras_keys()
@@ -193,7 +193,7 @@ async def async_probe_models():
     print("\033[90mStarting live multi-provider endpoint probing scan...\033[0m")
     router = ModelRouter(
         api_key=nvidia_keys,
-        openrouter_key=openrouter_key,
+        openrouter_keys=openrouter_keys,
         opencode_key=opencode_key,
         groq_keys=groq_keys,
         cerebras_keys=cerebras_keys,
@@ -220,7 +220,7 @@ async def async_probe_models():
 
 async def interactive_model_selector():
     nvidia_keys = get_nvidia_keys()
-    openrouter_key = get_openrouter_key()
+    openrouter_keys = get_openrouter_keys()
     opencode_key = get_opencode_key()
     groq_keys = get_groq_keys()
     cerebras_keys = get_cerebras_keys()
@@ -242,7 +242,7 @@ async def interactive_model_selector():
 
     router = ModelRouter(
         api_key=nvidia_keys,
-        openrouter_key=openrouter_key,
+        openrouter_keys=openrouter_keys,
         opencode_key=opencode_key,
         groq_keys=groq_keys,
         cerebras_keys=cerebras_keys,
@@ -366,7 +366,7 @@ async def async_connect_api_keys():
     print("\033[1;37m   Multi-Provider Key Setup    \033[0m\n")
 
     current_nvidia = get_nvidia_keys()
-    current_or = get_openrouter_key()
+    current_or = get_openrouter_keys()
     current_oc = get_opencode_key()
     current_groq = get_groq_keys()
     current_cerebras = get_cerebras_keys()
@@ -375,6 +375,7 @@ async def async_connect_api_keys():
     def mask(k: str) -> str:
         return f"{k[:8]}...{k[-4:]}" if len(k) > 12 else ("(Set)" if k else "(Not set)")
 
+    or_disp = ", ".join([mask(k) for k in current_or]) if current_or else "(Not set)"
     nv_disp = ", ".join([mask(k) for k in current_nvidia]) if current_nvidia else "(Not set)"
     groq_disp = ", ".join([mask(k) for k in current_groq]) if current_groq else "(Not set)"
     cerebras_disp = ", ".join([mask(k) for k in current_cerebras]) if current_cerebras else "(Not set)"
@@ -382,7 +383,7 @@ async def async_connect_api_keys():
     print(f"Current NVIDIA Key:    \033[1;33m{nv_disp}\033[0m")
     print(f"Current Groq Key:      \033[1;33m{groq_disp}\033[0m")
     print(f"Current Cerebras Key:  \033[1;33m{cerebras_disp}\033[0m")
-    print(f"Current OpenRouter Key:\033[1;33m{mask(current_or)}\033[0m")
+    print(f"Current OpenRouter Key: \033[1;33m{or_disp}\033[0m")
     print(f"Current OpenCode Key:  \033[1;33m{mask(current_oc)}\033[0m")
     print(f"Current B.AI Key:      \033[1;33m{mask(current_bai)}\033[0m\n")
 
@@ -391,7 +392,7 @@ async def async_connect_api_keys():
         k1 = getpass.getpass("NVIDIA API Key: ").strip()
         groq_k = getpass.getpass("Groq Free API Key (Optional): ").strip()
         cerebras_k = getpass.getpass("Cerebras Free API Key (Optional): ").strip()
-        or_key = getpass.getpass("OpenRouter API Key (Optional): ").strip()
+        or_key = getpass.getpass("OpenRouter API Key (Optional, comma-separated for multiple): ").strip()
         oc_key = getpass.getpass("OpenCode API Key (Optional): ").strip()
         bai_k = getpass.getpass("B.AI Free API Key (Optional): ").strip()
     except (KeyboardInterrupt, EOFError):
@@ -399,7 +400,7 @@ async def async_connect_api_keys():
         sys.exit(0)
 
     final_nvidia = k1 if k1 else ",".join(current_nvidia)
-    final_or = or_key if or_key else current_or
+    final_or = or_key if or_key else ",".join(current_or)
     final_oc = oc_key if oc_key else current_oc
     final_groq = groq_k if groq_k else ",".join(current_groq)
     final_cerebras = cerebras_k if cerebras_k else ",".join(current_cerebras)
@@ -454,7 +455,7 @@ async def async_manage_provider_keys():
     current_nvidia = get_nvidia_keys()
     current_groq = get_groq_keys()
     current_cerebras = get_cerebras_keys()
-    current_or = get_openrouter_key()
+    current_or = get_openrouter_keys()
     current_oc = get_opencode_key()
     current_bai = get_bai_key()
 
@@ -467,7 +468,7 @@ async def async_manage_provider_keys():
     print(f"  \033[1;32m[1]\033[0m NVIDIA NIM     \033[90m({len(current_nvidia)} keys: {mask_list(current_nvidia)})\033[0m")
     print(f"  \033[1;32m[2]\033[0m Groq LPU      \033[90m({len(current_groq)} keys: {mask_list(current_groq)})\033[0m")
     print(f"  \033[1;32m[3]\033[0m Cerebras      \033[90m({len(current_cerebras)} keys: {mask_list(current_cerebras)})\033[0m")
-    print(f"  \033[1;32m[4]\033[0m OpenRouter    \033[90m(Key: {mask_list([current_or] if current_or else [])})\033[0m")
+    print(f"  \033[1;32m[4]\033[0m OpenRouter    \033[90m({len(current_or)} keys: {mask_list(current_or)})\033[0m")
     print(f"  \033[1;32m[5]\033[0m OpenCode      \033[90m(Key: {mask_list([current_oc] if current_oc else [])})\033[0m")
     print(f"  \033[1;32m[6]\033[0m B.AI          \033[90m(Key: {mask_list([current_bai] if current_bai else [])})\033[0m\n")
 
@@ -487,7 +488,7 @@ async def async_manage_provider_keys():
         1: ("NVIDIA_API_KEYS", "NVIDIA NIM", current_nvidia),
         2: ("GROQ_API_KEYS", "Groq LPU", current_groq),
         3: ("CEREBRAS_API_KEYS", "Cerebras", current_cerebras),
-        4: ("OPENROUTER_API_KEY", "OpenRouter", [current_or] if current_or else []),
+        4: ("OPENROUTER_API_KEYS", "OpenRouter", current_or),
         5: ("OPENCODE_API_KEY", "OpenCode", [current_oc] if current_oc else []),
         6: ("BAI_API_KEY", "B.AI", [current_bai] if current_bai else []),
     }
@@ -534,7 +535,7 @@ async def async_manage_provider_keys():
         print(f"\033[1;32m[✓] Cleared all API keys for {prov_label}.\033[0m")
     else:
         new_keys_list = [k.strip() for k in new_val.split(",") if k.strip()]
-        if prov_num in (1, 2, 3):
+        if prov_num in (1, 2, 3, 4):
             combined_keys = []
             for k in existing_keys + new_keys_list:
                 if k and k not in combined_keys:

@@ -11,6 +11,8 @@ config/settings.yaml
 config/runtime_state.json
 config/usage.db
 *.db
+*.db-wal
+*.db-shm
 config/combos.json
 !config/combos.example.json
 config/.sessions.json

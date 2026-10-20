@@ -46,7 +46,7 @@ git clone https://github.com/PatrickLmbn/nim-router.git; cd nim-router; .\instal
 - **NVIDIA NIM Free Tier** (`NVIDIA_API_KEYS` / `NVIDIA_API_KEY`)
 - **Groq LPU Free Tier** (`GROQ_API_KEYS` / `GROQ_API_KEY` - 500+ tokens/sec)
 - **Cerebras Wafer-Scale Free Tier** (`CEREBRAS_API_KEYS` / `CEREBRAS_API_KEY` - 1800+ tokens/sec)
-- **OpenRouter Free Tier** (`OPENROUTER_API_KEY` - auto-pools all `:free` models)
+- **OpenRouter Free Tier** (`OPENROUTER_API_KEYS` / `OPENROUTER_API_KEY` - auto-pools all `:free` models, multi-key rotation)
 - **OpenCode API** (`OPENCODE_API_KEY`)
 - **B.AI Free Tier** (`BAI_API_KEY` - GLM, Qwen, and Hunyuan endpoints)
 
@@ -233,7 +233,7 @@ The `nim` command-line tool provides full control over the router and service li
 NVIDIA_API_KEYS="nvapi-key1,nvapi-key2"
 GROQ_API_KEYS="gsk_key1,gsk_key2"
 CEREBRAS_API_KEYS="csk-key1,csk-key2"
-OPENROUTER_API_KEY="sk-or-v1-..."
+OPENROUTER_API_KEYS="sk-or-v1-key1,sk-or-v1-key2"
 OPENCODE_API_KEY="your-opencode-key"
 BAI_API_KEY="your-bai-key"
 
