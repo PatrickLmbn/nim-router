@@ -15,7 +15,7 @@ from nim_router.classifier import (
 )
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from nim_router.config import (
@@ -25,6 +25,7 @@ from nim_router.config import (
     get_groq_keys,
     get_cerebras_keys,
     get_bai_key,
+    get_kiro_refresh_token,
     get_routing_strategy,
     get_primary_model,
     get_health_refresh_interval,
@@ -50,7 +51,8 @@ from nim_router.logger import (
     unregister_log_subscriber,
     get_recent_logs,
 )
-from nim_router.client import get_shared_client, close_shared_client, get_active_stream_count
+from nim_router.client import get_shared_client, close_shared_client, get_kiro_client, get_active_stream_count, set_kiro_refresh_token
+from nim_router.kiro import resolve_refresh_token
 from nim_router.catalog import save_working_models
 from nim_router.updater import (
     check_update,
@@ -72,10 +74,11 @@ async def lifespan(app: FastAPI):
     groq_keys = get_groq_keys()
     cerebras_keys = get_cerebras_keys()
     bai_key = get_bai_key()
+    kiro_refresh_token = get_kiro_refresh_token()
     strategy = get_routing_strategy()
 
-    if not nvidia_keys and not openrouter_keys and not opencode_key and not groq_keys and not cerebras_keys and not bai_key:
-        logger.warning("No API keys found in environment (.env). Please configure NVIDIA_API_KEYS, OPENROUTER_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or BAI_API_KEY.")
+    if not nvidia_keys and not openrouter_keys and not opencode_key and not groq_keys and not cerebras_keys and not bai_key and not kiro_refresh_token:
+        logger.warning("No API keys found in environment (.env). Please configure NVIDIA_API_KEYS, OPENROUTER_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, BAI_API_KEY, or sign in with Kiro.")
 
     _router_instance = ModelRouter(
         api_key=nvidia_keys,
@@ -84,6 +87,7 @@ async def lifespan(app: FastAPI):
         groq_keys=groq_keys,
         cerebras_keys=cerebras_keys,
         bai_key=bai_key,
+        kiro_refresh_token=kiro_refresh_token,
         strategy=strategy
     )
     get_shared_client()
@@ -132,7 +136,7 @@ def create_app() -> FastAPI:
         return enriched
 
     _SESSIONS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", ".sessions.json")
-    SESSION_TTL_SECONDS = 86400 * 30  # 30 days
+    SESSION_TTL_SECONDS = 86400 * 30  
 
     def _load_sessions() -> dict[str, float]:
         if os.path.exists(_SESSIONS_FILE):
@@ -270,6 +274,7 @@ def create_app() -> FastAPI:
         or_keys = get_openrouter_keys()
         oc_key = get_opencode_key()
         bai_key = get_bai_key()
+        kiro_token = get_kiro_refresh_token() or resolve_refresh_token()
 
         total_models = len(_router_instance.models)
         healthy_pool = _router_instance._healthy_pool
@@ -387,6 +392,7 @@ def create_app() -> FastAPI:
                 "OpenRouter": {"keys_count": len(or_keys), "active": len(or_keys) > 0, "models_count": prov_models_count.get("OpenRouter", 0)},
                 "OpenCode": {"keys_count": 1 if oc_key else 0, "active": bool(oc_key), "models_count": prov_models_count.get("OpenCode", 0)},
                 "BAI": {"keys_count": 1 if bai_key else 0, "active": bool(bai_key), "models_count": prov_models_count.get("BAI", 0)},
+                "Kiro": {"keys_count": 1 if kiro_token else 0, "active": bool(kiro_token), "models_count": prov_models_count.get("Kiro", 0)},
             },
             "usage_summary": usage_summary,
             "usage_providers": usage_providers
@@ -437,6 +443,7 @@ def create_app() -> FastAPI:
         or_keys = get_openrouter_keys()
         oc_key = get_opencode_key()
         bai_key = get_bai_key()
+        kiro_token = get_kiro_refresh_token() or resolve_refresh_token()
 
         return {
             "providers": [
@@ -446,6 +453,7 @@ def create_app() -> FastAPI:
                 {"id": "OpenRouter", "name": "OpenRouter Free", "env_var": "OPENROUTER_API_KEYS", "keys": [mask(k) for k in or_keys], "count": len(or_keys)},
                 {"id": "OpenCode", "name": "OpenCode Zen", "env_var": "OPENCODE_API_KEY", "keys": [mask(oc_key)] if oc_key else [], "count": 1 if oc_key else 0},
                 {"id": "BAI", "name": "B.AI Free", "env_var": "BAI_API_KEY", "keys": [mask(bai_key)] if bai_key else [], "count": 1 if bai_key else 0},
+                {"id": "Kiro", "name": "Kiro (AWS CodeWhisperer)", "env_var": "KIRO_REFRESH_TOKEN", "keys": [mask(kiro_token)] if kiro_token else [], "count": 1 if kiro_token else 0},
             ]
         }
 
@@ -464,6 +472,7 @@ def create_app() -> FastAPI:
             "OPENROUTER": "OPENROUTER_API_KEYS",
             "OPENCODE": "OPENCODE_API_KEY",
             "BAI": "BAI_API_KEY",
+            "KIRO": "KIRO_REFRESH_TOKEN",
         }
         env_var = env_map.get(provider)
         if not env_var:
@@ -484,6 +493,10 @@ def create_app() -> FastAPI:
         if action == "clear":
             env_vars.pop(env_var, None)
             env_vars.pop(env_var.rstrip("S"), None)
+            if provider == "KIRO":
+                from nim_router.kiro_login import clear_stored_credentials
+                clear_stored_credentials()
+                os.environ.pop("KIRO_REFRESH_TOKEN", None)
         elif action == "add":
             if key_val:
                 new_keys = [k.strip() for k in key_val.split(",") if k.strip()]
@@ -502,6 +515,10 @@ def create_app() -> FastAPI:
             else:
                 env_vars.pop(env_var, None)
                 env_vars.pop(env_var.rstrip("S"), None)
+            if provider == "KIRO" and not current_list:
+                from nim_router.kiro_login import clear_stored_credentials
+                clear_stored_credentials()
+                os.environ.pop("KIRO_REFRESH_TOKEN", None)
         elif action in ("update", "replace") or (action == "set" and body.get("index") is not None):
             idx = body.get("index")
             if idx is not None and isinstance(idx, int) and 0 <= idx < len(current_list):
@@ -531,9 +548,115 @@ def create_app() -> FastAPI:
             _router_instance.groq_keys = get_groq_keys()
             _router_instance.cerebras_keys = get_cerebras_keys()
             _router_instance.bai_key = get_bai_key()
+            if provider == "KIRO":
+                kiro_token = get_kiro_refresh_token() or resolve_refresh_token()
+                _router_instance.kiro_refresh_token = kiro_token
+                set_kiro_refresh_token(kiro_token)
+                if not kiro_token:
+                    _router_instance._invalidate_kiro_models()
 
         logger.success(f"Updated API keys for {provider} via Web UI.")
         return {"success": True, "provider": provider}
+
+    @app.post("/api/kiro/login/start")
+    async def kiro_login_start(request: Request):
+        _check_auth(request)
+        try:
+            from nim_router.kiro_login import KiroLoginSession
+
+            sessions: dict = getattr(app.state, "kiro_sessions", None) or {}
+            app.state.kiro_sessions = sessions
+            tasks: dict = getattr(app.state, "kiro_tasks", None) or {}
+            app.state.kiro_tasks = tasks
+
+            now = time.time()
+            for sid, stale in list(sessions.items()):
+                if stale.completed.is_set() or now - stale.started_at > 900:
+                    sessions.pop(sid, None)
+                    task = tasks.pop(sid, None)
+                    if task is not None and not task.done():
+                        task.cancel()
+                    await stale.close()
+
+            session = KiroLoginSession()
+            auth_url = await session.start()
+            session_id = session.state
+
+            sessions[session_id] = session
+            task = asyncio.create_task(_run_kiro_login(session))
+            tasks[session_id] = task
+
+            return JSONResponse({
+                "success": True,
+                "session_id": session_id,
+                "auth_url": auth_url,
+                "message": "Open this URL in your browser to sign in with Google"
+            })
+        except Exception as e:
+            logger.error(f"Failed to start Kiro login: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def _run_kiro_login(session):
+        from nim_router.kiro_login import exchange_code, store_social_token, save_refresh_token_to_env
+
+        try:
+            result = await session.wait()
+
+            token = exchange_code(
+                code=result.code,
+                code_verifier=session.verifier,
+                callback_uri=session.callback_uri,
+                login_option=result.login_option or "google"
+            )
+
+            store_social_token(token)
+            save_refresh_token_to_env(token["refresh_token"])
+
+            reload_env()
+            kiro_token = get_kiro_refresh_token() or resolve_refresh_token()
+            if _router_instance:
+                _router_instance.kiro_refresh_token = kiro_token
+                set_kiro_refresh_token(kiro_token)
+
+                try:
+                    await _router_instance._discover_models()
+                except Exception as e:
+                    logger.warning(f"Kiro sign-in succeeded but model discovery failed: {e}")
+
+            session.token = token
+            session.exchange_error = ""
+            logger.info("Kiro sign-in completed successfully.")
+        except Exception as e:
+            session.exchange_error = str(e)
+            logger.error(f"Kiro login completion failed: {e}")
+
+    @app.get("/api/kiro/login/status")
+    async def kiro_login_status(request: Request, session_id: str = ""):
+        _check_auth(request)
+
+        sessions: dict = getattr(app.state, "kiro_sessions", None) or {}
+        session = sessions.get(session_id) if session_id else None
+        if session is None:
+            return JSONResponse({"complete": False, "error": "No login session active"})
+
+        if session.exchange_error:
+            sessions.pop(session_id, None)
+            return JSONResponse({
+                "complete": True,
+                "success": False,
+                "error": session.exchange_error
+            })
+
+        if session.token is None:
+            return JSONResponse({"complete": False})
+
+        sessions.pop(session_id, None)
+        return JSONResponse({
+            "complete": True,
+            "success": True,
+            "message": "Kiro sign-in successful. Kiro models are now available.",
+            "provider": session.token.get("provider", "google")
+        })
 
     @app.post("/api/settings")
     async def update_router_settings(request: Request):
@@ -650,8 +773,6 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=f"Update failed: {e}")
 
         if result.get("updated"):
-            # The web UI is served from frontend/dist, which is not tracked by
-            # git, so it must be rebuilt for pulled UI changes to take effect.
             result["ui_rebuilt"] = await asyncio.to_thread(build_frontend, True)
             result["restart_required"] = True
             logger.info(
@@ -706,6 +827,50 @@ def create_app() -> FastAPI:
                     "latency": round(_router_instance._latencies.get(m.get("id", ""), 0.4), 3),
                 }
                 for m in _router_instance.models
+            ]
+        }
+
+    @app.post("/api/probe/kiro")
+    async def run_kiro_only_probe(request: Request):
+        _check_auth(request)
+        if not _router_instance:
+            raise HTTPException(status_code=500, detail="Router not initialized")
+
+        logger.info("Executing Kiro-only model discovery via Web UI...")
+        from nim_router.client import discover_kiro_models
+
+        latencies = {}
+        kiro_models = await discover_kiro_models(
+            latencies,
+            kiro_refresh_token=_router_instance.kiro_refresh_token,
+            verify=True
+        )
+
+        if kiro_models:
+            async with _router_instance._write_lock:
+                _router_instance.models = [
+                    m for m in _router_instance.models
+                    if not _router_instance._is_kiro_model(m)
+                ] + kiro_models
+                for m in kiro_models:
+                    mid = m.get("id")
+                    if mid:
+                        _router_instance._latencies[mid] = latencies.get(mid, 0.5)
+                        _router_instance._model_providers[mid] = "Kiro"
+                _router_instance._healthy_pool = _router_instance._build_healthy_pool()
+                _router_instance._pool_updated = time.time()
+                logger.info(f"Updated pool with {len(kiro_models)} Kiro models.")
+
+        return {
+            "success": True,
+            "kiro_models_discovered": len(kiro_models),
+            "models": [
+                {
+                    "id": m.get("id"),
+                    "provider": "Kiro",
+                    "latency": round(latencies.get(m.get("id", ""), 0.5), 3),
+                }
+                for m in kiro_models
             ]
         }
 
@@ -898,6 +1063,10 @@ def create_app() -> FastAPI:
         _router_instance.groq_keys = get_groq_keys()
         _router_instance.cerebras_keys = get_cerebras_keys()
         _router_instance.bai_key = get_bai_key()
+        kiro_token = get_kiro_refresh_token() or resolve_refresh_token()
+        if kiro_token:
+            _router_instance.kiro_refresh_token = kiro_token
+            set_kiro_refresh_token(kiro_token)
         if sync:
             await _router_instance.refresh_models()
         else:
@@ -926,7 +1095,13 @@ def create_app() -> FastAPI:
     assets_dir = os.path.join(dist_dir, "assets")
 
     if os.path.exists(assets_dir):
-        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+        class _HashedAssets(StaticFiles):
+            def file_response(self, *args, **kwargs):
+                response = super().file_response(*args, **kwargs)
+                response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+                return response
+
+        app.mount("/assets", _HashedAssets(directory=assets_dir), name="assets")
 
     @app.get("/favicon.ico")
     @app.get("/favicon.svg")
@@ -945,7 +1120,11 @@ def create_app() -> FastAPI:
     async def serve_index():
         index_path = os.path.join(dist_dir, "index.html")
         if os.path.exists(index_path):
-            return FileResponse(index_path)
+            response = FileResponse(index_path)
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            return response
         fallback_html = """<!DOCTYPE html>
 <html lang="en">
 <head>

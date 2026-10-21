@@ -20,6 +20,7 @@ from nim_router.config import (
 from nim_router.logger import logger
 from nim_router.schemas import ChatCompletionRequest
 from nim_router.catalog import is_banned_model, load_fallback_models
+from nim_router.kiro import KiroClient, KiroAuth, resolve_refresh_token, kiro_upstream_model_id
 
 import email.utils
 from typing import Callable, Optional
@@ -39,6 +40,38 @@ def get_shared_client() -> httpx.AsyncClient:
 def get_active_stream_count() -> int:
     return _active_streams
 
+_kiro_auth: KiroAuth | None = None
+_kiro_client: KiroClient | None = None
+
+def get_kiro_client() -> tuple[KiroClient, KiroAuth]:
+    global _kiro_auth, _kiro_client
+    if _kiro_client is None or _kiro_auth is None:
+        token = resolve_refresh_token()
+        _kiro_auth = KiroAuth(token)
+        _kiro_client = KiroClient(_kiro_auth)
+    return _kiro_client, _kiro_auth
+
+def set_kiro_refresh_token(token: str) -> bool:
+    global _kiro_auth, _kiro_client
+    token = (token or "").strip()
+    if not token:
+        if _kiro_auth is None:
+            return False
+        _kiro_auth.refresh_token = ""
+        _kiro_auth.access_token = ""
+        _kiro_auth.expires_at = 0.0
+        return True
+    if _kiro_auth is None:
+        _kiro_auth = KiroAuth(token)
+        _kiro_client = KiroClient(_kiro_auth)
+        return True
+    if _kiro_auth.refresh_token == token:
+        return False
+    _kiro_auth.refresh_token = token
+    _kiro_auth.access_token = ""
+    _kiro_auth.expires_at = 0.0
+    return True
+
 async def close_shared_client():
     global _shared_client
     if _shared_client and not _shared_client.is_closed:
@@ -46,8 +79,6 @@ async def close_shared_client():
         _shared_client = None
 
 async def _safe_aclose(response) -> None:
-    """Close an upstream response, guaranteeing release even when the
-    surrounding task is being cancelled (e.g. downstream client disconnected)."""
     if response is None:
         return
     try:
@@ -95,7 +126,6 @@ async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, se
             headers["HTTP-Referer"] = "https://github.com/patricklmbn/nim-router"
             headers["X-Title"] = "NIM Router"
         try:
-            # Determine endpoint and payload based on probe_endpoint
             if probe_endpoint == "systemone":
                 payload = {
                     "model": model_id,
@@ -132,7 +162,54 @@ async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, se
         except Exception:
             return False, 999.0
 
-async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_keys: list[str] | str = "", opencode_key: str = "", groq_keys: list[str] | str = "", cerebras_keys: list[str] | str = "", bai_key: str = "") -> list[dict]:
+async def discover_kiro_models(
+    latencies_dict: dict,
+    kiro_refresh_token: str = "",
+    verify: bool = True,
+) -> list[dict]:
+    kiro_client, kiro_auth = get_kiro_client()
+    if kiro_refresh_token:
+        kiro_auth.refresh_token = kiro_refresh_token.strip()
+    if not kiro_auth.configured:
+        logger.info("Kiro probe skipped: no refresh token configured.")
+        return []
+
+    catalogue = await kiro_client.list_models()
+    discovered: list[dict] = []
+    for model in catalogue:
+        mid = model.get("id")
+        if not mid or is_banned_model(mid):
+            continue
+        discovered.append(model)
+
+    if not verify:
+        return discovered
+
+    verified: list[dict] = []
+    for model in discovered:
+        mid = model.get("id", "")
+        try:
+            t0 = time.time()
+            result = await asyncio.wait_for(
+                kiro_client.create_chat_completion(
+                    model_id=mid,
+                    messages=[{"role": "user", "content": "ping"}],
+                    max_tokens=8,
+                ),
+                timeout=45.0,
+            )
+            elapsed = round(time.time() - t0, 3)
+            if result.get("choices"):
+                latencies_dict[mid] = elapsed
+                verified.append(model)
+        except Exception as e:
+            logger.warning(f"Kiro model {mid} failed probe: {e}")
+
+    logger.success(f"Kiro: {len(verified)}/{len(discovered)} models verified.")
+    return verified
+
+
+async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_keys: list[str] | str = "", opencode_key: str = "", groq_keys: list[str] | str = "", cerebras_keys: list[str] | str = "", bai_key: str = "", kiro_refresh_token: str = "") -> list[dict]:
     primary_nvidia_key = api_keys[0] if isinstance(api_keys, list) and api_keys else (api_keys if isinstance(api_keys, str) else "")
     primary_groq_key = groq_keys[0] if isinstance(groq_keys, list) and groq_keys else (groq_keys if isinstance(groq_keys, str) else "")
     primary_cerebras_key = cerebras_keys[0] if isinstance(cerebras_keys, list) and cerebras_keys else (cerebras_keys if isinstance(cerebras_keys, str) else "")
@@ -274,6 +351,14 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
         except Exception as e:
             logger.error(f"BAI model discovery failed: {e}")
 
+    kiro_discovered: list[dict] = []
+    try:
+        kiro_discovered = await discover_kiro_models(
+            latencies_dict, kiro_refresh_token, verify=False
+        )
+    except Exception as e:
+        logger.error(f"Kiro model discovery failed: {e}")
+
     if candidates_to_probe:
         total_probes = len(candidates_to_probe)
         completed_count = 0
@@ -315,6 +400,12 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                 if ok and mid:
                     latencies_dict[mid] = latency
                     all_discovered.append(m)
+
+    if kiro_discovered:
+        kiro_verified = await discover_kiro_models(
+            latencies_dict, kiro_refresh_token, verify=True
+        )
+        all_discovered.extend(kiro_verified)
 
     if not all_discovered:
         all_discovered = load_fallback_models(latencies_dict)
@@ -398,8 +489,6 @@ async def call_provider_endpoint(
         idle_timeout = get_stream_idle_timeout()
         try:
             req = client.build_request("POST", url, headers=headers, json=payload)
-            # Bound time-to-first-headers so a connected-but-silent upstream
-            # cannot pin a pooled connection for the full read timeout.
             response = await asyncio.wait_for(
                 client.send(req, stream=True), timeout=first_token_timeout
             )
@@ -591,9 +680,6 @@ async def call_provider_endpoint(
         except Exception as e:
             raise HTTPException(status_code=502, detail=str(e))
         finally:
-            # If we never handed the stream to the caller, make sure the
-            # upstream connection is always released (covers read/protocol
-            # errors during first-token acquisition and cancellation).
             if response is not None and not handed_off:
                 await _safe_aclose(response)
     else:
@@ -687,3 +773,116 @@ async def call_provider_endpoint(
         except Exception as e:
             logger.error(f"Failed to call API for {model_id}: {e}")
             raise HTTPException(status_code=502, detail=str(e))
+
+
+async def call_kiro_endpoint(
+    model_id: str,
+    request: ChatCompletionRequest,
+    on_usage: Optional[Callable[[int, int, int, bool, bool], None]] = None
+) -> Response:
+    kiro_client, auth = get_kiro_client()
+    if not auth.configured:
+        raise HTTPException(
+            status_code=503,
+            detail="Kiro is not configured. Set KIRO_REFRESH_TOKEN or sign in with the Kiro CLI.",
+        )
+
+    client = get_shared_client()
+
+    try:
+        if request.stream:
+            async def stream_generator():
+                global _active_streams
+                _active_streams += 1
+                prompt_tokens = 0
+                completion_tokens = 0
+                has_visible_content = False
+                collected_chars = 0
+                try:
+                    async for chunk in kiro_client.stream_chat_completion(
+                        model_id=model_id,
+                        messages=request.messages,
+                        tools=request.tools,
+                        temperature=request.temperature,
+                        max_tokens=request.max_tokens,
+                        client=client,
+                    ):
+                        text = chunk.decode("utf-8", errors="ignore")
+                        if '"usage"' in text and '"choices": []' in text:
+                            try:
+                                payload = json.loads(text[5:].strip())
+                                usage = payload.get("usage") or {}
+                                prompt_tokens = usage.get("prompt_tokens") or 0
+                                completion_tokens = usage.get("completion_tokens") or 0
+                            except Exception:
+                                pass
+                        if '"content"' in text:
+                            has_visible_content = True
+                            collected_chars += len(text)
+                        yield chunk
+                except (httpx.ReadTimeout, httpx.RequestError) as e:
+                    logger.warning(f"Kiro stream read error for {model_id}: {e}")
+                    err_msg = json.dumps({
+                        "error": {
+                            "message": f"Stream connection timed out from Kiro model ({model_id}).",
+                            "type": "upstream_timeout",
+                            "code": 504
+                        }
+                    })
+                    yield f"data: {err_msg}\n\n".encode("utf-8")
+                except Exception as e:
+                    logger.error(f"Kiro stream error for {model_id}: {e}")
+                    err_msg = json.dumps({
+                        "error": {
+                            "message": f"Kiro stream failed for {model_id}: {e}",
+                            "type": "upstream_error",
+                            "code": 502
+                        }
+                    })
+                    yield f"data: {err_msg}\n\n".encode("utf-8")
+                finally:
+                    _active_streams = max(0, _active_streams - 1)
+                    if on_usage:
+                        try:
+                            total = prompt_tokens + completion_tokens
+                            on_usage(prompt_tokens, completion_tokens, total, True, not has_visible_content)
+                        except Exception:
+                            pass
+
+            return StreamingResponse(
+                stream_generator(),
+                status_code=200,
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no"
+                }
+            )
+
+        result = await kiro_client.create_chat_completion(
+            model_id=model_id,
+            messages=request.messages,
+            tools=request.tools,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+            client=client,
+        )
+        usage = result.get("usage") or {}
+        if on_usage:
+            try:
+                on_usage(
+                    usage.get("prompt_tokens", 0),
+                    usage.get("completion_tokens", 0),
+                    usage.get("total_tokens", 0),
+                    True,
+                    False,
+                )
+            except Exception:
+                pass
+        return Response(content=json.dumps(result), media_type="application/json", status_code=200)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Kiro request failed for {model_id}: {e}")
+        raise HTTPException(status_code=502, detail=f"Kiro request failed: {e}")

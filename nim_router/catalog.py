@@ -89,13 +89,15 @@ def get_provider_name(m_obj: "dict | str", provider_cache: "dict | None" = None)
     else:
         mid = str(m_obj).lower()
 
-    for prefix in ("[nvidia] ", "[openrouter] ", "[opencode] ", "[groq] ", "[cerebras] ", "[bai] ", "[category] "):
+    for prefix in ("[nvidia] ", "[openrouter] ", "[opencode] ", "[groq] ", "[cerebras] ", "[bai] ", "[kiro] ", "[category] "):
         if mid.startswith(prefix):
             mid = mid[len(prefix):].strip()
 
     if provider_cache and mid in provider_cache:
         return provider_cache[mid]
 
+    if mid.startswith("kiro/") or mid in ("kiro", "kiro-auto") or "[kiro]" in mid:
+        return "Kiro"
     if mid in ("glm-5.3-flash", "qwen3.8-flash", "hy3") or mid.startswith("bai/") or "b.ai" in mid:
         return "BAI"
     elif mid.endswith(":free") or "openrouter/" in mid or mid.startswith("openrouter"):
@@ -114,15 +116,28 @@ def save_working_models(models: "list[dict | str]"):
     config_dir = os.path.join(base_dir, "config")
     os.makedirs(config_dir, exist_ok=True)
     status_path = os.path.join(config_dir, "models_status.json")
+    capability_keys = (
+        "supports_image",
+        "max_input_tokens",
+        "max_output_tokens",
+        "rate_multiplier",
+        "kiro_model_id",
+    )
     saved_list = []
     for item in models:
         if isinstance(item, dict):
             mid = item.get("id")
             prov = item.get("provider")
             if mid and prov:
-                saved_list.append({"id": mid, "provider": prov})
+                entry = {"id": mid, "provider": prov}
             elif mid:
-                saved_list.append({"id": mid, "provider": get_provider_name(mid)})
+                entry = {"id": mid, "provider": get_provider_name(mid)}
+            else:
+                continue
+            for key in capability_keys:
+                if key in item and item[key] is not None:
+                    entry[key] = item[key]
+            saved_list.append(entry)
         elif isinstance(item, str):
             saved_list.append({"id": item, "provider": get_provider_name(item)})
     try:

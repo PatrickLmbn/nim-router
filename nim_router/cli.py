@@ -14,12 +14,14 @@ from nim_router.config import (
     get_groq_keys,
     get_cerebras_keys,
     get_bai_key,
+    get_kiro_refresh_token,
     get_primary_model,
     get_routing_strategy,
 )
 from nim_router.catalog import get_provider_name, save_working_models
 from nim_router.config import update_setting
 from nim_router.engine import ModelRouter
+from nim_router.kiro import resolve_refresh_token
 
 def get_rainbow_banner() -> str:
     banner_lines = [
@@ -54,6 +56,7 @@ def show_help():
     print("  \033[1;32mkeys\033[0m                   Manage or add multiple API keys per provider.")
     print("  \033[1;32mconnect, config\033[0m        Interactively set primary provider API keys.")
     print("  \033[1;32mprobe, scan\033[0m            Run live probing scan across all enabled providers.")
+    print("  \033[1;32mkiro-login, kiro\033[0m        Sign in to Kiro with Google and store the credentials.")
     print("  \033[1;32mrestart, reload\033[0m        Restart background server process via PM2.")
     print("  \033[1;32mstop\033[0m                   Stop background server process via PM2.")
     print("  \033[1;32mlogs, log\033[0m              Stream live nim server logs.")
@@ -66,6 +69,7 @@ def show_help():
     print("  nim models       Select primary model priority")
     print("  nim keys         Manage multiple keys per provider")
     print("  nim connect      Set primary provider credentials")
+    print("  nim kiro-login   Sign in to Kiro with Google")
     print("  nim probe        Probe endpoints and refresh active model pool")
     print("  nim restart      Restart background server process")
     print("  nim build        Build frontend web UI assets")
@@ -186,6 +190,7 @@ async def async_probe_models():
     groq_keys = get_groq_keys()
     cerebras_keys = get_cerebras_keys()
     bai_key = get_bai_key()
+    kiro_refresh_token = get_kiro_refresh_token() or resolve_refresh_token()
 
     print(get_rainbow_banner())
     print("\033[1;37m   Endpoint Probing Scan       \033[0m\n")
@@ -197,7 +202,8 @@ async def async_probe_models():
         opencode_key=opencode_key,
         groq_keys=groq_keys,
         cerebras_keys=cerebras_keys,
-        bai_key=bai_key
+        bai_key=bai_key,
+        kiro_refresh_token=kiro_refresh_token
     )
     models = await router._discover_models()
 
@@ -246,7 +252,8 @@ async def interactive_model_selector():
         opencode_key=opencode_key,
         groq_keys=groq_keys,
         cerebras_keys=cerebras_keys,
-        bai_key=bai_key
+        bai_key=bai_key,
+        kiro_refresh_token=get_kiro_refresh_token() or resolve_refresh_token()
     )
 
     if should_probe:
@@ -268,6 +275,7 @@ async def interactive_model_selector():
     openrouter_models = [m.get("id") for m in models if m.get("id") and get_provider_name(m) == "OpenRouter"]
     opencode_models = [m.get("id") for m in models if m.get("id") and get_provider_name(m) == "OpenCode"]
     bai_models = [m.get("id") for m in models if m.get("id") and get_provider_name(m) == "BAI"]
+    kiro_models = [m.get("id") for m in models if m.get("id") and get_provider_name(m) == "Kiro"]
 
     all_ordered = []
     counter = 1
@@ -329,6 +337,15 @@ async def interactive_model_selector():
             counter += 1
         print()
 
+    if kiro_models:
+        print("\033[1;36m--- Kiro Models (AWS CodeWhisperer) ---\033[0m")
+        for mid in kiro_models:
+            all_ordered.append(mid)
+            prefix = "★ " if mid == current_primary else "  "
+            print(f"{prefix}\033[1;37m[{counter}]\033[0m {mid}")
+            counter += 1
+        print()
+
     try:
         choice = input("\033[1;36mSelect primary priority model number (0 to reset): \033[0m").strip()
         if not choice:
@@ -371,6 +388,7 @@ async def async_connect_api_keys():
     current_groq = get_groq_keys()
     current_cerebras = get_cerebras_keys()
     current_bai = get_bai_key()
+    current_kiro = get_kiro_refresh_token() or resolve_refresh_token()
 
     def mask(k: str) -> str:
         return f"{k[:8]}...{k[-4:]}" if len(k) > 12 else ("(Set)" if k else "(Not set)")
@@ -385,7 +403,8 @@ async def async_connect_api_keys():
     print(f"Current Cerebras Key:  \033[1;33m{cerebras_disp}\033[0m")
     print(f"Current OpenRouter Key: \033[1;33m{or_disp}\033[0m")
     print(f"Current OpenCode Key:  \033[1;33m{mask(current_oc)}\033[0m")
-    print(f"Current B.AI Key:      \033[1;33m{mask(current_bai)}\033[0m\n")
+    print(f"Current B.AI Key:      \033[1;33m{mask(current_bai)}\033[0m")
+    print(f"Current Kiro Token:    \033[1;33m{mask(current_kiro)}\033[0m\n")
 
     print("\033[90mEnter new API keys (inputs hidden, press Enter to keep current value):\033[0m\n")
     try:
@@ -395,6 +414,7 @@ async def async_connect_api_keys():
         or_key = getpass.getpass("OpenRouter API Key (Optional, comma-separated for multiple): ").strip()
         oc_key = getpass.getpass("OpenCode API Key (Optional): ").strip()
         bai_k = getpass.getpass("B.AI Free API Key (Optional): ").strip()
+        kiro_k = getpass.getpass("Kiro Refresh Token (Optional, auto-detected if empty): ").strip()
     except (KeyboardInterrupt, EOFError):
         print("\n\033[90mOperation cancelled.\033[0m")
         sys.exit(0)
@@ -405,6 +425,7 @@ async def async_connect_api_keys():
     final_groq = groq_k if groq_k else ",".join(current_groq)
     final_cerebras = cerebras_k if cerebras_k else ",".join(current_cerebras)
     final_bai = bai_k if bai_k else current_bai
+    final_kiro = kiro_k if kiro_k else current_kiro
 
     env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
     env_vars = {}
@@ -428,6 +449,8 @@ async def async_connect_api_keys():
         env_vars["CEREBRAS_API_KEYS"] = final_cerebras
     if final_bai:
         env_vars["BAI_API_KEY"] = final_bai
+    if final_kiro:
+        env_vars["KIRO_REFRESH_TOKEN"] = final_kiro
 
     if "PORT" not in env_vars:
         env_vars["PORT"] = "11435"
@@ -458,6 +481,7 @@ async def async_manage_provider_keys():
     current_or = get_openrouter_keys()
     current_oc = get_opencode_key()
     current_bai = get_bai_key()
+    current_kiro = get_kiro_refresh_token() or resolve_refresh_token()
 
     def mask_list(keys: list[str]) -> str:
         if not keys:
@@ -470,10 +494,11 @@ async def async_manage_provider_keys():
     print(f"  \033[1;32m[3]\033[0m Cerebras      \033[90m({len(current_cerebras)} keys: {mask_list(current_cerebras)})\033[0m")
     print(f"  \033[1;32m[4]\033[0m OpenRouter    \033[90m({len(current_or)} keys: {mask_list(current_or)})\033[0m")
     print(f"  \033[1;32m[5]\033[0m OpenCode      \033[90m(Key: {mask_list([current_oc] if current_oc else [])})\033[0m")
-    print(f"  \033[1;32m[6]\033[0m B.AI          \033[90m(Key: {mask_list([current_bai] if current_bai else [])})\033[0m\n")
+    print(f"  \033[1;32m[6]\033[0m B.AI          \033[90m(Key: {mask_list([current_bai] if current_bai else [])})\033[0m")
+    print(f"  \033[1;32m[7]\033[0m Kiro          \033[90m(Token: {mask_list([current_kiro] if current_kiro else [])})\033[0m\n")
 
     try:
-        choice = input("\033[1;36mSelect provider number [1-6]: \033[0m").strip()
+        choice = input("\033[1;36mSelect provider number [1-7]: \033[0m").strip()
         if not choice:
             return
         prov_num = int(choice)
@@ -491,6 +516,7 @@ async def async_manage_provider_keys():
         4: ("OPENROUTER_API_KEYS", "OpenRouter", current_or),
         5: ("OPENCODE_API_KEY", "OpenCode", [current_oc] if current_oc else []),
         6: ("BAI_API_KEY", "B.AI", [current_bai] if current_bai else []),
+        7: ("KIRO_REFRESH_TOKEN", "Kiro", [current_kiro] if current_kiro else []),
     }
 
     if prov_num not in provider_env_keys:
@@ -558,6 +584,70 @@ async def async_manage_provider_keys():
                 print("\033[1;32m[✓] Live nim server refreshed with updated keys.\033[0m")
     except Exception:
         pass
+
+async def async_kiro_login():
+    import webbrowser
+    from nim_router.kiro_login import run_login, KiroLoginError
+    from nim_router.kiro import KiroClient, KiroAuth
+
+    print(get_rainbow_banner())
+    print("\033[1;36mKiro sign-in (Google)\033[0m")
+    print("\033[90mA browser window opens next. Choose \033[1;37mContinue with Google\033[0m"
+          "\033[90m and approve access, then come back here.\033[0m\n")
+
+    def on_url(url: str) -> None:
+        print("\033[1;33mSign-in URL (open it manually if the browser does not launch):\033[0m")
+        print(f"  \033[1;37m{url}\033[0m\n")
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+        print("\033[90mWaiting for the Google sign-in to complete...\033[0m")
+
+    try:
+        token = await run_login(on_url=on_url)
+    except KiroLoginError as e:
+        print(f"\n\033[91m[!] {e}\033[0m")
+        return
+    except KeyboardInterrupt:
+        print("\n\033[90mSign-in cancelled.\033[0m")
+        return
+
+    print("\n\033[1;32m[✓] Signed in with Google.\033[0m")
+    print(f"\033[90m    provider    : {token.get('provider')}\033[0m")
+    print(f"\033[90m    profile ARN : {token.get('profile_arn') or '(none)'}\033[0m")
+    print("\033[90m    credentials : stored\033[0m")
+    if token.get("credential_path"):
+        print(f"\033[90m    auth store  : {token['credential_path']}\033[0m")
+    if token.get("env_path"):
+        print(f"\033[90m    env file    : {token['env_path']} (KIRO_REFRESH_TOKEN)\033[0m")
+
+    try:
+        auth = KiroAuth(token["refresh_token"])
+        client = KiroClient(auth)
+        models = await client.list_models()
+        print(f"\n\033[1;32m[✓] Kiro verified — {len(models)} models available.\033[0m")
+        for m in models[:10]:
+            suffix = " \033[90m(+image)\033[0m" if m.get("supports_image") else ""
+            print(f"\033[90m    - {m['id']}{suffix}\033[0m")
+    except Exception as e:
+        print(f"\n\033[1;33m[!] Credentials saved but verification failed: {e}\033[0m")
+
+    try:
+        port = int(os.getenv("PORT", 11435))
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(f"http://127.0.0.1:{port}/refresh")
+            if r.status_code == 200:
+                print("\n\033[1;32m[✓] Live nim server notified — Kiro models will appear shortly.\033[0m")
+            else:
+                print("\n\033[90m[i] Start the server with 'nim' to load Kiro.\033[0m")
+    except Exception:
+        print("\n\033[90m[i] Start the server with 'nim' to load Kiro.\033[0m")
+
+
+def kiro_login():
+    safe_run(async_kiro_login())
+
 
 def safe_run(coro):
     try:

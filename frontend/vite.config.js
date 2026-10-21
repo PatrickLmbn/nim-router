@@ -8,6 +8,7 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:11435',
       '/v1': 'http://localhost:11435',
+      '/kiro': 'http://localhost:11435',
       '/health': 'http://localhost:11435'
     }
   }

@@ -39,12 +39,13 @@ from nim_router.classifier import (
     is_vision_request,
     estimate_token_count,
 )
-from nim_router.client import probe_model, discover_models, call_provider_endpoint
+from nim_router.client import probe_model, discover_models, call_provider_endpoint, call_kiro_endpoint, get_kiro_client
 from nim_router.catalog import is_banned_model, load_fallback_models, get_provider_name as _catalog_get_provider_name, save_working_models
 from nim_router.tracker import get_usage_tracker
+from nim_router.kiro import KIRO_PREFIX, KIRO_API_BASE, kiro_upstream_model_id
 
 class ModelRouter:
-    def __init__(self, api_key: str | list[str], openrouter_keys: str | list[str] = "", opencode_key: str = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = "", bai_key: str = "", strategy: str = ""):
+    def __init__(self, api_key: str | list[str], openrouter_keys: str | list[str] = "", opencode_key: str = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = "", bai_key: str = "", kiro_refresh_token: str = "", strategy: str = ""):
         self.tracker = get_usage_tracker()
         if isinstance(api_key, list):
             self.api_keys = [k.strip() for k in api_key if k.strip()]
@@ -61,6 +62,7 @@ class ModelRouter:
             self.openrouter_keys = [k.strip() for k in (openrouter_keys or "").split(",") if k.strip()]
         self.opencode_key = opencode_key.strip()
         self.bai_key = bai_key.strip()
+        self.kiro_refresh_token = (kiro_refresh_token or "").strip()
 
         if isinstance(groq_keys, list):
             self.groq_keys = [k.strip() for k in groq_keys if k.strip()]
@@ -93,6 +95,7 @@ class ModelRouter:
         self._healthy_pool: list[str] = []
         self._pool_updated: float = 0
         self._model_providers: dict[str, str] = {}
+        self._model_meta: dict[str, dict] = {}
         self._write_lock = asyncio.Lock()
         self._is_probing: bool = False
         self._last_probe_time: float = time.time()
@@ -106,7 +109,7 @@ class ModelRouter:
 
     def _get_provider_name(self, model_id: str, overrides: dict[str, str] | None = None) -> str:
         mid_clean = model_id
-        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[BAI] ", "[Category] "):
+        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[BAI] ", "[Kiro] ", "[Category] "):
             if mid_clean.startswith(prefix):
                 mid_clean = mid_clean[len(prefix):].strip()
         if overrides and mid_clean in overrides:
@@ -131,6 +134,9 @@ class ModelRouter:
         elif provider == "BAI":
             keys = [self.bai_key] if self.bai_key else [""]
             base_url = BAI_API_BASE
+        elif provider == "Kiro":
+            keys = ["kiro"]
+            base_url = KIRO_API_BASE
         elif provider == "Groq":
             keys = self.groq_keys if self.groq_keys else [""]
             base_url = GROQ_API_BASE
@@ -169,8 +175,35 @@ class ModelRouter:
     def _is_banned_model(self, model_id: str) -> bool:
         return is_banned_model(model_id)
 
+    def _index_model_meta(self):
+        meta: dict[str, dict] = {}
+        for m in self.models or []:
+            if not isinstance(m, dict):
+                continue
+            mid = m.get("id")
+            if mid:
+                meta[mid] = m
+                stripped = self._strip_provider_prefix(mid)
+                if stripped and stripped not in meta:
+                    meta[stripped] = m
+        self._model_meta = meta
+
+    @staticmethod
+    def _strip_provider_prefix(model_id: str) -> str:
+        mid = model_id or ""
+        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ",
+                       "[Cerebras] ", "[BAI] ", "[Kiro] ", "[Category] "):
+            if mid.startswith(prefix):
+                return mid[len(prefix):].strip()
+        return mid
+
     def _is_vision_model(self, model_id: str) -> bool:
-        return is_vision_model(model_id)
+        meta = self._model_meta.get(model_id) or self._model_meta.get(
+            self._strip_provider_prefix(model_id)
+        )
+        if isinstance(meta, dict) and meta.get("supports_image"):
+            return True
+        return is_vision_model(model_id, meta if isinstance(meta, dict) else None)
 
     def _is_vision_request(self, request: ChatCompletionRequest) -> bool:
         return is_vision_request(request)
@@ -178,6 +211,31 @@ class ModelRouter:
     async def _probe_model(self, client: httpx.AsyncClient, model_id: str, sem: asyncio.Semaphore) -> tuple[bool, float]:
         base_url, key, _ = self._get_provider_info(model_id)
         return await probe_model(key, client, model_id, sem, base_url)
+
+    def _invalidate_kiro_models(self):
+        if not self.models:
+            return
+        kept = [m for m in self.models if not self._is_kiro_model(m)]
+        removed = len(self.models) - len(kept)
+        if not removed:
+            return
+        self.models = kept
+        self._healthy_pool = [m for m in self._healthy_pool if not self._is_kiro_model(m)]
+        for mid in list(self._model_providers):
+            if self._is_kiro_model(mid):
+                self._model_providers.pop(mid, None)
+        self._index_model_meta()
+        logger.info(f"Removed {removed} Kiro model(s) from the pool after sign-out.")
+
+    @staticmethod
+    def _is_kiro_model(model) -> bool:
+        if isinstance(model, dict):
+            if str(model.get("provider") or "").strip().lower() == "kiro":
+                return True
+            mid = str(model.get("id") or "")
+        else:
+            mid = str(model or "")
+        return mid.startswith(KIRO_PREFIX) or mid.startswith("[Kiro] ")
 
     async def _discover_models(self) -> list[dict]:
         discovered = await discover_models(
@@ -187,7 +245,8 @@ class ModelRouter:
             self.opencode_key,
             self.groq_keys,
             self.cerebras_keys,
-            self.bai_key
+            self.bai_key,
+            self.kiro_refresh_token
         )
         for m in discovered:
             mid = m.get("id")
@@ -270,7 +329,6 @@ class ModelRouter:
             logger.warning(f"Model {model_id} temporarily marked unhealthy after {self._health[model_id]['failures']} failures")
 
     def _record_success(self, model_id: str, elapsed: float, token_count: int = 0):
-        """Record a successful request. token_count should be generated completion tokens for calculating TPS."""
         if model_id in self._health:
             self._health[model_id]["failures"] = 0
             self._health[model_id]["healthy"] = True
@@ -386,6 +444,7 @@ class ModelRouter:
         return floor + (1.0 - floor) * q
 
     def _build_healthy_pool(self) -> list[str]:
+        self._index_model_meta()
         now = time.time()
         max_rpm = get_model_max_rpm()
         max_concurrency = get_model_max_concurrency()
@@ -428,13 +487,11 @@ class ModelRouter:
                     self._quality.update(state.get("quality", {}))
                     self._quality_n.update(state.get("quality_n", {}))
                     loaded_tps = state.get("tps", {})
-                    # Sanitize any legacy corrupted TPS values that previously included prompt tokens
                     for mid, tps_val in loaded_tps.items():
                         if tps_val > 400.0:
                             loaded_tps[mid] = 40.0
                     self._tps.update(loaded_tps)
 
-            # Calibrate model TPS from actual completed tokens recorded in usage.db if available
             if hasattr(self, "tracker") and self.tracker:
                 with self.tracker._get_connection() as conn:
                     cursor = conn.cursor()
@@ -488,10 +545,11 @@ class ModelRouter:
             groq_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "Groq")
             cerebras_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "Cerebras")
             bai_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "BAI")
+            kiro_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "Kiro")
 
             logger.success(
                 f"nim-router initialized instantly with {len(self._healthy_pool)} working models in pool "
-                f"(NVIDIA: {nvidia_count}, OpenRouter: {or_count}, OpenCode: {oc_count}, Groq: {groq_count}, Cerebras: {cerebras_count}, BAI: {bai_count})"
+                f"(NVIDIA: {nvidia_count}, OpenRouter: {or_count}, OpenCode: {oc_count}, Groq: {groq_count}, Cerebras: {cerebras_count}, BAI: {bai_count}, Kiro: {kiro_count})"
             )
             logger.info(f"Active routing strategy: {self.strategy}")
             self._last_probe_time = time.time()
@@ -552,7 +610,6 @@ class ModelRouter:
         return await self._route_request(chat_req, raw_request)
 
     def _responses_input_to_messages(self, input_data, instructions: Optional[str] = None) -> list[dict]:
-        """Translate OpenAI Responses API `input` into Chat Completions `messages`."""
         messages: list[dict] = []
         if instructions:
             messages.append({"role": "system", "content": instructions})
@@ -588,7 +645,6 @@ class ModelRouter:
         return messages
 
     def _chat_to_responses_response(self, chat_resp: dict, model: str, request_id: str) -> dict:
-        """Translate a Chat Completions response into OpenAI Responses API format."""
         created = int(time.time())
         output_items = []
         text_parts = []
@@ -670,7 +726,6 @@ class ModelRouter:
                 status_code=200,
             )
 
-        # Streaming path: translate chat-completions SSE into Responses SSE events.
         async def sse_event(event: str, data: dict) -> bytes:
             return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode("utf-8")
 
@@ -830,6 +885,7 @@ class ModelRouter:
                 mid = m.get("id")
                 if mid:
                     self._model_providers[mid] = m.get("provider") or self._get_provider_name(mid)
+            self._index_model_meta()
             candidate_pool = [m.get("id") for m in self.models if m.get("id")]
 
         is_vision = self._is_vision_request(request)
@@ -1019,8 +1075,6 @@ class ModelRouter:
             _release_key: str = selected_id if selected_id else ""
 
             def release_in_flight(_mid: str = _release_key):
-                # Idempotent: streaming requests release only when the stream
-                # actually finishes; everything else releases on attempt exit.
                 if released[0]:
                     return
                 released[0] = True
@@ -1031,8 +1085,6 @@ class ModelRouter:
                 now_check = time.time()
                 _healthy_keys = [k for k in keys_to_try if self._key_cooldowns.get((provider, k), 0.0) <= now_check]
                 _cooling_keys = [k for k in keys_to_try if k not in _healthy_keys]
-                # Prefer non-cooling keys, but never skip every key: falling back
-                # to cooling keys beats reporting the whole model as unavailable.
                 ordered_keys = (_healthy_keys + _cooling_keys) if _healthy_keys else list(keys_to_try)
                 for k_idx, current_key in enumerate(ordered_keys):
                     try:
@@ -1064,21 +1116,26 @@ class ModelRouter:
                             self._record_quality_sample(selected_id, degraded)
                             self._record_success(selected_id, now_done - t0, token_count=c_tok)
 
-                        response = await call_provider_endpoint(
-                            current_key,
-                            selected_id,
-                            request,
-                            base_url,
-                            on_usage=on_request_usage
-                        )
+                        if provider == "Kiro":
+                            response = await call_kiro_endpoint(
+                                selected_id,
+                                request,
+                                on_usage=on_request_usage
+                            )
+                        else:
+                            response = await call_provider_endpoint(
+                                current_key,
+                                selected_id,
+                                request,
+                                base_url,
+                                on_usage=on_request_usage
+                            )
                         elapsed = time.time() - t0
                         if not usage_recorded and not request.stream:
                             self._record_success(selected_id, elapsed, token_count=recorded_tokens[0])
                         self._record_key_success(provider, current_key, selected_id)
                         logger.success(f"Request completed successfully via {provider} :: {selected_id} ({elapsed:.3f}s)")
                         if isinstance(response, StreamingResponse):
-                            # Hold the in-flight slot until the stream is fully
-                            # consumed or closed, so concurrency limits are real.
                             defer_release[0] = True
                             _original_iter = response.body_iterator
 

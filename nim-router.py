@@ -26,6 +26,9 @@ if __name__ == "__main__":
             elif cmd in ("connect", "config"):
                 from nim_router.cli import connect_api_keys
                 connect_api_keys()
+            elif cmd in ("kiro-login", "kiro", "login-kiro", "google-login"):
+                from nim_router.cli import kiro_login
+                kiro_login()
             elif cmd in ("restart", "reload"):
                 from nim_router.cli import restart_server
                 restart_server()

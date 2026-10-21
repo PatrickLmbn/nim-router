@@ -855,7 +855,6 @@ export function BentoGrid({
                           </div>
                         </div>
 
-                        {/* Mobile model preview chips */}
                         {c.models && c.models.length > 0 && (
                           <div className="flex sm:hidden items-center gap-1 overflow-x-auto scrollbar-none w-full pt-1 border-t border-black/5 dark:border-white/5">
                             {c.models.map((m, idx) => {

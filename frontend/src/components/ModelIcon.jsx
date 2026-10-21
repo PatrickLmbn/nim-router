@@ -11,15 +11,19 @@ import openrouterDark from '../../icons/OpenRouter_light_dark/OpenRouter_dark.sv
 import opencodeLight from '../../icons/OpenCode_light_dark/OpenCode_light.svg';
 import opencodeDark from '../../icons/OpenCode_light_dark/OpenCode_dark.svg';
 import baiSvg from '../../icons/b.ai.svg';
+import kiroSvg from '../../icons/kiro.svg';
 
 export function resolveProvider(input) {
   if (!input) return 'NVIDIA';
   const str = String(input).trim().toLowerCase();
 
-  for (const prefix of ['[nvidia] ', '[openrouter] ', '[opencode] ', '[groq] ', '[cerebras] ', '[bai] ', '[category] ']) {
+  for (const prefix of ['[nvidia] ', '[openrouter] ', '[opencode] ', '[groq] ', '[cerebras] ', '[bai] ', '[kiro] ', '[category] ']) {
     if (str.startsWith(prefix)) return resolveProvider(str.slice(prefix.length).trim());
   }
 
+  if (str === 'kiro' || str.startsWith('kiro/') || str.includes('[kiro]')) {
+    return 'Kiro';
+  }
   if (str === 'bai' || str === 'b.ai' || str.startsWith('bai/') || str.includes('b.ai') || str === 'glm-5.3-flash' || str === 'qwen3.8-flash' || str === 'hy3') {
     return 'BAI';
   }
@@ -44,7 +48,8 @@ const providerIcons = {
   Cerebras: { light: cerebrasLight, dark: cerebrasDark, name: 'Cerebras' },
   OpenRouter: { light: openrouterLight, dark: openrouterDark, name: 'OpenRouter' },
   OpenCode: { light: opencodeLight, dark: opencodeDark, name: 'OpenCode' },
-  BAI: { light: baiSvg, dark: baiSvg, name: 'B.AI', isSingle: true }
+  BAI: { light: baiSvg, dark: baiSvg, name: 'B.AI', isSingle: true, invertDark: true },
+  Kiro: { light: kiroSvg, dark: kiroSvg, name: 'Kiro', isSingle: true }
 };
 
 export function ModelIcon({ model, provider, className = "h-4 w-auto max-h-4" }) {
@@ -56,7 +61,7 @@ export function ModelIcon({ model, provider, className = "h-4 w-auto max-h-4" })
       <img
         src={iconData.light}
         alt={iconData.name}
-        className={`${className} object-contain dark:invert select-none pointer-events-none transition-all duration-200`}
+        className={`${className} object-contain select-none pointer-events-none transition-all duration-200 ${iconData.invertDark ? 'dark:invert' : ''}`}
       />
     );
   }

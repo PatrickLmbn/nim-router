@@ -15,7 +15,7 @@ _BRANCH_RE = re.compile(r"^[A-Za-z0-9._\-/]{1,100}$")
 
 
 class GitUpdateError(Exception):
-    """Raised when an update operation cannot be completed."""
+    pass
 
 def _run_git(args: list[str], timeout: int = _GIT_TIMEOUT) -> tuple[int, str, str]:
     try:
@@ -26,8 +26,6 @@ def _run_git(args: list[str], timeout: int = _GIT_TIMEOUT) -> tuple[int, str, st
             text=True,
             timeout=timeout,
         )
-        # rstrip only: leading whitespace is significant in `git status --porcelain`
-        # output, where the first two columns are the status code.
         return res.returncode, res.stdout.rstrip("\n"), res.stderr.strip()
     except FileNotFoundError:
         return 127, "", "git executable not found on this system"
@@ -95,7 +93,6 @@ def _dirty_files() -> list[str]:
     for line in out.split("\n"):
         if len(line) < 4:
             continue
-        # Porcelain format: XY <path> (or "XY <old> -> <new>" for renames)
         entry = line[3:]
         if " -> " in entry:
             entry = entry.split(" -> ")[-1]
@@ -106,13 +103,6 @@ def _dirty_files() -> list[str]:
 
 
 def _find_conflicted_files() -> list[str]:
-    """Return tracked files that contain unresolved conflict markers.
-
-    Git can report a successful pull while leaving conflict markers in the
-    working tree (for example when a file is untracked locally but tracked
-    upstream). Such a file would break Python imports, so the update must be
-    rolled back.
-    """
     code, out, _ = _run_git(["ls-files", "-z"], timeout=30)
     if code != 0:
         return []
@@ -133,19 +123,12 @@ def _find_conflicted_files() -> list[str]:
 
 
 def _rollback_to(commit: str) -> None:
-    """Reset the working tree and index back to a commit.
-
-    `git reset --hard` also clears the unmerged index stages that a failed
-    stash apply leaves behind, so the repository is left in a clean, usable
-    state rather than mid-merge.
-    """
     _run_git(["merge", "--abort"], timeout=30)
     _run_git(["reset", "--hard", commit], timeout=60)
     _run_git(["checkout", "--", "."], timeout=30)
 
 
 def check_update(branch: str = "main") -> dict:
-    """Fetch the remote and compare the local checkout against origin/<branch>."""
     branch = _validate_branch(branch)
 
     if not is_git_repo():
@@ -222,7 +205,6 @@ def check_update(branch: str = "main") -> dict:
 
 
 def pull_update(branch: str = "main", force: bool = False) -> dict:
-    """Fast-forward the local checkout to origin/<branch>."""
     branch = _validate_branch(branch)
 
     if not is_git_repo():
@@ -247,14 +229,10 @@ def pull_update(branch: str = "main", force: bool = False) -> dict:
             + (f" (+{len(dirty) - 5} more)" if len(dirty) > 5 else "")
         )
     if dirty and force:
-        # Preserve local work in the stash rather than discarding it.
         code, out, err = _run_git(["stash", "push", "-u", "-m", "nim-router pre-update stash"], timeout=60)
         if code != 0:
             raise GitUpdateError(f"Could not stash local changes: {err or out or 'git stash failed'}")
         code, stash_ref, _ = _run_git(["rev-parse", "--verify", "refs/stash"], timeout=15)
-        # Keep the FULL sha: an abbreviated sha is ambiguous once the stash
-        # reflog holds more than one entry, and `git stash apply` would then
-        # fail to restore the right one.
         stash_ref = stash_ref.strip() if code == 0 else ""
 
     code, _, fetch_err = _run_git(["fetch", "--quiet", "origin", branch], timeout=_GIT_TIMEOUT)
@@ -278,8 +256,6 @@ def pull_update(branch: str = "main", force: bool = False) -> dict:
     before_commit_full = _run_git(["rev-parse", "HEAD"], timeout=15)[1]
     before_commit = before_commit_full[:7]
 
-    # --ff-only guarantees a fast-forward: never creates a merge commit and
-    # never rewrites local history.
     code, out, err = _run_git(
         ["pull", "--ff-only", "origin", branch], timeout=_GIT_TIMEOUT
     )
@@ -295,11 +271,6 @@ def pull_update(branch: str = "main", force: bool = False) -> dict:
     if stash_ref:
         restored = _restore_stash(stash_ref)
         if not restored:
-            # `git stash pop` conflicted: the local edits collide with the
-            # pulled changes and git left conflict markers in the working
-            # tree. Roll the update back completely so the installation is
-            # never left broken, then re-apply the stash on the pre-update
-            # tree (where it applies cleanly) so no local work is lost.
             logger.error(
                 "The update conflicted with local changes; rolling back to "
                 f"{before_commit} and restoring your files."
@@ -312,8 +283,6 @@ def pull_update(branch: str = "main", force: bool = False) -> dict:
                 "Please review the changes and try again."
             )
 
-    # Safety net: never leave conflict markers in tracked files, which would
-    # break Python imports on the next start.
     broken = _find_conflicted_files()
     if broken:
         logger.error(
@@ -344,12 +313,6 @@ def pull_update(branch: str = "main", force: bool = False) -> dict:
 
 
 def _stash_ref_for(sha: str) -> str:
-    """Return the `stash@{N}` reference matching a stash commit sha.
-
-    `git stash drop` only accepts a reflog reference (stash@{N}); passing a
-    raw commit hash fails with "not a stash reference". The numeric index
-    must be resolved at drop time because earlier entries can shift.
-    """
     if not sha:
         return ""
     code, out, _ = _run_git(["stash", "list", "--format=%H %gd"], timeout=30)
@@ -363,17 +326,10 @@ def _stash_ref_for(sha: str) -> str:
 
 
 def _restore_stash(stash_ref: str) -> bool:
-    """Apply a pre-update stash back onto the working tree.
-
-    Uses `git stash apply` (not `pop`) so the stash entry survives a conflict.
-    That way the update can be rolled back and the stash re-applied cleanly
-    on the pre-update tree instead of leaving the entry stranded.
-    """
     if not stash_ref:
         return True
     code, out, err = _run_git(["stash", "apply", stash_ref], timeout=60)
     if code == 0:
-        # Applied cleanly -> the stash entry is no longer needed.
         _drop_stash(stash_ref)
         return True
     logger.warning(
@@ -384,7 +340,6 @@ def _restore_stash(stash_ref: str) -> bool:
 
 
 def _drop_stash(stash_ref: str) -> None:
-    """Remove a stash entry by commit sha, if it is still present."""
     ref = _stash_ref_for(stash_ref)
     if not ref:
         return
@@ -392,7 +347,6 @@ def _drop_stash(stash_ref: str) -> None:
 
 
 def build_frontend(force: bool = True) -> bool:
-    """Rebuild the web UI bundle so a pulled frontend change is served."""
     import shutil
 
     frontend_dir = os.path.join(_BASE_DIR, "frontend")

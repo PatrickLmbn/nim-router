@@ -15,7 +15,6 @@ class UsageTracker:
             self.db_path = os.path.join(config_dir, "usage.db")
         self._lock = threading.Lock()
         self._init_db()
-        # Bound unbounded growth so analytics scans stay fast over time.
         try:
             self.prune_old_logs(30)
         except Exception:
@@ -253,7 +252,6 @@ class UsageTracker:
         }
 
     def prune_old_logs(self, max_age_days: int = 30) -> int:
-        """Delete request logs older than max_age_days. Returns rows removed."""
         cutoff = time.time() - (max_age_days * 86400.0)
         with self._lock:
             with self._get_connection() as conn:

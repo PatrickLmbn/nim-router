@@ -122,6 +122,9 @@ def get_cerebras_keys() -> list[str]:
 def get_bai_key() -> str:
     return os.getenv("BAI_API_KEY", "").strip()
 
+def get_kiro_refresh_token() -> str:
+    return os.getenv("KIRO_REFRESH_TOKEN", "").strip()
+
 def get_primary_model() -> str:
     file_val = ""
     if os.path.exists(_SETTINGS_FILE):

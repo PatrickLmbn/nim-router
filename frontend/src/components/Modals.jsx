@@ -3,11 +3,25 @@ import {
   X, Check, Search, Key, Sliders, Terminal, Shield, RefreshCw, Plus, Trash2, Zap, Server, Activity, Copy, CheckCircle, Eye, EyeOff, Edit2, Wrench, Code, Brain, MessageSquare, Layers, Sparkles, Lock, KeyRound, BarChart3, ArrowUpRight, TrendingUp, Clock, AlertCircle, PieChart, GripVertical, CloudDownload, GitPullRequest, Loader2, ArrowDownToLine
 } from 'lucide-react';
 import { ModelIcon, ProviderIcon, resolveProvider } from './ModelIcon';
-import { authFetch } from '../api';
+import { authFetch, openKiroOAuthWindow, startKiroOAuthFlow } from '../api';
 
 export { ModelIcon, ProviderIcon, resolveProvider };
 
-export function ModalWrapper({ title, icon: Icon, onClose, children, maxWidth = "max-w-2xl" }) {
+async function safeJson(res) {
+  try {
+    const text = await res.text();
+    if (!text) return { success: false, detail: `Empty response (HTTP ${res.status})` };
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { success: false, detail: `Unexpected response (HTTP ${res.status})` };
+    }
+  } catch {
+    return { success: false, detail: `Request failed (HTTP ${res.status})` };
+  }
+}
+
+export function ModalWrapper({ title, icon: Icon, onClose, children, maxWidth = "max-w-2xl", closeDisabled = false }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
       <div className={`relative w-full ${maxWidth} max-h-[90vh] flex flex-col bg-white dark:bg-[#151922] text-slate-800 dark:text-slate-100 rounded-3xl border border-black/10 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark overflow-hidden transition-colors duration-300`}>
@@ -18,7 +32,8 @@ export function ModalWrapper({ title, icon: Icon, onClose, children, maxWidth = 
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-xl text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 transition"
+            disabled={closeDisabled}
+            className="p-2 rounded-xl text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 transition disabled:opacity-40 disabled:pointer-events-none"
           >
             <X className="w-4 h-4" />
           </button>
@@ -36,7 +51,7 @@ export function ModelSelectorModal({ stats, onClose, onSelectModel }) {
   const [providerFilter, setProviderFilter] = useState('ALL');
 
   const models = stats?.models || [];
-  const providers = ['ALL', 'NVIDIA', 'Groq', 'Cerebras', 'OpenRouter', 'OpenCode', 'BAI'];
+  const providers = ['ALL', 'NVIDIA', 'Groq', 'Cerebras', 'OpenRouter', 'OpenCode', 'BAI', 'Kiro'];
 
   const filtered = models.filter(m => {
     const matchesSearch = m.id.toLowerCase().includes(search.toLowerCase()) || m.provider.toLowerCase().includes(search.toLowerCase());
@@ -152,6 +167,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
   const [showKey, setShowKey] = useState(false);
   const [actionStatus, setActionStatus] = useState('');
   const [editingIndex, setEditingIndex] = useState(null);
+  const [kiroSigningIn, setKiroSigningIn] = useState(false);
 
   const providerMeta = {
     NVIDIA: { name: 'NVIDIA NIM', short: 'NVIDIA', color: '#76B900', env: 'NVIDIA_API_KEYS', multi: true, placeholder: 'nvapi-...' },
@@ -159,7 +175,8 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
     Cerebras: { name: 'Cerebras Wafer', short: 'Cerebras', color: '#FF6B35', env: 'CEREBRAS_API_KEYS', multi: true, placeholder: 'csk-...' },
     OpenRouter: { name: 'OpenRouter Free', short: 'OpenRouter', color: '#6366F1', env: 'OPENROUTER_API_KEYS', multi: true, placeholder: 'sk-or-v1-...' },
     OpenCode: { name: 'OpenCode Zen', short: 'OpenCode', color: '#00D2FF', env: 'OPENCODE_API_KEY', multi: false, placeholder: 'opencode_...' },
-    BAI: { name: 'B.AI Free', short: 'B.AI', color: '#A855F7', env: 'BAI_API_KEY', multi: false, placeholder: 'bai_...' }
+    BAI: { name: 'B.AI Free', short: 'B.AI', color: '#A855F7', env: 'BAI_API_KEY', multi: false, placeholder: 'bai_...' },
+    Kiro: { name: 'Kiro (AWS CodeWhisperer)', short: 'Kiro', color: '#FF9900', env: 'KIRO_REFRESH_TOKEN', multi: false, placeholder: 'aor_...' }
   };
 
   const fetchKeys = async () => {
@@ -209,12 +226,73 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
     }
   };
 
+  const startKiroLogin = async (isReauth) => {
+    const win = openKiroOAuthWindow();
+    setKiroSigningIn(true);
+    setActionStatus(isReauth ? 'Starting new sign-in...' : 'Starting sign-in...');
+    try {
+      const res = await authFetch('/api/kiro/login/start', { method: 'POST' });
+      const data = await safeJson(res);
+      if (!data.success || !data.auth_url) {
+        if (win && !win.closed) win.close();
+        setKiroSigningIn(false);
+        setActionStatus(data.detail || 'Failed to start sign-in');
+        return;
+      }
+
+      const flow = await startKiroOAuthFlow(win, data.auth_url);
+      if (!flow.ok) {
+        setKiroSigningIn(false);
+        setActionStatus(flow.error || 'Could not open the sign-in window');
+        return;
+      }
+      setActionStatus('Waiting for sign-in...');
+
+      const sessionId = data.session_id || '';
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await authFetch(`/api/kiro/login/status?session_id=${encodeURIComponent(sessionId)}`);
+          const statusData = await safeJson(statusRes);
+          if (statusData.complete) {
+            clearInterval(pollInterval);
+            setKiroSigningIn(false);
+            if (statusData.success) {
+              setActionStatus(isReauth ? 'Switched account successfully!' : 'Signed in successfully!');
+              await fetchKeys();
+              setSelectedProvider('Kiro');
+              try {
+                await authFetch('/api/probe/kiro', { method: 'POST' });
+              } catch (e) {
+                console.error('Kiro probe error:', e);
+              }
+              if (onKeysUpdated) onKeysUpdated();
+              setTimeout(() => setActionStatus(''), 2500);
+            } else {
+              setActionStatus(`Sign-in failed: ${statusData.error || 'Unknown error'}`);
+            }
+          }
+        } catch (e) {
+          console.error('Poll error:', e);
+        }
+      }, 2000);
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        setKiroSigningIn(false);
+      }, 300000);
+    } catch (e) {
+      setKiroSigningIn(false);
+      setActionStatus('Error starting sign-in');
+      console.error(e);
+    }
+  };
+
   const currentProviderInfo = keysData.find(p => p.id === selectedProvider);
   const currentMeta = providerMeta[selectedProvider] || { name: selectedProvider, short: selectedProvider, color: '#ff6b35', env: '', multi: false, placeholder: 'Paste API key...' };
   const configuredKeys = currentProviderInfo?.keys || [];
+  const kiroSignedIn = selectedProvider === 'Kiro' && configuredKeys.length > 0;
 
   return (
-    <ModalWrapper title="Multi-Provider Key Manager" icon={Key} onClose={onClose}>
+    <ModalWrapper title="Multi-Provider Key Manager" icon={Key} onClose={onClose} closeDisabled={kiroSigningIn}>
       <p className="text-xs text-slate-500 dark:text-slate-400">
         Configure single or multiple keys per provider. The router rotates requests across multiple keys in round-robin to maximize throughput and avoid rate limits.
       </p>
@@ -227,6 +305,8 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
           return (
             <button
               key={p.id}
+              type="button"
+              disabled={kiroSigningIn}
               onClick={() => {
                 setSelectedProvider(p.id);
                 setKeyInput('');
@@ -236,7 +316,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                 borderColor: isSelected ? meta.color : undefined,
                 boxShadow: isSelected ? `0 0 12px ${meta.color}33` : undefined
               }}
-              className={`p-2.5 rounded-2xl text-center transition-all flex flex-col items-center justify-center gap-1.5 border neu-button ${isSelected
+              className={`p-2.5 rounded-2xl text-center transition-all flex flex-col items-center justify-center gap-1.5 border neu-button disabled:opacity-40 disabled:pointer-events-none ${isSelected
                 ? 'bg-black/5 dark:bg-white/10 text-slate-900 dark:text-white font-semibold'
                 : 'bg-slate-100 dark:bg-white/5 border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                 }`}
@@ -306,26 +386,32 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                     >
                       <Key className={`w-3 h-3 ${isEditingThis ? 'text-[#ff6b35]' : 'text-slate-400'}`} />
                       <span>{k}</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingIndex(isEditingThis ? null : i);
-                          setKeyInput('');
-                        }}
-                        className={`ml-1 p-0.5 rounded transition ${isEditingThis ? 'text-[#ff6b35]' : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
-                          }`}
-                        title={isEditingThis ? "Cancel update" : "Update this key"}
-                      >
-                        <Edit2 className="w-3 h-3" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleUpdate('delete', null, i)}
-                        className="p-0.5 rounded text-slate-400 hover:text-rose-500 transition"
-                        title="Delete this key"
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
+                      {selectedProvider !== 'Kiro' && (
+                        <>
+                          <button
+                            type="button"
+                            disabled={kiroSigningIn}
+                            onClick={() => {
+                              setEditingIndex(isEditingThis ? null : i);
+                              setKeyInput('');
+                            }}
+                            className={`ml-1 p-0.5 rounded transition disabled:opacity-40 disabled:pointer-events-none ${isEditingThis ? 'text-[#ff6b35]' : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                              }`}
+                            title={isEditingThis ? "Cancel update" : "Update this key"}
+                          >
+                            <Edit2 className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={kiroSigningIn}
+                            onClick={() => handleUpdate('delete', null, i)}
+                            className="p-0.5 rounded text-slate-400 hover:text-rose-500 transition disabled:opacity-40 disabled:pointer-events-none"
+                            title="Delete this key"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </>
+                      )}
                     </div>
                   );
                 })}
@@ -338,6 +424,59 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
           </div>
 
           <div className="space-y-2 pt-1 border-t border-black/5 dark:border-white/5">
+            {selectedProvider === 'Kiro' ? (
+              <div className="space-y-3">
+                <div className="text-[10px] uppercase text-slate-500 dark:text-slate-400 font-bold tracking-wider">
+                  {kiroSignedIn ? 'Connected' : 'Sign in with Google'}
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400">
+                  {kiroSignedIn
+                    ? 'Kiro is connected. You can sign out, or start a fresh Google sign-in.'
+                    : 'Kiro uses Google OAuth for authentication. Click below to sign in through your browser.'}
+                </p>
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-row gap-3 items-center flex-wrap">
+                    {!kiroSignedIn && (
+                      <button
+                        type="button"
+                        disabled={kiroSigningIn}
+                        onClick={() => startKiroLogin(false)}
+                        className="px-4 py-2 rounded-xl bg-[#FF9900] text-white font-semibold hover:bg-[#e68a00] disabled:opacity-50 transition flex items-center justify-center gap-2"
+                      >
+                        {kiroSigningIn ? <Loader2 className="w-4 h-4 animate-spin" /> : <Key className="w-4 h-4" />}
+                        {kiroSigningIn ? 'Waiting for sign-in...' : 'Sign in with Google'}
+                      </button>
+                    )}
+                    {kiroSignedIn && (
+                      <>
+                        <button
+                          type="button"
+                          disabled={kiroSigningIn}
+                          onClick={() => handleUpdate('clear')}
+                          className="text-xs text-rose-500 hover:underline disabled:opacity-40 disabled:pointer-events-none"
+                        >
+                          Sign out
+                        </button>
+                        <button
+                          type="button"
+                          disabled={kiroSigningIn}
+                          onClick={() => startKiroLogin(true)}
+                          className="text-xs text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-400 disabled:opacity-40 disabled:pointer-events-none"
+                        >
+                          Sign in with another account
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  {kiroSignedIn && (
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 italic">
+                      &quot;Sign in with another account&quot; clears the Google session in the sign-in window first, so Google shows its account chooser instead of reusing the last account.
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <>
             <div className="flex items-center justify-between">
               <div className="text-[10px] uppercase text-slate-500 dark:text-slate-400 font-bold tracking-wider">
                 {editingIndex !== null
@@ -439,6 +578,8 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                 )}
               </div>
             </div>
+            </>
+            )}
           </div>
         </div>
       )}

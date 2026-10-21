@@ -64,11 +64,9 @@ export function LoginPage({ onLoginSuccess, theme, onToggleTheme }) {
   return (
     <div className="relative min-h-screen w-full flex flex-col justify-between items-center p-4 sm:p-8 bg-[#eef2f7] dark:bg-[#0f1117] text-slate-800 dark:text-slate-100 transition-colors duration-300 overflow-hidden select-none">
 
-      {/* Ambient background glow accents */}
       <div className="absolute -top-32 -left-32 w-96 h-96 rounded-full bg-[#da7756]/10 dark:bg-[#da7756]/15 blur-3xl pointer-events-none" />
       <div className="absolute -bottom-32 -right-32 w-96 h-96 rounded-full bg-[#00d2ff]/10 dark:bg-[#00d2ff]/15 blur-3xl pointer-events-none" />
 
-      {/* Top Bar with Gateway Status & Theme Toggle */}
       <header className="w-full max-w-5xl mx-auto flex items-center justify-between z-10">
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-white/70 dark:bg-white/5 backdrop-blur-md border border-black/5 dark:border-white/5 text-[11px] font-mono shadow-sm">
           <span className="relative flex h-2 w-2">
@@ -94,13 +92,11 @@ export function LoginPage({ onLoginSuccess, theme, onToggleTheme }) {
         </button>
       </header>
 
-      {/* Main Login Card */}
       <div className="w-full max-w-md my-auto z-10">
         <div
           className={`w-full p-6 sm:p-8 rounded-3xl sm:rounded-4xl bg-white dark:bg-[#171b24] border border-black/5 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark transition-all duration-300 ${shake ? 'animate-bounce border-rose-500/50' : ''
             }`}
         >
-          {/* Brand Identity */}
           <div className="flex flex-col items-center text-center mb-6">
             <div className="relative mb-3.5">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#da7756]/25 to-[#da7756]/10 border border-[#da7756]/40 shadow-[0_0_24px_rgba(218,119,86,0.35)] flex items-center justify-center p-2.5">
@@ -128,7 +124,6 @@ export function LoginPage({ onLoginSuccess, theme, onToggleTheme }) {
             </div>
           </div>
 
-          {/* Error Banner */}
           {error && (
             <div className="mb-5 p-3 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs flex items-center gap-2 animate-fadeIn">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
@@ -136,7 +131,6 @@ export function LoginPage({ onLoginSuccess, theme, onToggleTheme }) {
             </div>
           )}
 
-          {/* Login Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <div className="flex items-center justify-between px-1">
@@ -202,7 +196,6 @@ export function LoginPage({ onLoginSuccess, theme, onToggleTheme }) {
             </button>
           </form>
 
-          {/* Default Password Quick-Fill Pill */}
           <div className="mt-5 pt-4 border-t border-black/5 dark:border-white/5 flex flex-col items-center gap-2 text-center">
             <button
               type="button"
@@ -221,7 +214,6 @@ export function LoginPage({ onLoginSuccess, theme, onToggleTheme }) {
         </div>
       </div>
 
-      {/* Footer */}
       <footer className="w-full max-w-5xl mx-auto flex items-center justify-between text-[10px] text-slate-400 dark:text-slate-500 py-2 z-10">
         <div className="flex items-center gap-1.5 font-mono">
           <span>NIM Router v2.4</span>
