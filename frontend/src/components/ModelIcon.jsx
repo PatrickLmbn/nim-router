@@ -25,7 +25,7 @@ export function resolveProvider(input) {
   if (str === 'kiro' || str.startsWith('kiro/') || str.includes('[kiro]')) {
     return 'Kiro';
   }
-  if (str === 'antigravity' || str.startsWith('antigravity/') || str.includes('[antigravity]')) {
+  if (str === 'antigravity' || str.startsWith('antigravity/') || str.includes('[antigravity]') || str.includes('gemini-') || str.includes('claude-opus-4-6') || str.includes('claude-sonnet-4-6')) {
     return 'Antigravity';
   }
   if (str === 'bai' || str === 'b.ai' || str.startsWith('bai/') || str.includes('b.ai') || str === 'glm-5.3-flash' || str === 'qwen3.8-flash' || str === 'hy3') {
