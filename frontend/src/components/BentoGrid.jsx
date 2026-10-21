@@ -266,7 +266,7 @@ export function BentoGrid({
 
                 <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
-                    <ModelIcon model={stats?.primary_model} combos={stats?.combos} className="h-5 w-auto max-w-[65px] max-h-5 shrink-0" />
+                    <ModelIcon model={stats?.primary_model} className="h-5 w-auto max-w-[65px] max-h-5 shrink-0" />
                     <h3 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white tracking-tight leading-snug truncate">
                       {stats?.primary_model || 'nim-auto'}
                     </h3>

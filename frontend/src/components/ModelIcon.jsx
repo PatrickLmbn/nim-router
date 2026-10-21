@@ -57,16 +57,8 @@ const providerIcons = {
   Antigravity: { light: antigravitySvg, dark: antigravitySvg, name: 'Antigravity', isSingle: true }
 };
 
-export function ModelIcon({ model, provider, combos, className = "h-4 w-auto max-h-4" }) {
-  let resolvedModel = model;
-  if (!provider && model && combos) {
-    const combo = combos.find(c => c.name === model);
-    if (combo && combo.models?.length > 0) {
-      resolvedModel = combo.models[0];
-    }
-  }
-
-  const provKey = resolveProvider(provider || resolvedModel);
+export function ModelIcon({ model, provider, className = "h-4 w-auto max-h-4" }) {
+  const provKey = resolveProvider(provider || model);
   const iconData = providerIcons[provKey] || providerIcons.NVIDIA;
 
   if (iconData.isSingle) {
