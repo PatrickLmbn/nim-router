@@ -3,6 +3,7 @@ import asyncio
 import base64
 import binascii
 import json
+import re
 import os
 import time
 import uuid
@@ -605,8 +606,12 @@ class AntigravityClient:
         try:
             async for chunk in response.aiter_text():
                 buffer += chunk
-                while "\n\n" in buffer:
-                    raw, buffer = buffer.split("\n\n", 1)
+                while True:
+                    match = re.search(r"\r?\n\r?\n", buffer)
+                    if match is None:
+                        break
+                    raw = buffer[: match.start()]
+                    buffer = buffer[match.end():]
                     event = self._parse_sse(raw)
                     if event is not None:
                         yield event
