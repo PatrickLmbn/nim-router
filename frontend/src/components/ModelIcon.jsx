@@ -12,17 +12,21 @@ import opencodeLight from '../../icons/OpenCode_light_dark/OpenCode_light.svg';
 import opencodeDark from '../../icons/OpenCode_light_dark/OpenCode_dark.svg';
 import baiSvg from '../../icons/b.ai.svg';
 import kiroSvg from '../../icons/kiro.svg';
+import antigravitySvg from '../../icons/antigravity.svg';
 
 export function resolveProvider(input) {
   if (!input) return 'NVIDIA';
   const str = String(input).trim().toLowerCase();
 
-  for (const prefix of ['[nvidia] ', '[openrouter] ', '[opencode] ', '[groq] ', '[cerebras] ', '[bai] ', '[kiro] ', '[category] ']) {
+  for (const prefix of ['[nvidia] ', '[openrouter] ', '[opencode] ', '[groq] ', '[cerebras] ', '[bai] ', '[kiro] ', '[antigravity] ', '[category] ']) {
     if (str.startsWith(prefix)) return resolveProvider(str.slice(prefix.length).trim());
   }
 
   if (str === 'kiro' || str.startsWith('kiro/') || str.includes('[kiro]')) {
     return 'Kiro';
+  }
+  if (str === 'antigravity' || str.startsWith('antigravity/') || str.includes('[antigravity]')) {
+    return 'Antigravity';
   }
   if (str === 'bai' || str === 'b.ai' || str.startsWith('bai/') || str.includes('b.ai') || str === 'glm-5.3-flash' || str === 'qwen3.8-flash' || str === 'hy3') {
     return 'BAI';
@@ -49,7 +53,8 @@ const providerIcons = {
   OpenRouter: { light: openrouterLight, dark: openrouterDark, name: 'OpenRouter' },
   OpenCode: { light: opencodeLight, dark: opencodeDark, name: 'OpenCode' },
   BAI: { light: baiSvg, dark: baiSvg, name: 'B.AI', isSingle: true, invertDark: true },
-  Kiro: { light: kiroSvg, dark: kiroSvg, name: 'Kiro', isSingle: true }
+  Kiro: { light: kiroSvg, dark: kiroSvg, name: 'Kiro', isSingle: true },
+  Antigravity: { light: antigravitySvg, dark: antigravitySvg, name: 'Antigravity', isSingle: true }
 };
 
 export function ModelIcon({ model, provider, className = "h-4 w-auto max-h-4" }) {

@@ -26,6 +26,7 @@ from nim_router.config import (
     get_cerebras_keys,
     get_bai_key,
     get_kiro_refresh_token,
+    get_antigravity_refresh_token,
     get_routing_strategy,
     get_primary_model,
     get_health_refresh_interval,
@@ -51,8 +52,9 @@ from nim_router.logger import (
     unregister_log_subscriber,
     get_recent_logs,
 )
-from nim_router.client import get_shared_client, close_shared_client, get_kiro_client, get_active_stream_count, set_kiro_refresh_token
+from nim_router.client import get_shared_client, close_shared_client, get_kiro_client, get_active_stream_count, set_kiro_refresh_token, get_antigravity_client, set_antigravity_refresh_token
 from nim_router.kiro import resolve_refresh_token
+from nim_router.antigravity import resolve_refresh_token as resolve_antigravity_refresh_token
 from nim_router.catalog import save_working_models
 from nim_router.updater import (
     check_update,
@@ -75,10 +77,11 @@ async def lifespan(app: FastAPI):
     cerebras_keys = get_cerebras_keys()
     bai_key = get_bai_key()
     kiro_refresh_token = get_kiro_refresh_token()
+    antigravity_refresh_token = get_antigravity_refresh_token()
     strategy = get_routing_strategy()
 
-    if not nvidia_keys and not openrouter_keys and not opencode_key and not groq_keys and not cerebras_keys and not bai_key and not kiro_refresh_token:
-        logger.warning("No API keys found in environment (.env). Please configure NVIDIA_API_KEYS, OPENROUTER_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, BAI_API_KEY, or sign in with Kiro.")
+    if not nvidia_keys and not openrouter_keys and not opencode_key and not groq_keys and not cerebras_keys and not bai_key and not kiro_refresh_token and not antigravity_refresh_token:
+        logger.warning("No API keys found in environment (.env). Please configure NVIDIA_API_KEYS, OPENROUTER_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, BAI_API_KEY, or sign in with Kiro or Antigravity.")
 
     _router_instance = ModelRouter(
         api_key=nvidia_keys,
@@ -88,6 +91,7 @@ async def lifespan(app: FastAPI):
         cerebras_keys=cerebras_keys,
         bai_key=bai_key,
         kiro_refresh_token=kiro_refresh_token,
+        antigravity_refresh_token=antigravity_refresh_token,
         strategy=strategy
     )
     get_shared_client()
@@ -275,6 +279,7 @@ def create_app() -> FastAPI:
         oc_key = get_opencode_key()
         bai_key = get_bai_key()
         kiro_token = get_kiro_refresh_token() or resolve_refresh_token()
+        antigravity_token = get_antigravity_refresh_token() or resolve_antigravity_refresh_token()
 
         total_models = len(_router_instance.models)
         healthy_pool = _router_instance._healthy_pool
@@ -393,6 +398,7 @@ def create_app() -> FastAPI:
                 "OpenCode": {"keys_count": 1 if oc_key else 0, "active": bool(oc_key), "models_count": prov_models_count.get("OpenCode", 0)},
                 "BAI": {"keys_count": 1 if bai_key else 0, "active": bool(bai_key), "models_count": prov_models_count.get("BAI", 0)},
                 "Kiro": {"keys_count": 1 if kiro_token else 0, "active": bool(kiro_token), "models_count": prov_models_count.get("Kiro", 0)},
+                "Antigravity": {"keys_count": 1 if antigravity_token else 0, "active": bool(antigravity_token), "models_count": prov_models_count.get("Antigravity", 0)},
             },
             "usage_summary": usage_summary,
             "usage_providers": usage_providers
@@ -437,6 +443,20 @@ def create_app() -> FastAPI:
                 return ""
             return f"{k[:6]}...{k[-4:]}" if len(k) > 10 else f"{k[:4]}..."
 
+        def _antigravity_scopes_ok() -> bool:
+            try:
+                _, auth = get_antigravity_client()
+                return bool(auth.scopes_ok)
+            except Exception:
+                return True
+
+        def _antigravity_missing_scopes() -> list[str]:
+            try:
+                _, auth = get_antigravity_client()
+                return list(auth.missing_scopes)
+            except Exception:
+                return []
+
         nv_keys = get_nvidia_keys()
         groq_keys = get_groq_keys()
         cerebras_keys = get_cerebras_keys()
@@ -444,6 +464,7 @@ def create_app() -> FastAPI:
         oc_key = get_opencode_key()
         bai_key = get_bai_key()
         kiro_token = get_kiro_refresh_token() or resolve_refresh_token()
+        antigravity_token = get_antigravity_refresh_token() or resolve_antigravity_refresh_token()
 
         return {
             "providers": [
@@ -454,6 +475,7 @@ def create_app() -> FastAPI:
                 {"id": "OpenCode", "name": "OpenCode Zen", "env_var": "OPENCODE_API_KEY", "keys": [mask(oc_key)] if oc_key else [], "count": 1 if oc_key else 0},
                 {"id": "BAI", "name": "B.AI Free", "env_var": "BAI_API_KEY", "keys": [mask(bai_key)] if bai_key else [], "count": 1 if bai_key else 0},
                 {"id": "Kiro", "name": "Kiro (AWS CodeWhisperer)", "env_var": "KIRO_REFRESH_TOKEN", "keys": [mask(kiro_token)] if kiro_token else [], "count": 1 if kiro_token else 0},
+                {"id": "Antigravity", "name": "Antigravity (Google)", "env_var": "ANTIGRAVITY_REFRESH_TOKEN", "keys": [mask(antigravity_token)] if antigravity_token else [], "count": 1 if antigravity_token else 0, "scopes_ok": _antigravity_scopes_ok(), "missing_scopes": _antigravity_missing_scopes()},
             ]
         }
 
@@ -473,6 +495,7 @@ def create_app() -> FastAPI:
             "OPENCODE": "OPENCODE_API_KEY",
             "BAI": "BAI_API_KEY",
             "KIRO": "KIRO_REFRESH_TOKEN",
+            "ANTIGRAVITY": "ANTIGRAVITY_REFRESH_TOKEN",
         }
         env_var = env_map.get(provider)
         if not env_var:
@@ -497,6 +520,10 @@ def create_app() -> FastAPI:
                 from nim_router.kiro_login import clear_stored_credentials
                 clear_stored_credentials()
                 os.environ.pop("KIRO_REFRESH_TOKEN", None)
+            if provider == "ANTIGRAVITY":
+                from nim_router.antigravity_login import clear_stored_credentials
+                clear_stored_credentials()
+                os.environ.pop("ANTIGRAVITY_REFRESH_TOKEN", None)
         elif action == "add":
             if key_val:
                 new_keys = [k.strip() for k in key_val.split(",") if k.strip()]
@@ -519,6 +546,10 @@ def create_app() -> FastAPI:
                 from nim_router.kiro_login import clear_stored_credentials
                 clear_stored_credentials()
                 os.environ.pop("KIRO_REFRESH_TOKEN", None)
+            if provider == "ANTIGRAVITY" and not current_list:
+                from nim_router.antigravity_login import clear_stored_credentials
+                clear_stored_credentials()
+                os.environ.pop("ANTIGRAVITY_REFRESH_TOKEN", None)
         elif action in ("update", "replace") or (action == "set" and body.get("index") is not None):
             idx = body.get("index")
             if idx is not None and isinstance(idx, int) and 0 <= idx < len(current_list):
@@ -554,6 +585,12 @@ def create_app() -> FastAPI:
                 set_kiro_refresh_token(kiro_token)
                 if not kiro_token:
                     _router_instance._invalidate_kiro_models()
+            if provider == "ANTIGRAVITY":
+                antigravity_token = get_antigravity_refresh_token() or resolve_antigravity_refresh_token()
+                _router_instance.antigravity_refresh_token = antigravity_token
+                set_antigravity_refresh_token(antigravity_token)
+                if not antigravity_token:
+                    _router_instance._invalidate_antigravity_models()
 
         logger.success(f"Updated API keys for {provider} via Web UI.")
         return {"success": True, "provider": provider}
@@ -656,6 +693,109 @@ def create_app() -> FastAPI:
             "success": True,
             "message": "Kiro sign-in successful. Kiro models are now available.",
             "provider": session.token.get("provider", "google")
+        })
+
+    @app.post("/api/antigravity/login/start")
+    async def antigravity_login_start(request: Request):
+        _check_auth(request)
+        try:
+            from nim_router.antigravity_login import AntigravityLoginSession
+
+            sessions: dict = getattr(app.state, "antigravity_sessions", None) or {}
+            app.state.antigravity_sessions = sessions
+            tasks: dict = getattr(app.state, "antigravity_tasks", None) or {}
+            app.state.antigravity_tasks = tasks
+
+            now = time.time()
+            for sid, stale in list(sessions.items()):
+                if stale.completed.is_set() or now - stale.started_at > 900:
+                    sessions.pop(sid, None)
+                    task = tasks.pop(sid, None)
+                    if task is not None and not task.done():
+                        task.cancel()
+                    await stale.close()
+
+            session = AntigravityLoginSession()
+            auth_url = await session.start()
+            session_id = session.state
+
+            sessions[session_id] = session
+            task = asyncio.create_task(_run_antigravity_login(session))
+            tasks[session_id] = task
+
+            return JSONResponse({
+                "success": True,
+                "session_id": session_id,
+                "auth_url": auth_url,
+                "message": "Open this URL in your browser to sign in with Google"
+            })
+        except Exception as e:
+            logger.error(f"Failed to start Antigravity login: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def _run_antigravity_login(session):
+        from nim_router.antigravity_login import exchange_code, store_social_token, save_refresh_token_to_env, fetch_user_info
+
+        try:
+            result = await session.wait()
+
+            token = exchange_code(
+                code=result.code,
+                code_verifier=session.verifier,
+                callback_uri=session.callback_uri,
+            )
+
+            info = fetch_user_info(token["access_token"])
+            token["email"] = str(info.get("email") or "")
+            token["project_id"] = "aicode-consumers"
+
+            store_social_token(token)
+            save_refresh_token_to_env(token["refresh_token"])
+
+            reload_env()
+            antigravity_token = get_antigravity_refresh_token() or resolve_antigravity_refresh_token()
+            if _router_instance:
+                _router_instance.antigravity_refresh_token = antigravity_token
+                set_antigravity_refresh_token(antigravity_token)
+
+                try:
+                    await _router_instance._discover_models()
+                except Exception as e:
+                    logger.warning(f"Antigravity sign-in succeeded but model discovery failed: {e}")
+
+            session.token = token
+            session.exchange_error = ""
+            logger.info("Antigravity sign-in completed successfully.")
+        except Exception as e:
+            session.exchange_error = str(e)
+            logger.error(f"Antigravity login completion failed: {e}")
+
+    @app.get("/api/antigravity/login/status")
+    async def antigravity_login_status(request: Request, session_id: str = ""):
+        _check_auth(request)
+
+        sessions: dict = getattr(app.state, "antigravity_sessions", None) or {}
+        session = sessions.get(session_id) if session_id else None
+        if session is None:
+            return JSONResponse({"complete": False, "error": "No login session active"})
+
+        if session.exchange_error:
+            sessions.pop(session_id, None)
+            return JSONResponse({
+                "complete": True,
+                "success": False,
+                "error": session.exchange_error
+            })
+
+        if session.token is None:
+            return JSONResponse({"complete": False})
+
+        sessions.pop(session_id, None)
+        return JSONResponse({
+            "complete": True,
+            "success": True,
+            "message": "Antigravity sign-in successful. Antigravity models are now available.",
+            "email": session.token.get("email", ""),
         })
 
     @app.post("/api/settings")
@@ -874,6 +1014,50 @@ def create_app() -> FastAPI:
             ]
         }
 
+    @app.post("/api/probe/antigravity")
+    async def run_antigravity_only_probe(request: Request):
+        _check_auth(request)
+        if not _router_instance:
+            raise HTTPException(status_code=500, detail="Router not initialized")
+
+        logger.info("Executing Antigravity-only model discovery via Web UI...")
+        from nim_router.client import discover_antigravity_models
+
+        latencies = {}
+        antigravity_models = await discover_antigravity_models(
+            latencies,
+            antigravity_refresh_token=_router_instance.antigravity_refresh_token,
+            verify=True
+        )
+
+        if antigravity_models:
+            async with _router_instance._write_lock:
+                _router_instance.models = [
+                    m for m in _router_instance.models
+                    if not _router_instance._is_antigravity_model(m)
+                ] + antigravity_models
+                for m in antigravity_models:
+                    mid = m.get("id")
+                    if mid:
+                        _router_instance._latencies[mid] = latencies.get(mid, 0.5)
+                        _router_instance._model_providers[mid] = "Antigravity"
+                _router_instance._healthy_pool = _router_instance._build_healthy_pool()
+                _router_instance._pool_updated = time.time()
+                logger.info(f"Updated pool with {len(antigravity_models)} Antigravity models.")
+
+        return {
+            "success": True,
+            "antigravity_models_discovered": len(antigravity_models),
+            "models": [
+                {
+                    "id": m.get("id"),
+                    "provider": "Antigravity",
+                    "latency": round(latencies.get(m.get("id", ""), 0.5), 3),
+                }
+                for m in antigravity_models
+            ]
+        }
+
     @app.get("/api/logs/history")
     async def get_logs_history(request: Request):
         _check_auth(request)
@@ -1067,6 +1251,10 @@ def create_app() -> FastAPI:
         if kiro_token:
             _router_instance.kiro_refresh_token = kiro_token
             set_kiro_refresh_token(kiro_token)
+        antigravity_token = get_antigravity_refresh_token() or resolve_antigravity_refresh_token()
+        if antigravity_token:
+            _router_instance.antigravity_refresh_token = antigravity_token
+            set_antigravity_refresh_token(antigravity_token)
         if sync:
             await _router_instance.refresh_models()
         else:

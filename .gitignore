@@ -7,6 +7,7 @@ venv/
 config/models_status.json
 !config/models_status.example.json
 config/kiro_credentials.json
+config/antigravity_credentials.json
 config/settings.yaml
 !config/settings.yaml.example
 config/runtime_state.json

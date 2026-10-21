@@ -39,13 +39,14 @@ from nim_router.classifier import (
     is_vision_request,
     estimate_token_count,
 )
-from nim_router.client import probe_model, discover_models, call_provider_endpoint, call_kiro_endpoint, get_kiro_client
+from nim_router.client import probe_model, discover_models, call_provider_endpoint, call_kiro_endpoint, get_kiro_client, call_antigravity_endpoint, get_antigravity_client
 from nim_router.catalog import is_banned_model, load_fallback_models, get_provider_name as _catalog_get_provider_name, save_working_models
 from nim_router.tracker import get_usage_tracker
 from nim_router.kiro import KIRO_PREFIX, KIRO_API_BASE, kiro_upstream_model_id
+from nim_router.antigravity import ANTIGRAVITY_PREFIX, ANTIGRAVITY_API_BASE, antigravity_upstream_model_id
 
 class ModelRouter:
-    def __init__(self, api_key: str | list[str], openrouter_keys: str | list[str] = "", opencode_key: str = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = "", bai_key: str = "", kiro_refresh_token: str = "", strategy: str = ""):
+    def __init__(self, api_key: str | list[str], openrouter_keys: str | list[str] = "", opencode_key: str = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = "", bai_key: str = "", kiro_refresh_token: str = "", antigravity_refresh_token: str = "", strategy: str = ""):
         self.tracker = get_usage_tracker()
         if isinstance(api_key, list):
             self.api_keys = [k.strip() for k in api_key if k.strip()]
@@ -63,6 +64,7 @@ class ModelRouter:
         self.opencode_key = opencode_key.strip()
         self.bai_key = bai_key.strip()
         self.kiro_refresh_token = (kiro_refresh_token or "").strip()
+        self.antigravity_refresh_token = (antigravity_refresh_token or "").strip()
 
         if isinstance(groq_keys, list):
             self.groq_keys = [k.strip() for k in groq_keys if k.strip()]
@@ -109,7 +111,7 @@ class ModelRouter:
 
     def _get_provider_name(self, model_id: str, overrides: dict[str, str] | None = None) -> str:
         mid_clean = model_id
-        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[BAI] ", "[Kiro] ", "[Category] "):
+        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[BAI] ", "[Kiro] ", "[Antigravity] ", "[Category] "):
             if mid_clean.startswith(prefix):
                 mid_clean = mid_clean[len(prefix):].strip()
         if overrides and mid_clean in overrides:
@@ -137,6 +139,9 @@ class ModelRouter:
         elif provider == "Kiro":
             keys = ["kiro"]
             base_url = KIRO_API_BASE
+        elif provider == "Antigravity":
+            keys = ["antigravity"]
+            base_url = ANTIGRAVITY_API_BASE
         elif provider == "Groq":
             keys = self.groq_keys if self.groq_keys else [""]
             base_url = GROQ_API_BASE
@@ -192,7 +197,7 @@ class ModelRouter:
     def _strip_provider_prefix(model_id: str) -> str:
         mid = model_id or ""
         for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ",
-                       "[Cerebras] ", "[BAI] ", "[Kiro] ", "[Category] "):
+                       "[Cerebras] ", "[BAI] ", "[Kiro] ", "[Antigravity] ", "[Category] "):
             if mid.startswith(prefix):
                 return mid[len(prefix):].strip()
         return mid
@@ -227,6 +232,31 @@ class ModelRouter:
         self._index_model_meta()
         logger.info(f"Removed {removed} Kiro model(s) from the pool after sign-out.")
 
+    def _invalidate_antigravity_models(self):
+        if not self.models:
+            return
+        kept = [m for m in self.models if not self._is_antigravity_model(m)]
+        removed = len(self.models) - len(kept)
+        if not removed:
+            return
+        self.models = kept
+        self._healthy_pool = [m for m in self._healthy_pool if not self._is_antigravity_model(m)]
+        for mid in list(self._model_providers):
+            if self._is_antigravity_model(mid):
+                self._model_providers.pop(mid, None)
+        self._index_model_meta()
+        logger.info(f"Removed {removed} Antigravity model(s) from the pool after sign-out.")
+
+    @staticmethod
+    def _is_antigravity_model(model) -> bool:
+        if isinstance(model, dict):
+            if str(model.get("provider") or "").strip().lower() == "antigravity":
+                return True
+            mid = str(model.get("id") or "")
+        else:
+            mid = str(model or "")
+        return mid.startswith(ANTIGRAVITY_PREFIX) or mid.startswith("[Antigravity] ")
+
     @staticmethod
     def _is_kiro_model(model) -> bool:
         if isinstance(model, dict):
@@ -246,7 +276,8 @@ class ModelRouter:
             self.groq_keys,
             self.cerebras_keys,
             self.bai_key,
-            self.kiro_refresh_token
+            self.kiro_refresh_token,
+            self.antigravity_refresh_token
         )
         for m in discovered:
             mid = m.get("id")
@@ -546,10 +577,11 @@ class ModelRouter:
             cerebras_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "Cerebras")
             bai_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "BAI")
             kiro_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "Kiro")
+            antigravity_count = sum(1 for m in self.models if self._get_provider_name(m.get("id", "")) == "Antigravity")
 
             logger.success(
                 f"nim-router initialized instantly with {len(self._healthy_pool)} working models in pool "
-                f"(NVIDIA: {nvidia_count}, OpenRouter: {or_count}, OpenCode: {oc_count}, Groq: {groq_count}, Cerebras: {cerebras_count}, BAI: {bai_count}, Kiro: {kiro_count})"
+                f"(NVIDIA: {nvidia_count}, OpenRouter: {or_count}, OpenCode: {oc_count}, Groq: {groq_count}, Cerebras: {cerebras_count}, BAI: {bai_count}, Kiro: {kiro_count}, Antigravity: {antigravity_count})"
             )
             logger.info(f"Active routing strategy: {self.strategy}")
             self._last_probe_time = time.time()
@@ -1118,6 +1150,12 @@ class ModelRouter:
 
                         if provider == "Kiro":
                             response = await call_kiro_endpoint(
+                                selected_id,
+                                request,
+                                on_usage=on_request_usage
+                            )
+                        elif provider == "Antigravity":
+                            response = await call_antigravity_endpoint(
                                 selected_id,
                                 request,
                                 on_usage=on_request_usage

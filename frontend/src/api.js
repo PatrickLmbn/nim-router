@@ -15,15 +15,7 @@ export const authFetch = async (url, options = {}) => {
 const GOOGLE_LOGOUT_URL = 'https://accounts.google.com/Logout';
 const GOOGLE_COOKIE_CLEAR_DELAY_MS = 600;
 
-export const openKiroOAuthWindow = () => {
-  try {
-    return window.open('about:blank', 'kiro_oauth', 'width=560,height=780');
-  } catch (e) {
-    return null;
-  }
-};
-
-export const startKiroOAuthFlow = (win, authUrl) => new Promise((resolve) => {
+const startOAuthFlow = (win, authUrl, label) => new Promise((resolve) => {
   let settled = false;
   const finish = (result) => {
     if (settled) return;
@@ -47,14 +39,14 @@ export const startKiroOAuthFlow = (win, authUrl) => new Promise((resolve) => {
       win.location.replace(authUrl);
       finish({ ok: true });
     } catch (e) {
-      finish({ ok: false, error: 'Could not open the Kiro sign-in window.' });
+      finish({ ok: false, error: `Could not open the ${label} sign-in window.` });
     }
   };
 
   try {
     win.location.replace(GOOGLE_LOGOUT_URL);
   } catch (e) {
-    finish({ ok: false, error: 'Could not open the Kiro sign-in window.' });
+    finish({ ok: false, error: `Could not open the ${label} sign-in window.` });
     return;
   }
 
@@ -67,3 +59,23 @@ export const startKiroOAuthFlow = (win, authUrl) => new Promise((resolve) => {
     }
   }, 100);
 });
+
+export const openKiroOAuthWindow = () => {
+  try {
+    return window.open('about:blank', 'kiro_oauth', 'width=560,height=780');
+  } catch (e) {
+    return null;
+  }
+};
+
+export const startKiroOAuthFlow = (win, authUrl) => startOAuthFlow(win, authUrl, 'Kiro');
+
+export const openAntigravityOAuthWindow = () => {
+  try {
+    return window.open('about:blank', 'antigravity_oauth', 'width=560,height=780');
+  } catch (e) {
+    return null;
+  }
+};
+
+export const startAntigravityOAuthFlow = (win, authUrl) => startOAuthFlow(win, authUrl, 'Antigravity');

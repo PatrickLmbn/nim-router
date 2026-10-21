@@ -29,6 +29,9 @@ if __name__ == "__main__":
             elif cmd in ("kiro-login", "kiro", "login-kiro", "google-login"):
                 from nim_router.cli import kiro_login
                 kiro_login()
+            elif cmd in ("antigravity-login", "agy", "agy-login", "login-antigravity"):
+                from nim_router.cli import antigravity_login
+                antigravity_login()
             elif cmd in ("restart", "reload"):
                 from nim_router.cli import restart_server
                 restart_server()

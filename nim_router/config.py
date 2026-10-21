@@ -125,6 +125,9 @@ def get_bai_key() -> str:
 def get_kiro_refresh_token() -> str:
     return os.getenv("KIRO_REFRESH_TOKEN", "").strip()
 
+def get_antigravity_refresh_token() -> str:
+    return os.getenv("ANTIGRAVITY_REFRESH_TOKEN", "").strip()
+
 def get_primary_model() -> str:
     file_val = ""
     if os.path.exists(_SETTINGS_FILE):

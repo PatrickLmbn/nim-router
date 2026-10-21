@@ -21,6 +21,12 @@ from nim_router.logger import logger
 from nim_router.schemas import ChatCompletionRequest
 from nim_router.catalog import is_banned_model, load_fallback_models
 from nim_router.kiro import KiroClient, KiroAuth, resolve_refresh_token, kiro_upstream_model_id
+from nim_router.antigravity import (
+    AntigravityClient,
+    AntigravityAuth,
+    antigravity_upstream_model_id,
+)
+from nim_router.antigravity import resolve_refresh_token as resolve_antigravity_refresh_token
 
 import email.utils
 from typing import Callable, Optional
@@ -70,6 +76,38 @@ def set_kiro_refresh_token(token: str) -> bool:
     _kiro_auth.refresh_token = token
     _kiro_auth.access_token = ""
     _kiro_auth.expires_at = 0.0
+    return True
+
+_antigravity_auth: AntigravityAuth | None = None
+_antigravity_client: AntigravityClient | None = None
+
+def get_antigravity_client() -> tuple[AntigravityClient, AntigravityAuth]:
+    global _antigravity_auth, _antigravity_client
+    if _antigravity_client is None or _antigravity_auth is None:
+        token = resolve_antigravity_refresh_token()
+        _antigravity_auth = AntigravityAuth(token)
+        _antigravity_client = AntigravityClient(_antigravity_auth)
+    return _antigravity_client, _antigravity_auth
+
+def set_antigravity_refresh_token(token: str) -> bool:
+    global _antigravity_auth, _antigravity_client
+    token = (token or "").strip()
+    if not token:
+        if _antigravity_auth is None:
+            return False
+        _antigravity_auth.refresh_token = ""
+        _antigravity_auth.access_token = ""
+        _antigravity_auth.expires_at = 0.0
+        return True
+    if _antigravity_auth is None:
+        _antigravity_auth = AntigravityAuth(token)
+        _antigravity_client = AntigravityClient(_antigravity_auth)
+        return True
+    if _antigravity_auth.refresh_token == token:
+        return False
+    _antigravity_auth.refresh_token = token
+    _antigravity_auth.access_token = ""
+    _antigravity_auth.expires_at = 0.0
     return True
 
 async def close_shared_client():
@@ -209,7 +247,54 @@ async def discover_kiro_models(
     return verified
 
 
-async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_keys: list[str] | str = "", opencode_key: str = "", groq_keys: list[str] | str = "", cerebras_keys: list[str] | str = "", bai_key: str = "", kiro_refresh_token: str = "") -> list[dict]:
+async def discover_antigravity_models(
+    latencies_dict: dict,
+    antigravity_refresh_token: str = "",
+    verify: bool = True,
+) -> list[dict]:
+    antigravity_client, antigravity_auth = get_antigravity_client()
+    if antigravity_refresh_token:
+        antigravity_auth.refresh_token = antigravity_refresh_token.strip()
+    if not antigravity_auth.configured:
+        logger.info("Antigravity probe skipped: no refresh token configured.")
+        return []
+
+    catalogue = await antigravity_client.list_models()
+    discovered: list[dict] = []
+    for model in catalogue:
+        mid = model.get("id")
+        if not mid or is_banned_model(mid):
+            continue
+        discovered.append(model)
+
+    if not verify:
+        return discovered
+
+    verified: list[dict] = []
+    for model in discovered:
+        mid = model.get("id", "")
+        try:
+            t0 = time.time()
+            result = await asyncio.wait_for(
+                antigravity_client.create_chat_completion(
+                    model_id=mid,
+                    messages=[{"role": "user", "content": "ping"}],
+                    max_tokens=8,
+                ),
+                timeout=45.0,
+            )
+            elapsed = round(time.time() - t0, 3)
+            if result.get("choices"):
+                latencies_dict[mid] = elapsed
+                verified.append(model)
+        except Exception as e:
+            logger.warning(f"Antigravity model {mid} failed probe: {e}")
+
+    logger.success(f"Antigravity: {len(verified)}/{len(discovered)} models verified.")
+    return verified
+
+
+async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_keys: list[str] | str = "", opencode_key: str = "", groq_keys: list[str] | str = "", cerebras_keys: list[str] | str = "", bai_key: str = "", kiro_refresh_token: str = "", antigravity_refresh_token: str = "") -> list[dict]:
     primary_nvidia_key = api_keys[0] if isinstance(api_keys, list) and api_keys else (api_keys if isinstance(api_keys, str) else "")
     primary_groq_key = groq_keys[0] if isinstance(groq_keys, list) and groq_keys else (groq_keys if isinstance(groq_keys, str) else "")
     primary_cerebras_key = cerebras_keys[0] if isinstance(cerebras_keys, list) and cerebras_keys else (cerebras_keys if isinstance(cerebras_keys, str) else "")
@@ -359,6 +444,14 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
     except Exception as e:
         logger.error(f"Kiro model discovery failed: {e}")
 
+    antigravity_discovered: list[dict] = []
+    try:
+        antigravity_discovered = await discover_antigravity_models(
+            latencies_dict, antigravity_refresh_token, verify=False
+        )
+    except Exception as e:
+        logger.error(f"Antigravity model discovery failed: {e}")
+
     if candidates_to_probe:
         total_probes = len(candidates_to_probe)
         completed_count = 0
@@ -406,6 +499,12 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
             latencies_dict, kiro_refresh_token, verify=True
         )
         all_discovered.extend(kiro_verified)
+
+    if antigravity_discovered:
+        antigravity_verified = await discover_antigravity_models(
+            latencies_dict, antigravity_refresh_token, verify=True
+        )
+        all_discovered.extend(antigravity_verified)
 
     if not all_discovered:
         all_discovered = load_fallback_models(latencies_dict)
@@ -886,3 +985,114 @@ async def call_kiro_endpoint(
     except Exception as e:
         logger.error(f"Kiro request failed for {model_id}: {e}")
         raise HTTPException(status_code=502, detail=f"Kiro request failed: {e}")
+
+
+async def call_antigravity_endpoint(
+    model_id: str,
+    request: ChatCompletionRequest,
+    on_usage: Optional[Callable[[int, int, int, bool, bool], None]] = None
+) -> Response:
+    antigravity_client, auth = get_antigravity_client()
+    if not auth.configured:
+        raise HTTPException(
+            status_code=503,
+            detail="Antigravity is not configured. Set ANTIGRAVITY_REFRESH_TOKEN or sign in with Google.",
+        )
+
+    client = get_shared_client()
+
+    try:
+        if request.stream:
+            async def stream_generator():
+                global _active_streams
+                _active_streams += 1
+                prompt_tokens = 0
+                completion_tokens = 0
+                has_visible_content = False
+                try:
+                    async for chunk in antigravity_client.stream_chat_completion(
+                        model_id=model_id,
+                        messages=request.messages,
+                        tools=request.tools,
+                        temperature=request.temperature,
+                        max_tokens=request.max_tokens,
+                        client=client,
+                    ):
+                        text = chunk.decode("utf-8", errors="ignore")
+                        if '"usage"' in text and '"choices": []' in text:
+                            try:
+                                payload = json.loads(text[5:].strip())
+                                usage = payload.get("usage") or {}
+                                prompt_tokens = usage.get("prompt_tokens") or 0
+                                completion_tokens = usage.get("completion_tokens") or 0
+                            except Exception:
+                                pass
+                        if '"content"' in text:
+                            has_visible_content = True
+                        yield chunk
+                except (httpx.ReadTimeout, httpx.RequestError) as e:
+                    logger.warning(f"Antigravity stream read error for {model_id}: {e}")
+                    err_msg = json.dumps({
+                        "error": {
+                            "message": f"Stream connection timed out from Antigravity model ({model_id}).",
+                            "type": "upstream_timeout",
+                            "code": 504
+                        }
+                    })
+                    yield f"data: {err_msg}\n\n".encode("utf-8")
+                except Exception as e:
+                    logger.error(f"Antigravity stream error for {model_id}: {e}")
+                    err_msg = json.dumps({
+                        "error": {
+                            "message": f"Antigravity stream failed for {model_id}: {e}",
+                            "type": "upstream_error",
+                            "code": 502
+                        }
+                    })
+                    yield f"data: {err_msg}\n\n".encode("utf-8")
+                finally:
+                    _active_streams = max(0, _active_streams - 1)
+                    if on_usage:
+                        try:
+                            total = prompt_tokens + completion_tokens
+                            on_usage(prompt_tokens, completion_tokens, total, True, not has_visible_content)
+                        except Exception:
+                            pass
+
+            return StreamingResponse(
+                stream_generator(),
+                status_code=200,
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no"
+                }
+            )
+
+        result = await antigravity_client.create_chat_completion(
+            model_id=model_id,
+            messages=request.messages,
+            tools=request.tools,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+            client=client,
+        )
+        usage = result.get("usage") or {}
+        if on_usage:
+            try:
+                on_usage(
+                    usage.get("prompt_tokens", 0),
+                    usage.get("completion_tokens", 0),
+                    usage.get("total_tokens", 0),
+                    True,
+                    False,
+                )
+            except Exception:
+                pass
+        return Response(content=json.dumps(result), media_type="application/json", status_code=200)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Antigravity request failed for {model_id}: {e}")
+        raise HTTPException(status_code=502, detail=f"Antigravity request failed: {e}")

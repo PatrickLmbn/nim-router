@@ -50,6 +50,7 @@ git clone https://github.com/PatrickLmbn/nim-router.git; cd nim-router; .\instal
 - **OpenCode API** (`OPENCODE_API_KEY`)
 - **B.AI Free Tier** (`BAI_API_KEY` - GLM, Qwen, and Hunyuan endpoints)
 - **Kiro / AWS CodeWhisperer** (sign in with Google - no Kiro CLI needed, no API key to copy)
+- **Antigravity / Google** (sign in with Google - no Antigravity CLI needed, no API key to copy)
 
 ### 2. Purpose-Based Virtual Category Models
 Target high-level capabilities in your agent or application without hardcoding specific model identifiers:
@@ -242,6 +243,15 @@ BAI_API_KEY="your-bai-key"
 # In the web UI: Keys Manager -> Kiro -> "Sign in with Google".
 # From the CLI: nim kiro-login
 # KIRO_REFRESH_TOKEN="your-kiro-refresh-token"
+
+# Antigravity (Google) - written for you by the sign-in flow.
+# In the web UI: Keys Manager -> Antigravity -> "Sign in with Google".
+# From the CLI: nim agy-login
+# ANTIGRAVITY_REFRESH_TOKEN="your-antigravity-refresh-token"
+# The OAuth client is read from the installed Antigravity CLI, from
+# config/antigravity_oauth.json, or from these variables (in that order).
+# ANTIGRAVITY_CLIENT_ID="your-client-id"
+# ANTIGRAVITY_CLIENT_SECRET="your-client-secret"
 
 # Server Port
 PORT=11435

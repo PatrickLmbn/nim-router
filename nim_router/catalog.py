@@ -89,7 +89,7 @@ def get_provider_name(m_obj: "dict | str", provider_cache: "dict | None" = None)
     else:
         mid = str(m_obj).lower()
 
-    for prefix in ("[nvidia] ", "[openrouter] ", "[opencode] ", "[groq] ", "[cerebras] ", "[bai] ", "[kiro] ", "[category] "):
+    for prefix in ("[nvidia] ", "[openrouter] ", "[opencode] ", "[groq] ", "[cerebras] ", "[bai] ", "[kiro] ", "[antigravity] ", "[category] "):
         if mid.startswith(prefix):
             mid = mid[len(prefix):].strip()
 
@@ -98,6 +98,8 @@ def get_provider_name(m_obj: "dict | str", provider_cache: "dict | None" = None)
 
     if mid.startswith("kiro/") or mid in ("kiro", "kiro-auto") or "[kiro]" in mid:
         return "Kiro"
+    if mid.startswith("antigravity/") or mid in ("antigravity", "antigravity-auto") or "[antigravity]" in mid:
+        return "Antigravity"
     if mid in ("glm-5.3-flash", "qwen3.8-flash", "hy3") or mid.startswith("bai/") or "b.ai" in mid:
         return "BAI"
     elif mid.endswith(":free") or "openrouter/" in mid or mid.startswith("openrouter"):
@@ -122,6 +124,7 @@ def save_working_models(models: "list[dict | str]"):
         "max_output_tokens",
         "rate_multiplier",
         "kiro_model_id",
+        "antigravity_model_id",
     )
     saved_list = []
     for item in models:

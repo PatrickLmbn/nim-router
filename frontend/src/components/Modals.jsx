@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   X, Check, Search, Key, Sliders, Terminal, Shield, RefreshCw, Plus, Trash2, Zap, Server, Activity, Copy, CheckCircle, Eye, EyeOff, Edit2, Wrench, Code, Brain, MessageSquare, Layers, Sparkles, Lock, KeyRound, BarChart3, ArrowUpRight, TrendingUp, Clock, AlertCircle, PieChart, GripVertical, CloudDownload, GitPullRequest, Loader2, ArrowDownToLine
 } from 'lucide-react';
 import { ModelIcon, ProviderIcon, resolveProvider } from './ModelIcon';
-import { authFetch, openKiroOAuthWindow, startKiroOAuthFlow } from '../api';
+import { authFetch, openKiroOAuthWindow, startKiroOAuthFlow, openAntigravityOAuthWindow, startAntigravityOAuthFlow } from '../api';
 
 export { ModelIcon, ProviderIcon, resolveProvider };
 
@@ -51,7 +51,7 @@ export function ModelSelectorModal({ stats, onClose, onSelectModel }) {
   const [providerFilter, setProviderFilter] = useState('ALL');
 
   const models = stats?.models || [];
-  const providers = ['ALL', 'NVIDIA', 'Groq', 'Cerebras', 'OpenRouter', 'OpenCode', 'BAI', 'Kiro'];
+  const providers = ['ALL', 'NVIDIA', 'Groq', 'Cerebras', 'OpenRouter', 'OpenCode', 'BAI', 'Kiro', 'Antigravity'];
 
   const filtered = models.filter(m => {
     const matchesSearch = m.id.toLowerCase().includes(search.toLowerCase()) || m.provider.toLowerCase().includes(search.toLowerCase());
@@ -168,6 +168,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
   const [actionStatus, setActionStatus] = useState('');
   const [editingIndex, setEditingIndex] = useState(null);
   const [kiroSigningIn, setKiroSigningIn] = useState(false);
+  const [antigravitySigningIn, setAntigravitySigningIn] = useState(false);
 
   const providerMeta = {
     NVIDIA: { name: 'NVIDIA NIM', short: 'NVIDIA', color: '#76B900', env: 'NVIDIA_API_KEYS', multi: true, placeholder: 'nvapi-...' },
@@ -176,7 +177,8 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
     OpenRouter: { name: 'OpenRouter Free', short: 'OpenRouter', color: '#6366F1', env: 'OPENROUTER_API_KEYS', multi: true, placeholder: 'sk-or-v1-...' },
     OpenCode: { name: 'OpenCode Zen', short: 'OpenCode', color: '#00D2FF', env: 'OPENCODE_API_KEY', multi: false, placeholder: 'opencode_...' },
     BAI: { name: 'B.AI Free', short: 'B.AI', color: '#A855F7', env: 'BAI_API_KEY', multi: false, placeholder: 'bai_...' },
-    Kiro: { name: 'Kiro (AWS CodeWhisperer)', short: 'Kiro', color: '#FF9900', env: 'KIRO_REFRESH_TOKEN', multi: false, placeholder: 'aor_...' }
+    Kiro: { name: 'Kiro (AWS CodeWhisperer)', short: 'Kiro', color: '#FF9900', env: 'KIRO_REFRESH_TOKEN', multi: false, placeholder: 'aor_...' },
+    Antigravity: { name: 'Antigravity (Google)', short: 'Antigravity', color: '#4285F4', env: 'ANTIGRAVITY_REFRESH_TOKEN', multi: false, placeholder: '1//...' }
   };
 
   const fetchKeys = async () => {
@@ -286,13 +288,82 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
     }
   };
 
+  const startAntigravityLogin = async (isReauth) => {
+    const win = openAntigravityOAuthWindow();
+    setAntigravitySigningIn(true);
+    setActionStatus(isReauth ? 'Starting new sign-in...' : 'Starting sign-in...');
+    try {
+      const res = await authFetch('/api/antigravity/login/start', { method: 'POST' });
+      const data = await safeJson(res);
+      if (!data.success || !data.auth_url) {
+        if (win && !win.closed) win.close();
+        setAntigravitySigningIn(false);
+        setActionStatus(data.detail || 'Failed to start sign-in');
+        return;
+      }
+
+      const flow = await startAntigravityOAuthFlow(win, data.auth_url);
+      if (!flow.ok) {
+        setAntigravitySigningIn(false);
+        setActionStatus(flow.error || 'Could not open the sign-in window');
+        return;
+      }
+      setActionStatus('Waiting for sign-in...');
+
+      const sessionId = data.session_id || '';
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await authFetch(`/api/antigravity/login/status?session_id=${encodeURIComponent(sessionId)}`);
+          const statusData = await safeJson(statusRes);
+          if (statusData.complete) {
+            clearInterval(pollInterval);
+            setAntigravitySigningIn(false);
+            if (statusData.success) {
+              setActionStatus(isReauth ? 'Switched account successfully!' : 'Signed in successfully!');
+              await fetchKeys();
+              setSelectedProvider('Antigravity');
+              try {
+                await authFetch('/api/probe/antigravity', { method: 'POST' });
+              } catch (e) {
+                console.error('Antigravity probe error:', e);
+              }
+              if (onKeysUpdated) onKeysUpdated();
+              setTimeout(() => setActionStatus(''), 2500);
+            } else {
+              setActionStatus(`Sign-in failed: ${statusData.error || 'Unknown error'}`);
+            }
+          }
+        } catch (e) {
+          console.error('Poll error:', e);
+        }
+      }, 2000);
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        setAntigravitySigningIn(false);
+      }, 300000);
+    } catch (e) {
+      setAntigravitySigningIn(false);
+      setActionStatus('Error starting sign-in');
+      console.error(e);
+    }
+  };
+
   const currentProviderInfo = keysData.find(p => p.id === selectedProvider);
   const currentMeta = providerMeta[selectedProvider] || { name: selectedProvider, short: selectedProvider, color: '#ff6b35', env: '', multi: false, placeholder: 'Paste API key...' };
   const configuredKeys = currentProviderInfo?.keys || [];
   const kiroSignedIn = selectedProvider === 'Kiro' && configuredKeys.length > 0;
+  const antigravitySignedIn = selectedProvider === 'Antigravity' && configuredKeys.length > 0;
+  const anySigningIn = kiroSigningIn || antigravitySigningIn;
+  const antigravityScopeWarning = useMemo(() => {
+    if (selectedProvider !== 'Antigravity') return null;
+    const row = keysData.find(p => p.id === 'Antigravity');
+    if (!row || row.scopes_ok !== false) return null;
+    const missing = Array.isArray(row.missing_scopes) ? row.missing_scopes : [];
+    return missing.length ? missing.join(' ') : 'https://www.googleapis.com/auth/aicode';
+  }, [keysData, selectedProvider]);
 
   return (
-    <ModalWrapper title="Multi-Provider Key Manager" icon={Key} onClose={onClose} closeDisabled={kiroSigningIn}>
+    <ModalWrapper title="Multi-Provider Key Manager" icon={Key} onClose={onClose} closeDisabled={anySigningIn}>
       <p className="text-xs text-slate-500 dark:text-slate-400">
         Configure single or multiple keys per provider. The router rotates requests across multiple keys in round-robin to maximize throughput and avoid rate limits.
       </p>
@@ -306,7 +377,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
             <button
               key={p.id}
               type="button"
-              disabled={kiroSigningIn}
+              disabled={anySigningIn}
               onClick={() => {
                 setSelectedProvider(p.id);
                 setKeyInput('');
@@ -386,11 +457,11 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                     >
                       <Key className={`w-3 h-3 ${isEditingThis ? 'text-[#ff6b35]' : 'text-slate-400'}`} />
                       <span>{k}</span>
-                      {selectedProvider !== 'Kiro' && (
+                      {selectedProvider !== 'Kiro' && selectedProvider !== 'Antigravity' && (
                         <>
                           <button
                             type="button"
-                            disabled={kiroSigningIn}
+                            disabled={anySigningIn}
                             onClick={() => {
                               setEditingIndex(isEditingThis ? null : i);
                               setKeyInput('');
@@ -403,7 +474,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                           </button>
                           <button
                             type="button"
-                            disabled={kiroSigningIn}
+                            disabled={anySigningIn}
                             onClick={() => handleUpdate('delete', null, i)}
                             className="p-0.5 rounded text-slate-400 hover:text-rose-500 transition disabled:opacity-40 disabled:pointer-events-none"
                             title="Delete this key"
@@ -424,34 +495,46 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
           </div>
 
           <div className="space-y-2 pt-1 border-t border-black/5 dark:border-white/5">
-            {selectedProvider === 'Kiro' ? (
+            {selectedProvider === 'Kiro' || selectedProvider === 'Antigravity' ? (
               <div className="space-y-3">
-                <div className="text-[10px] uppercase text-slate-500 dark:text-slate-400 font-bold tracking-wider">
-                  {kiroSignedIn ? 'Connected' : 'Sign in with Google'}
+              {selectedProvider === 'Antigravity' && antigravityScopeWarning && (
+                <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-[11px] text-amber-700 dark:text-amber-300">
+                  <div className="font-semibold mb-1">This Google account is missing the Antigravity access scope.</div>
+                  <div className="font-mono text-[10px] opacity-80 break-all">{antigravityScopeWarning}</div>
+                  <div className="mt-1.5">Sign in again below to grant it, or use a different personal Google account.</div>
+                </div>
+              )}
+              <div className="text-[10px] uppercase text-slate-500 dark:text-slate-400 font-bold tracking-wider">
+                  {(selectedProvider === 'Kiro' ? kiroSignedIn : antigravitySignedIn) ? 'Connected' : 'Sign in with Google'}
                 </div>
                 <p className="text-xs text-slate-600 dark:text-slate-400">
-                  {kiroSignedIn
-                    ? 'Kiro is connected. You can sign out, or start a fresh Google sign-in.'
-                    : 'Kiro uses Google OAuth for authentication. Click below to sign in through your browser.'}
+                  {selectedProvider === 'Kiro'
+                    ? (kiroSignedIn
+                      ? 'Kiro is connected. You can sign out, or start a fresh Google sign-in.'
+                      : 'Kiro uses Google OAuth for authentication. Click below to sign in through your browser.')
+                    : (antigravitySignedIn
+                      ? 'Antigravity is connected. You can sign out, or start a fresh Google sign-in.'
+                      : 'Antigravity uses Google OAuth for authentication. Click below to sign in through your browser.')}
                 </p>
                 <div className="flex flex-col gap-3">
                   <div className="flex flex-row gap-3 items-center flex-wrap">
-                    {!kiroSignedIn && (
+                    {!(selectedProvider === 'Kiro' ? kiroSignedIn : antigravitySignedIn) && (
                       <button
                         type="button"
-                        disabled={kiroSigningIn}
-                        onClick={() => startKiroLogin(false)}
-                        className="px-4 py-2 rounded-xl bg-[#FF9900] text-white font-semibold hover:bg-[#e68a00] disabled:opacity-50 transition flex items-center justify-center gap-2"
+                        disabled={anySigningIn}
+                        onClick={() => (selectedProvider === 'Kiro' ? startKiroLogin(false) : startAntigravityLogin(false))}
+                        className="px-4 py-2 rounded-xl text-white font-semibold disabled:opacity-50 transition flex items-center justify-center gap-2"
+                        style={{ backgroundColor: selectedProvider === 'Kiro' ? '#FF9900' : '#4285F4' }}
                       >
-                        {kiroSigningIn ? <Loader2 className="w-4 h-4 animate-spin" /> : <Key className="w-4 h-4" />}
-                        {kiroSigningIn ? 'Waiting for sign-in...' : 'Sign in with Google'}
+                        {(selectedProvider === 'Kiro' ? kiroSigningIn : antigravitySigningIn) ? <Loader2 className="w-4 h-4 animate-spin" /> : <Key className="w-4 h-4" />}
+                        {(selectedProvider === 'Kiro' ? kiroSigningIn : antigravitySigningIn) ? 'Waiting for sign-in...' : 'Sign in with Google'}
                       </button>
                     )}
-                    {kiroSignedIn && (
+                    {(selectedProvider === 'Kiro' ? kiroSignedIn : antigravitySignedIn) && (
                       <>
                         <button
                           type="button"
-                          disabled={kiroSigningIn}
+                          disabled={anySigningIn}
                           onClick={() => handleUpdate('clear')}
                           className="text-xs text-rose-500 hover:underline disabled:opacity-40 disabled:pointer-events-none"
                         >
@@ -459,8 +542,8 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                         </button>
                         <button
                           type="button"
-                          disabled={kiroSigningIn}
-                          onClick={() => startKiroLogin(true)}
+                          disabled={anySigningIn}
+                          onClick={() => (selectedProvider === 'Kiro' ? startKiroLogin(true) : startAntigravityLogin(true))}
                           className="text-xs text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-400 disabled:opacity-40 disabled:pointer-events-none"
                         >
                           Sign in with another account
@@ -468,7 +551,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                       </>
                     )}
                   </div>
-                  {kiroSignedIn && (
+                  {(selectedProvider === 'Kiro' ? kiroSignedIn : antigravitySignedIn) && (
                     <p className="text-[10px] text-slate-500 dark:text-slate-400 italic">
                       &quot;Sign in with another account&quot; clears the Google session in the sign-in window first, so Google shows its account chooser instead of reusing the last account.
                     </p>
