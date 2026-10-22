@@ -921,24 +921,10 @@ async def call_kiro_endpoint(
                         yield chunk
                 except (httpx.ReadTimeout, httpx.RequestError) as e:
                     logger.warning(f"Kiro stream read error for {model_id}: {e}")
-                    err_msg = json.dumps({
-                        "error": {
-                            "message": f"Stream connection timed out from Kiro model ({model_id}).",
-                            "type": "upstream_timeout",
-                            "code": 504
-                        }
-                    })
-                    yield f"data: {err_msg}\n\n".encode("utf-8")
+                    raise HTTPException(status_code=504, detail=f"Stream connection timed out from Kiro model ({model_id}).")
                 except Exception as e:
                     logger.error(f"Kiro stream error for {model_id}: {e}")
-                    err_msg = json.dumps({
-                        "error": {
-                            "message": f"Kiro stream failed for {model_id}: {e}",
-                            "type": "upstream_error",
-                            "code": 502
-                        }
-                    })
-                    yield f"data: {err_msg}\n\n".encode("utf-8")
+                    raise HTTPException(status_code=502, detail=f"Kiro stream failed for {model_id}: {e}")
                 finally:
                     _active_streams = max(0, _active_streams - 1)
                     if on_usage:
@@ -1032,24 +1018,10 @@ async def call_antigravity_endpoint(
                         yield chunk
                 except (httpx.ReadTimeout, httpx.RequestError) as e:
                     logger.warning(f"Antigravity stream read error for {model_id}: {e}")
-                    err_msg = json.dumps({
-                        "error": {
-                            "message": f"Stream connection timed out from Antigravity model ({model_id}).",
-                            "type": "upstream_timeout",
-                            "code": 504
-                        }
-                    })
-                    yield f"data: {err_msg}\n\n".encode("utf-8")
+                    raise HTTPException(status_code=504, detail=f"Stream connection timed out from Antigravity model ({model_id}).")
                 except Exception as e:
                     logger.error(f"Antigravity stream error for {model_id}: {e}")
-                    err_msg = json.dumps({
-                        "error": {
-                            "message": f"Antigravity stream failed for {model_id}: {e}",
-                            "type": "upstream_error",
-                            "code": 502
-                        }
-                    })
-                    yield f"data: {err_msg}\n\n".encode("utf-8")
+                    raise HTTPException(status_code=502, detail=f"Antigravity stream failed for {model_id}: {e}")
                 finally:
                     _active_streams = max(0, _active_streams - 1)
                     if on_usage:
