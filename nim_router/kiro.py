@@ -29,8 +29,6 @@ _TOKEN_EXPIRY_MARGIN = 120.0
 _DEFAULT_LATENCY = 2.0
 
 
-
-
 def kiro_upstream_model_id(model_id: str) -> str:
     mid = (model_id or "").strip()
     if mid.startswith("[Kiro] "):
@@ -94,8 +92,6 @@ async def _http_url_to_image(url: str, client: httpx.AsyncClient) -> Optional[di
         return None
 
 
-
-
 def _parse_headers(region: bytes) -> dict:
     headers: dict = {}
     j = 0
@@ -111,7 +107,7 @@ def _parse_headers(region: bytes) -> dict:
             break
         value_type = region[j]
         j += 1
-        if value_type == 7:  
+        if value_type == 7:
             if j + 2 > n:
                 break
             value_len = int.from_bytes(region[j:j + 2], "big")
@@ -193,8 +189,6 @@ class _FrameDecoder:
         return event_type, _decode_json_object(payload)
 
 
-
-
 def resolve_refresh_token(explicit: str = "") -> str:
     if explicit and explicit.strip():
         return explicit.strip()
@@ -266,8 +260,6 @@ class KiroAuth:
             ttl = 3600.0
         self.expires_at = time.time() + ttl
         logger.info("Kiro access token refreshed (valid for %ds).", int(ttl))
-
-
 
 
 def _convert_tools(tools: Optional[list[dict]]) -> list[dict]:
@@ -487,8 +479,6 @@ async def build_kiro_payload(
     return payload
 
 
-
-
 class _ToolCallAccumulator:
 
     def __init__(self) -> None:
@@ -534,8 +524,6 @@ def _chunk_id() -> str:
 
 def _sse(payload: dict) -> bytes:
     return f"data: {json.dumps(payload)}\n\n".encode("utf-8")
-
-
 
 
 class KiroClient:

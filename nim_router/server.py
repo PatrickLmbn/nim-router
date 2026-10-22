@@ -140,7 +140,7 @@ def create_app() -> FastAPI:
         return enriched
 
     _SESSIONS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", ".sessions.json")
-    SESSION_TTL_SECONDS = 86400 * 30  
+    SESSION_TTL_SECONDS = 86400 * 30
 
     def _load_sessions() -> dict[str, float]:
         if os.path.exists(_SESSIONS_FILE):
@@ -944,7 +944,7 @@ def create_app() -> FastAPI:
             asyncio.create_task(_bg_restart())
             logger.info("Restarting nim-router gateway via PM2...")
             return {"success": True, "message": "Gateway process restarting via PM2..."}
-        
+
         logger.info("Gateway configuration & pool refreshed.")
         return {"success": True, "message": "Gateway reloaded successfully."}
 

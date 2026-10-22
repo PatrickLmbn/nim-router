@@ -63,8 +63,6 @@ class KiroLoginError(RuntimeError):
     pass
 
 
-
-
 def _b64url(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
@@ -128,8 +126,6 @@ def request_google_auth_url(
         raise KiroLoginError("Kiro login request did not return a redirect URL.")
 
     return redirect
-
-
 
 
 def _iso_expiry(expires_in: Optional[float]) -> str:
@@ -216,8 +212,6 @@ def save_refresh_token_to_env(refresh_token: str, env_path: Optional[str] = None
     os.environ["KIRO_REFRESH_TOKEN"] = refresh_token
     logger.info(f"KIRO_REFRESH_TOKEN written to {env_path}.")
     return env_path
-
-
 
 
 class _CallbackResult:
@@ -330,7 +324,7 @@ class KiroLoginSession:
                 + payload
             )
             await writer.drain()
-        except Exception as e:  
+        except Exception as e:
             logger.error(f"Kiro callback handler error: {e}")
         finally:
             try:
@@ -375,8 +369,6 @@ def _escape(text: str) -> str:
         .replace("<", "&lt;")
         .replace(">", "&gt;")
     )
-
-
 
 
 def _pick(source: dict, *keys: str) -> str:

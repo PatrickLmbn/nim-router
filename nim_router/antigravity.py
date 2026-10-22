@@ -133,50 +133,27 @@ async def _http_url_to_image(url: str, client: httpx.AsyncClient) -> Optional[di
         return None
 
 
-
-
-# JSON Schema fields that Antigravity/Gemini accepts in parameter schemas.
-# Tested against live API — many standard JSON Schema fields are rejected.
 _JSON_SCHEMA_ALLOWED_FIELDS = frozenset({
-    # Core schema keywords
     "type", "properties", "items", "required", "description", "title",
-    # Numeric constraints
     "minimum", "maximum",
-    # String constraints
     "minLength", "maxLength", "pattern", "format",
-    # Array constraints
     "minItems", "maxItems",
-    # Object constraints
     "minProperties", "maxProperties", "additionalProperties",
-    # Enum and default
     "enum", "default",
-    # Combinators
     "anyOf", "oneOf", "allOf", "not",
-    # Nullable (non-standard but accepted)
     "nullable", "example",
 })
 
 
 def _sanitize_schema(schema: Any) -> Any:
-    """Recursively strip non-standard JSON Schema fields that Antigravity rejects.
-    
-    Antigravity validates schemas recursively and rejects unknown fields like
-    'x-mcp-header' even in nested 'properties' subschemas. This function removes
-    any field not in the allowed JSON Schema set.
-    
-    Special handling for 'properties': it's a map of property names to schemas,
-    so we preserve all keys but recursively sanitize the schema values.
-    """
     if not isinstance(schema, dict):
         return schema
-    
+
     cleaned: dict = {}
     for key, value in schema.items():
         if key not in _JSON_SCHEMA_ALLOWED_FIELDS:
             continue
         if key == "properties":
-            # 'properties' is a map of property names to schemas.
-            # Keep all property names, but sanitize each schema value.
             if isinstance(value, dict):
                 cleaned[key] = {pname: _sanitize_schema(pschema) for pname, pschema in value.items()}
             else:
@@ -187,18 +164,11 @@ def _sanitize_schema(schema: Any) -> Any:
             cleaned[key] = [_sanitize_schema(item) for item in value]
         else:
             cleaned[key] = value
-    
+
     return cleaned
 
 
 def _normalize_schema(schema: Any) -> Any:
-    """Normalize a sanitized schema so Antigravity's structural rules are satisfied.
-
-    Antigravity requires:
-      - 'type: array' schemas to declare 'items'
-      - 'properties' to only appear on 'type: object' schemas
-    A malformed client schema would otherwise fail the whole request with HTTP 400.
-    """
     if not isinstance(schema, dict):
         return schema
 
@@ -239,7 +209,6 @@ def _convert_tools(tools: Optional[list[dict]]) -> list[dict]:
         parameters = fn.get("parameters") or fn.get("inputSchema") or {}
         if not isinstance(parameters, dict) or not parameters:
             parameters = {"type": "object", "properties": {}}
-        # Strip vendor-extension fields and normalize the shape for Antigravity.
         parameters = _normalize_schema(_sanitize_schema(parameters))
         declarations = [{
             "name": name,
@@ -270,8 +239,6 @@ def _tool_uses_from_message(msg: dict) -> list[dict]:
             "args": parsed if isinstance(parsed, dict) else {},
         }
         part = {"functionCall": func_call}
-        # Preserve thoughtSignature if present (required by Antigravity for replay)
-        # It must be a sibling of functionCall, not inside it
         ts = call.get("thoughtSignature") or call.get("thought_signature")
         if ts:
             part["thoughtSignature"] = ts
@@ -280,15 +247,8 @@ def _tool_uses_from_message(msg: dict) -> list[dict]:
 
 
 def _tool_results_from_message(msg: dict, tool_call_map: Optional[dict[str, str]] = None) -> list[dict]:
-    """Convert a tool result message to Antigravity functionResponse format.
-    
-    The function name is looked up from tool_call_map (built from the assistant's
-    tool_calls) using the tool_call_id, since OpenAI tool messages may not
-    include the 'name' field directly.
-    """
     text = _extract_text(msg.get("content"))
     tool_call_id = msg.get("tool_call_id") or ""
-    # Try to get name from message, then fall back to tool_call_map lookup
     name = msg.get("name") or (tool_call_map.get(tool_call_id) if tool_call_map else "") or ""
     return [{
         "functionResponse": {
@@ -333,8 +293,6 @@ async def _resolve_images(images: list[dict], client: httpx.AsyncClient) -> list
         else:
             logger.warning("Antigravity: could not resolve image reference; skipping it.")
     return resolved
-
-
 
 
 def resolve_refresh_token(explicit: str = "") -> str:
@@ -461,10 +419,6 @@ class AntigravityAuth:
         return {}
 
 
-
-
-
-
 async def build_antigravity_payload(
     messages: list[dict],
     model_id: str,
@@ -474,7 +428,6 @@ async def build_antigravity_payload(
     system_chunks: list[str] = []
     contents: list[dict] = []
     pending_results: list[dict] = []
-    # Map tool_call_id -> function name from assistant tool_calls
     tool_call_map: dict[str, str] = {}
 
     for msg in messages:
@@ -490,7 +443,6 @@ async def build_antigravity_payload(
             pending_results.extend(_tool_results_from_message(msg, tool_call_map))
             continue
         if role == "assistant":
-            # Build tool_call_map from this assistant's tool_calls
             for call in msg.get("tool_calls") or []:
                 if isinstance(call, dict):
                     fn = call.get("function") or {}
@@ -568,8 +520,6 @@ async def build_antigravity_payload(
     }
 
 
-
-
 class _ToolCallAccumulator:
 
     def __init__(self) -> None:
@@ -614,8 +564,6 @@ def _chunk_id() -> str:
 
 def _sse(payload: dict) -> bytes:
     return f"data: {json.dumps(payload)}\n\n".encode("utf-8")
-
-
 
 
 class AntigravityClient:

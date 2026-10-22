@@ -139,7 +139,7 @@ export function ModelSelectorModal({ stats, onClose, onSelectModel }) {
                 <span className="w-1.5 h-1.5 rounded-full bg-[#00f5a0] shrink-0" />
                 <ModelIcon model={m.id} provider={m.provider} className="h-3.5 w-auto max-w-[48px] max-h-3.5 shrink-0" />
                 <span className="text-xs font-mono truncate text-slate-800 dark:text-slate-200">{m.id}</span>
-                
+
               </div>
               <div className="flex items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400 shrink-0 ml-2">
                 <span>{m.latency}s</span>
@@ -156,7 +156,6 @@ export function ModelSelectorModal({ stats, onClose, onSelectModel }) {
     </ModalWrapper>
   );
 }
-
 
 
 export function KeysManagerModal({ onClose, onKeysUpdated }) {
