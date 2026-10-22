@@ -73,8 +73,6 @@ class AntigravityLoginError(RuntimeError):
     pass
 
 
-
-
 def _b64url(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
@@ -98,8 +96,6 @@ def build_auth_url(state: str, code_challenge: str, redirect_uri: str) -> str:
         "prompt": "consent",
     }
     return f"{ANTIGRAVITY_AUTH_URL}?{urllib.parse.urlencode(params)}"
-
-
 
 
 def _iso_expiry(expires_in: Optional[float]) -> str:
@@ -197,8 +193,6 @@ def save_refresh_token_to_env(refresh_token: str, env_path: Optional[str] = None
     os.environ["ANTIGRAVITY_REFRESH_TOKEN"] = refresh_token
     logger.info(f"ANTIGRAVITY_REFRESH_TOKEN written to {env_path}.")
     return env_path
-
-
 
 
 class _CallbackResult:
@@ -354,8 +348,6 @@ def _escape(text: str) -> str:
     )
 
 
-
-
 def _pick(source: dict, *keys: str) -> str:
     for key in keys:
         value = source.get(key)
@@ -441,8 +433,6 @@ def fetch_user_info(access_token: str) -> dict:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
-
-
 
 
 async def run_login(

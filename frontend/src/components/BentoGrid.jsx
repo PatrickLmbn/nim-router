@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Zap, Activity, ArrowUpRight, Play, RefreshCw, Plus, 
+import {
+  Zap, Activity, ArrowUpRight, Play, RefreshCw, Plus,
   Gauge, Shield, Terminal, Copy, Check, RotateCcw, CheckCircle2,
   Key, Globe, Sparkles, Server, GitMerge, X, ChevronDown, Radio, Search, Trash2,
   Eye, EyeOff, BarChart3
@@ -203,12 +203,12 @@ export function BentoGrid({
   return (
     <div className="w-full max-w-7xl mx-auto px-1 sm:px-2 lg:h-full flex flex-col lg:justify-center">
       <div className="rounded-3xl p-2.5 sm:p-4 bg-[#e8edf5] dark:bg-[#12151c]/95 border border-black/5 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark flex flex-col lg:flex-1 lg:min-h-0 lg:max-h-[700px] lg:justify-between gap-3 sm:gap-3.5 lg:gap-0 transition-all duration-300">
-        
+
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 lg:gap-4 items-stretch lg:flex-1 lg:min-h-0">
 
           <div className="lg:col-span-5 flex flex-col lg:min-h-0">
             <div className="rounded-3xl p-3 sm:p-3.5 bg-gradient-to-b from-[#ffffff] to-[#e8edf5] dark:from-[#181d28] dark:to-[#121620] border border-black/5 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark flex flex-col justify-start gap-2.5 sm:gap-2.5 relative transition-colors duration-300 lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-none">
-              
+
               <div className="flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-2">
                   <span className="px-2 py-0.5 rounded-lg bg-black/5 dark:bg-white/5 text-[9px] font-mono font-semibold text-[#00d2ff]">
@@ -216,7 +216,7 @@ export function BentoGrid({
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <button 
+                  <button
                     onClick={onRunProbe}
                     disabled={isProbingActive}
                     className="flex items-center gap-1 px-2.5 py-1 rounded-xl text-[10px] font-semibold bg-[#ff6b35]/15 text-[#ff6b35] dark:text-[#ff8c42] hover:bg-[#ff6b35]/25 transition disabled:opacity-50 neu-button"
@@ -225,7 +225,7 @@ export function BentoGrid({
                     <RefreshCw className={`w-2.5 h-2.5 ${isProbingActive ? 'animate-spin' : ''}`} />
                     <span>{isProbingActive ? 'Probing...' : 'Probe'}</span>
                   </button>
-                  <button 
+                  <button
                     onClick={onRestartGateway}
                     disabled={restarting}
                     className="flex items-center gap-1 px-2 py-1 rounded-xl text-[10px] font-semibold bg-slate-200 dark:bg-white/5 text-slate-700 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-white/10 transition disabled:opacity-50 neu-button"
@@ -367,8 +367,8 @@ export function BentoGrid({
                   </div>
                   <div className="grid grid-cols-10 gap-1 p-1 rounded-xl bg-[#dbe2ee] dark:bg-black/40 shadow-neu-light-inset dark:shadow-neu-dark-inset">
                     {[...Array(10)].map((_, i) => (
-                      <div 
-                        key={i} 
+                      <div
+                        key={i}
                         className="h-2 rounded-sm bg-[#ff6b35] shadow-[0_0_8px_rgba(255,107,53,0.6)] transition-all"
                       />
                     ))}
@@ -376,7 +376,7 @@ export function BentoGrid({
                 </div>
 
                 <div className="p-3 rounded-2xl bg-[#dbe2ee]/70 dark:bg-black/40 border border-black/5 dark:border-white/5 shadow-neu-light-inset dark:shadow-neu-dark-inset flex items-center gap-3.5">
-                  
+
                   <div className="relative w-14 h-14 shrink-0 flex items-center justify-center">
                     <svg className="w-14 h-14 -rotate-90 absolute inset-0" viewBox="0 0 36 36">
                       <circle
@@ -389,12 +389,12 @@ export function BentoGrid({
                       />
                     </svg>
 
-                    <svg 
+                    <svg
                       className={`w-14 h-14 absolute inset-0 ${
-                        isProbingActive 
-                          ? 'animate-spin' 
+                        isProbingActive
+                          ? 'animate-spin'
                           : '-rotate-90 transition-all duration-1000 ease-linear'
-                      }`} 
+                      }`}
                       viewBox="0 0 36 36"
                     >
                       <circle
@@ -459,7 +459,7 @@ export function BentoGrid({
                         if (!p.active && !p.models_count) return null;
                         const hasModels = (p.models_count || 0) > 0;
                         return (
-                          <button 
+                          <button
                             key={name}
                             type="button"
                             onClick={onOpenKeysManager}
@@ -742,8 +742,8 @@ export function BentoGrid({
                 ) : (
                   <div className="space-y-2 max-h-[300px] lg:h-[235px] overflow-y-auto pr-1 sm:pr-1.5">
                     {filteredCombos.map(c => (
-                      <div 
-                        key={c.name} 
+                      <div
+                        key={c.name}
                         onClick={() => onOpenComboEditor(c)}
                         className="flex flex-col p-2.5 sm:p-3 rounded-2xl bg-slate-100 dark:bg-white/[0.03] hover:bg-slate-200/60 dark:hover:bg-white/[0.06] border border-black/5 dark:border-white/5 transition cursor-pointer group gap-1.5"
                         title={`Click to edit settings for ${c.name}`}
@@ -919,7 +919,7 @@ export function BentoGrid({
                 </div>
               </div>
 
-              <div 
+              <div
                 ref={logsContainerRef}
                 className="flex-1 min-h-[120px] max-h-[220px] overflow-hidden p-3 rounded-2xl bg-[#0a0c10] font-mono text-[10.5px] space-y-1.5 shadow-neu-dark-inset text-slate-300 flex flex-col justify-end"
               >
