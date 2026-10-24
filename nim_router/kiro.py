@@ -7,7 +7,7 @@ import os
 import sqlite3
 import time
 import uuid
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncGenerator, AsyncIterator, Optional
 
 import httpx
 
@@ -683,7 +683,7 @@ class KiroClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         client: Optional[httpx.AsyncClient] = None,
-    ) -> AsyncIterator[bytes]:
+    ) -> AsyncGenerator[bytes, None]:
         upstream_id = kiro_upstream_model_id(model_id)
         _access_token, profile_arn = await self.auth.ensure_token()
 
