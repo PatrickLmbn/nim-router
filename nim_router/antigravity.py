@@ -7,7 +7,7 @@ import re
 import os
 import time
 import uuid
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncGenerator, AsyncIterator, Optional
 
 import httpx
 
@@ -219,6 +219,44 @@ def _convert_tools(tools: Optional[list[dict]]) -> list[dict]:
     return converted
 
 
+_THOUGHT_SIGNATURES: dict[str, str] = {}
+_THOUGHT_SIGNATURES_MAX = 4096
+
+
+def _remember_thought_signature(call_id: str, signature: str) -> None:
+    if not call_id or not signature:
+        return
+    if len(_THOUGHT_SIGNATURES) >= _THOUGHT_SIGNATURES_MAX:
+        for stale in list(_THOUGHT_SIGNATURES)[: _THOUGHT_SIGNATURES_MAX // 4]:
+            _THOUGHT_SIGNATURES.pop(stale, None)
+    _THOUGHT_SIGNATURES[call_id] = signature
+
+
+def _thought_signature_for(call: dict) -> str:
+    extra = call.get("extra_content")
+    if isinstance(extra, dict):
+        google = extra.get("google")
+        if isinstance(google, dict):
+            signature = google.get("thought_signature")
+            if isinstance(signature, str) and signature:
+                return signature
+        signature = extra.get("thought_signature")
+        if isinstance(signature, str) and signature:
+            return signature
+    for key in ("thoughtSignature", "thought_signature"):
+        signature = call.get(key)
+        if isinstance(signature, str) and signature:
+            return signature
+    signature = _THOUGHT_SIGNATURES.get(str(call.get("id") or ""))
+    if signature:
+        return signature
+    fn = call.get("function") or {}
+    raw_args = fn.get("arguments")
+    if not isinstance(raw_args, str):
+        raw_args = json.dumps(raw_args) if isinstance(raw_args, dict) else ""
+    return _THOUGHT_SIGNATURES.get(f"{fn.get('name') or ''}|{raw_args}", "")
+
+
 def _tool_uses_from_message(msg: dict) -> list[dict]:
     uses: list[dict] = []
     for call in msg.get("tool_calls") or []:
@@ -238,10 +276,10 @@ def _tool_uses_from_message(msg: dict) -> list[dict]:
             "name": fn.get("name", ""),
             "args": parsed if isinstance(parsed, dict) else {},
         }
-        part = {"functionCall": func_call}
-        ts = call.get("thoughtSignature") or call.get("thought_signature")
-        if ts:
-            part["thoughtSignature"] = ts
+        part: dict = {"functionCall": func_call}
+        signature = _thought_signature_for(call)
+        if signature:
+            part["thoughtSignature"] = signature
         uses.append(part)
     return uses
 
@@ -534,7 +572,7 @@ class _ToolCallAccumulator:
         if not call_id:
             return
         if call_id not in self._calls:
-            self._calls[call_id] = {"name": "", "args": {}}
+            self._calls[call_id] = {"name": "", "args": {}, "signature": ""}
             self._order.append(call_id)
         entry = self._calls[call_id]
         if call.get("name"):
@@ -542,19 +580,27 @@ class _ToolCallAccumulator:
         args = call.get("args")
         if isinstance(args, dict) and args:
             entry["args"] = args
+        signature = body.get("thoughtSignature")
+        if isinstance(signature, str) and signature:
+            entry["signature"] = signature
+            _remember_thought_signature(call_id, signature)
 
     def complete(self) -> list[dict]:
         results = []
         for call_id in self._order:
             call = self._calls[call_id]
-            results.append({
+            entry = {
                 "id": call_id,
                 "type": "function",
                 "function": {
                     "name": call["name"],
                     "arguments": json.dumps(call["args"]) if isinstance(call["args"], dict) else "{}",
                 },
-            })
+            }
+            if call.get("signature"):
+                entry["extra_content"] = {"google": {"thought_signature": call["signature"]}}
+                _remember_thought_signature(f"{entry['function']['name']}|{entry['function']['arguments']}", call["signature"])
+            results.append(entry)
         return results
 
 
@@ -754,7 +800,7 @@ class AntigravityClient:
                             content_parts.append(text)
                         fc = part.get("functionCall")
                         if isinstance(fc, dict):
-                            tool_calls.add({"functionCall": fc})
+                            tool_calls.add(part)
                 meta = response.get("usageMetadata")
                 if isinstance(meta, dict):
                     usage = meta
@@ -802,7 +848,7 @@ class AntigravityClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         client: Optional[httpx.AsyncClient] = None,
-    ) -> AsyncIterator[bytes]:
+    ) -> AsyncGenerator[bytes, None]:
         upstream_id = antigravity_upstream_model_id(model_id)
         await self.auth.ensure_token()
 
@@ -858,7 +904,7 @@ class AntigravityClient:
                             yield _sse(base_chunk({"content": text}))
                         fc = part.get("functionCall")
                         if isinstance(fc, dict):
-                            tool_calls.add({"functionCall": fc})
+                            tool_calls.add(part)
                 meta = response.get("usageMetadata")
                 if isinstance(meta, dict):
                     usage = meta
@@ -866,17 +912,18 @@ class AntigravityClient:
             calls = tool_calls.complete()
             if calls:
                 for call in calls:
-                    yield _sse(base_chunk({
-                        "tool_calls": [{
-                            "index": 0,
-                            "id": call["id"],
-                            "type": "function",
-                            "function": {
-                                "name": call["function"]["name"],
-                                "arguments": call["function"]["arguments"],
-                            },
-                        }]
-                    }))
+                    delta = {
+                        "index": 0,
+                        "id": call["id"],
+                        "type": "function",
+                        "function": {
+                            "name": call["function"]["name"],
+                            "arguments": call["function"]["arguments"],
+                        },
+                    }
+                    if call.get("extra_content"):
+                        delta["extra_content"] = call["extra_content"]
+                    yield _sse(base_chunk({"tool_calls": [delta]}))
                 yield _sse(base_chunk({}, finish_reason="tool_calls"))
             else:
                 yield _sse(base_chunk({}, finish_reason="stop"))

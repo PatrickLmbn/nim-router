@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import sys
 import time
 import anyio
@@ -498,13 +499,33 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
         kiro_verified = await discover_kiro_models(
             latencies_dict, kiro_refresh_token, verify=True
         )
+        for m in kiro_discovered:
+            mid = m.get("id")
+            if not mid: continue
+            if mid in latencies_dict: continue
+            latencies_dict[mid] = 999.0
         all_discovered.extend(kiro_verified)
+        for m in kiro_discovered:
+            mid = m.get("id")
+            if not mid: continue
+            if any(existing.get("id") == mid for existing in kiro_verified): continue
+            all_discovered.append(m)
 
     if antigravity_discovered:
         antigravity_verified = await discover_antigravity_models(
             latencies_dict, antigravity_refresh_token, verify=True
         )
+        for m in antigravity_discovered:
+            mid = m.get("id")
+            if not mid: continue
+            if mid in latencies_dict: continue
+            latencies_dict[mid] = 999.0
         all_discovered.extend(antigravity_verified)
+        for m in antigravity_discovered:
+            mid = m.get("id")
+            if not mid: continue
+            if any(existing.get("id") == mid for existing in antigravity_verified): continue
+            all_discovered.append(m)
 
     if not all_discovered:
         all_discovered = load_fallback_models(latencies_dict)
@@ -890,43 +911,86 @@ async def call_kiro_endpoint(
 
     try:
         if request.stream:
+            def stream_failure(exc: Exception) -> HTTPException:
+                if isinstance(exc, HTTPException):
+                    return exc
+                if isinstance(exc, (httpx.ReadTimeout, httpx.RequestError)):
+                    logger.warning(f"Kiro stream read error for {model_id}: {exc}")
+                    return HTTPException(status_code=504, detail=f"Stream connection timed out from Kiro model ({model_id}).")
+                err_msg = str(exc)
+                match = re.search(r"HTTP (\d{3})", err_msg)
+                status = int(match.group(1)) if match else 0
+                if status in (400, 402, 404, 429, 500, 502, 503):
+                    logger.error(f"Kiro stream error for {model_id}: {exc}")
+                    return HTTPException(status_code=status, detail=err_msg)
+                logger.error(f"Kiro stream error for {model_id}: {exc}")
+                return HTTPException(status_code=502, detail=f"Kiro stream failed for {model_id}: {exc}")
+
+            upstream = kiro_client.stream_chat_completion(
+                model_id=model_id,
+                messages=request.messages,
+                tools=request.tools,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens,
+                client=client,
+            )
+
+            prompt_tokens = 0
+            completion_tokens = 0
+            has_visible_content = False
+            collected_chars = 0
+
+            def consume(chunk: bytes) -> None:
+                nonlocal prompt_tokens, completion_tokens, has_visible_content, collected_chars
+                text = chunk.decode("utf-8", errors="ignore")
+                if '"usage"' in text and '"choices": []' in text:
+                    try:
+                        payload = json.loads(text[5:].strip())
+                        usage = payload.get("usage") or {}
+                        prompt_tokens = usage.get("prompt_tokens") or 0
+                        completion_tokens = usage.get("completion_tokens") or 0
+                    except Exception:
+                        pass
+                if '"content"' in text:
+                    has_visible_content = True
+                    collected_chars += len(text)
+
+            primed: list[bytes] = []
+            try:
+                for _ in range(2):
+                    primed.append(await upstream.__anext__())
+            except StopAsyncIteration:
+                pass
+            except HTTPException:
+                await upstream.aclose()
+                raise
+            except Exception as e:
+                await upstream.aclose()
+                raise stream_failure(e) from e
+
+            for chunk in primed:
+                consume(chunk)
+
             async def stream_generator():
                 global _active_streams
                 _active_streams += 1
-                prompt_tokens = 0
-                completion_tokens = 0
-                has_visible_content = False
-                collected_chars = 0
                 try:
-                    async for chunk in kiro_client.stream_chat_completion(
-                        model_id=model_id,
-                        messages=request.messages,
-                        tools=request.tools,
-                        temperature=request.temperature,
-                        max_tokens=request.max_tokens,
-                        client=client,
-                    ):
-                        text = chunk.decode("utf-8", errors="ignore")
-                        if '"usage"' in text and '"choices": []' in text:
-                            try:
-                                payload = json.loads(text[5:].strip())
-                                usage = payload.get("usage") or {}
-                                prompt_tokens = usage.get("prompt_tokens") or 0
-                                completion_tokens = usage.get("completion_tokens") or 0
-                            except Exception:
-                                pass
-                        if '"content"' in text:
-                            has_visible_content = True
-                            collected_chars += len(text)
+                    for chunk in primed:
                         yield chunk
-                except (httpx.ReadTimeout, httpx.RequestError) as e:
-                    logger.warning(f"Kiro stream read error for {model_id}: {e}")
-                    raise HTTPException(status_code=504, detail=f"Stream connection timed out from Kiro model ({model_id}).")
+                    while True:
+                        try:
+                            chunk = await upstream.__anext__()
+                        except StopAsyncIteration:
+                            break
+                        consume(chunk)
+                        yield chunk
+                except HTTPException:
+                    raise
                 except Exception as e:
-                    logger.error(f"Kiro stream error for {model_id}: {e}")
-                    raise HTTPException(status_code=502, detail=f"Kiro stream failed for {model_id}: {e}")
+                    raise stream_failure(e) from e
                 finally:
                     _active_streams = max(0, _active_streams - 1)
+                    await upstream.aclose()
                     if on_usage:
                         try:
                             total = prompt_tokens + completion_tokens
@@ -989,41 +1053,84 @@ async def call_antigravity_endpoint(
 
     try:
         if request.stream:
+            def stream_failure(exc: Exception) -> HTTPException:
+                if isinstance(exc, HTTPException):
+                    return exc
+                if isinstance(exc, (httpx.ReadTimeout, httpx.RequestError)):
+                    logger.warning(f"Antigravity stream read error for {model_id}: {exc}")
+                    return HTTPException(status_code=504, detail=f"Stream connection timed out from Antigravity model ({model_id}).")
+                err_msg = str(exc)
+                match = re.search(r"HTTP (\d{3})", err_msg)
+                status = int(match.group(1)) if match else 0
+                if status in (400, 402, 404, 429, 500, 502, 503):
+                    logger.error(f"Antigravity stream error for {model_id}: {exc}")
+                    return HTTPException(status_code=status, detail=err_msg)
+                logger.error(f"Antigravity stream error for {model_id}: {exc}")
+                return HTTPException(status_code=502, detail=f"Antigravity stream failed for {model_id}: {exc}")
+
+            upstream = antigravity_client.stream_chat_completion(
+                model_id=model_id,
+                messages=request.messages,
+                tools=request.tools,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens,
+                client=client,
+            )
+
+            prompt_tokens = 0
+            completion_tokens = 0
+            has_visible_content = False
+
+            def consume(chunk: bytes) -> None:
+                nonlocal prompt_tokens, completion_tokens, has_visible_content
+                text = chunk.decode("utf-8", errors="ignore")
+                if '"usage"' in text and '"choices": []' in text:
+                    try:
+                        payload = json.loads(text[5:].strip())
+                        usage = payload.get("usage") or {}
+                        prompt_tokens = usage.get("prompt_tokens") or 0
+                        completion_tokens = usage.get("completion_tokens") or 0
+                    except Exception:
+                        pass
+                if '"content"' in text:
+                    has_visible_content = True
+
+            primed: list[bytes] = []
+            try:
+                for _ in range(2):
+                    primed.append(await upstream.__anext__())
+            except StopAsyncIteration:
+                pass
+            except HTTPException:
+                await upstream.aclose()
+                raise
+            except Exception as e:
+                await upstream.aclose()
+                raise stream_failure(e) from e
+
+            for chunk in primed:
+                consume(chunk)
+
             async def stream_generator():
                 global _active_streams
                 _active_streams += 1
-                prompt_tokens = 0
-                completion_tokens = 0
-                has_visible_content = False
                 try:
-                    async for chunk in antigravity_client.stream_chat_completion(
-                        model_id=model_id,
-                        messages=request.messages,
-                        tools=request.tools,
-                        temperature=request.temperature,
-                        max_tokens=request.max_tokens,
-                        client=client,
-                    ):
-                        text = chunk.decode("utf-8", errors="ignore")
-                        if '"usage"' in text and '"choices": []' in text:
-                            try:
-                                payload = json.loads(text[5:].strip())
-                                usage = payload.get("usage") or {}
-                                prompt_tokens = usage.get("prompt_tokens") or 0
-                                completion_tokens = usage.get("completion_tokens") or 0
-                            except Exception:
-                                pass
-                        if '"content"' in text:
-                            has_visible_content = True
+                    for chunk in primed:
                         yield chunk
-                except (httpx.ReadTimeout, httpx.RequestError) as e:
-                    logger.warning(f"Antigravity stream read error for {model_id}: {e}")
-                    raise HTTPException(status_code=504, detail=f"Stream connection timed out from Antigravity model ({model_id}).")
+                    while True:
+                        try:
+                            chunk = await upstream.__anext__()
+                        except StopAsyncIteration:
+                            break
+                        consume(chunk)
+                        yield chunk
+                except HTTPException:
+                    raise
                 except Exception as e:
-                    logger.error(f"Antigravity stream error for {model_id}: {e}")
-                    raise HTTPException(status_code=502, detail=f"Antigravity stream failed for {model_id}: {e}")
+                    raise stream_failure(e) from e
                 finally:
                     _active_streams = max(0, _active_streams - 1)
+                    await upstream.aclose()
                     if on_usage:
                         try:
                             total = prompt_tokens + completion_tokens
