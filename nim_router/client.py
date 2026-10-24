@@ -28,6 +28,13 @@ from nim_router.antigravity import (
     antigravity_upstream_model_id,
 )
 from nim_router.antigravity import resolve_refresh_token as resolve_antigravity_refresh_token
+from nim_router.deepseek_web import (
+    DEEPSEEK_WEB_PREFIX,
+    deepseek_web_upstream_model_id,
+    list_models as list_deepseek_web_models,
+    stream_chat_completion as stream_deepseek_web,
+    create_chat_completion as create_deepseek_web_completion,
+)
 
 import email.utils
 from typing import Callable, Optional
@@ -526,6 +533,19 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
             if not mid: continue
             if any(existing.get("id") == mid for existing in antigravity_verified): continue
             all_discovered.append(m)
+
+    deepseek_web_discovered: list[dict] = []
+    try:
+        deepseek_web_discovered = await list_deepseek_web_models()
+    except Exception as e:
+        logger.info(f"DeepSeek Web model discovery skipped: {e}")
+
+    for m in deepseek_web_discovered:
+        mid = m.get("id")
+        if not mid or mid in latencies_dict:
+            continue
+        latencies_dict[mid] = 2.0
+        all_discovered.append(m)
 
     if not all_discovered:
         all_discovered = load_fallback_models(latencies_dict)
@@ -1175,3 +1195,142 @@ async def call_antigravity_endpoint(
     except Exception as e:
         logger.error(f"Antigravity request failed for {model_id}: {e}")
         raise HTTPException(status_code=502, detail=f"Antigravity request failed: {e}")
+
+
+async def call_deepseek_web_endpoint(
+    model_id: str,
+    request: ChatCompletionRequest,
+    on_usage: Optional[Callable[[int, int, int, bool, bool], None]] = None
+) -> Response:
+    from nim_router.deepseek_web import resolve_credentials as resolve_ds_credentials
+    credentials = resolve_ds_credentials()
+    if not credentials["token"]:
+        raise HTTPException(
+            status_code=503,
+            detail="DeepSeek Web is not configured. Set DEEPSEEK_WEB_TOKEN or sign in to chat.deepseek.com in a local browser.",
+        )
+
+    client = get_shared_client()
+    upstream_id = deepseek_web_upstream_model_id(model_id)
+    thinking_enabled = upstream_id == "reasoner"
+
+    try:
+        if request.stream:
+            def stream_failure(exc: Exception) -> HTTPException:
+                if isinstance(exc, HTTPException):
+                    return exc
+                if isinstance(exc, (httpx.ReadTimeout, httpx.RequestError)):
+                    logger.warning(f"DeepSeek Web stream read error for {model_id}: {exc}")
+                    return HTTPException(status_code=504, detail=f"Stream connection timed out from DeepSeek Web ({model_id}).")
+                err_msg = str(exc)
+                match = re.search(r"HTTP (\d{3})", err_msg)
+                status = int(match.group(1)) if match else 0
+                if status in (400, 401, 402, 403, 404, 429, 500, 502, 503):
+                    logger.error(f"DeepSeek Web stream error for {model_id}: {exc}")
+                    return HTTPException(status_code=status, detail=err_msg)
+                logger.error(f"DeepSeek Web stream error for {model_id}: {exc}")
+                return HTTPException(status_code=502, detail=f"DeepSeek Web stream failed for {model_id}: {exc}")
+
+            upstream = stream_deepseek_web(
+                upstream_id,
+                [m if isinstance(m, dict) else m.model_dump() for m in request.messages],
+                client,
+                thinking_enabled=thinking_enabled,
+            )
+
+            prompt_tokens = 0
+            completion_tokens = 0
+            has_visible_content = False
+
+            def consume(chunk: bytes) -> None:
+                nonlocal prompt_tokens, completion_tokens, has_visible_content
+                text = chunk.decode("utf-8", errors="ignore")
+                if '"usage"' in text:
+                    try:
+                        payload = json.loads(text[5:].strip())
+                        usage = payload.get("usage") or {}
+                        prompt_tokens = usage.get("prompt_tokens") or 0
+                        completion_tokens = usage.get("completion_tokens") or 0
+                    except Exception:
+                        pass
+                if '"content"' in text:
+                    has_visible_content = True
+
+            primed: list[bytes] = []
+            try:
+                for _ in range(2):
+                    primed.append(await upstream.__anext__())
+            except StopAsyncIteration:
+                pass
+            except HTTPException:
+                await upstream.aclose()
+                raise
+            except Exception as e:
+                await upstream.aclose()
+                raise stream_failure(e) from e
+
+            for chunk in primed:
+                consume(chunk)
+
+            async def stream_generator():
+                global _active_streams
+                _active_streams += 1
+                try:
+                    for chunk in primed:
+                        yield chunk
+                    while True:
+                        try:
+                            chunk = await upstream.__anext__()
+                        except StopAsyncIteration:
+                            break
+                        consume(chunk)
+                        yield chunk
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    raise stream_failure(e) from e
+                finally:
+                    _active_streams = max(0, _active_streams - 1)
+                    await upstream.aclose()
+                    if on_usage:
+                        try:
+                            total = prompt_tokens + completion_tokens
+                            on_usage(prompt_tokens, completion_tokens, total, True, not has_visible_content)
+                        except Exception:
+                            pass
+
+            return StreamingResponse(
+                stream_generator(),
+                status_code=200,
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no"
+                }
+            )
+
+        result = await create_deepseek_web_completion(
+            upstream_id,
+            [m if isinstance(m, dict) else m.model_dump() for m in request.messages],
+            client,
+            thinking_enabled=thinking_enabled,
+        )
+        usage = result.get("usage") or {}
+        if on_usage:
+            try:
+                on_usage(
+                    usage.get("prompt_tokens", 0),
+                    usage.get("completion_tokens", 0),
+                    usage.get("total_tokens", 0),
+                    True,
+                    False,
+                )
+            except Exception:
+                pass
+        return Response(content=json.dumps(result), media_type="application/json", status_code=200)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"DeepSeek Web request failed for {model_id}: {e}")
+        raise HTTPException(status_code=502, detail=f"DeepSeek Web request failed: {e}")

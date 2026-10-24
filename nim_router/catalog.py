@@ -89,7 +89,7 @@ def get_provider_name(m_obj: "dict | str", provider_cache: "dict | None" = None)
     else:
         mid = str(m_obj).lower()
 
-    for prefix in ("[nvidia] ", "[openrouter] ", "[opencode] ", "[groq] ", "[cerebras] ", "[bai] ", "[kiro] ", "[antigravity] ", "[category] "):
+    for prefix in ("[nvidia] ", "[openrouter] ", "[opencode] ", "[groq] ", "[cerebras] ", "[bai] ", "[kiro] ", "[antigravity] ", "[deepseek web] ", "[category] "):
         if mid.startswith(prefix):
             mid = mid[len(prefix):].strip()
 
@@ -100,6 +100,8 @@ def get_provider_name(m_obj: "dict | str", provider_cache: "dict | None" = None)
         return "Kiro"
     if mid.startswith("antigravity/") or mid in ("antigravity", "antigravity-auto") or "[antigravity]" in mid:
         return "Antigravity"
+    if mid.startswith("deepseek-web/") or mid in ("deepseek-web", "deepseek-web-auto") or "[deepseek web]" in mid:
+        return "DeepSeek Web"
     if mid in ("glm-5.3-flash", "qwen3.8-flash", "hy3") or mid.startswith("bai/") or "b.ai" in mid:
         return "BAI"
     elif mid.endswith(":free") or "openrouter/" in mid or mid.startswith("openrouter"):

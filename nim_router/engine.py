@@ -39,11 +39,12 @@ from nim_router.classifier import (
     is_vision_request,
     estimate_token_count,
 )
-from nim_router.client import probe_model, discover_models, call_provider_endpoint, call_kiro_endpoint, get_kiro_client, call_antigravity_endpoint, get_antigravity_client
+from nim_router.client import probe_model, discover_models, call_provider_endpoint, call_kiro_endpoint, get_kiro_client, call_antigravity_endpoint, get_antigravity_client, call_deepseek_web_endpoint
 from nim_router.catalog import is_banned_model, load_fallback_models, get_provider_name as _catalog_get_provider_name, save_working_models
 from nim_router.tracker import get_usage_tracker
 from nim_router.kiro import KIRO_PREFIX, KIRO_API_BASE, kiro_upstream_model_id
 from nim_router.antigravity import ANTIGRAVITY_PREFIX, ANTIGRAVITY_API_BASE, antigravity_upstream_model_id
+from nim_router.deepseek_web import DEEPSEEK_WEB_PREFIX, DEEPSEEK_WEB_BASE
 
 class ModelRouter:
     def __init__(self, api_key: str | list[str], openrouter_keys: str | list[str] = "", opencode_key: str = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = "", bai_key: str = "", kiro_refresh_token: str = "", antigravity_refresh_token: str = "", strategy: str = ""):
@@ -142,6 +143,9 @@ class ModelRouter:
         elif provider == "Antigravity":
             keys = ["antigravity"]
             base_url = ANTIGRAVITY_API_BASE
+        elif provider == "DeepSeek Web":
+            keys = ["deepseek-web"]
+            base_url = DEEPSEEK_WEB_BASE
         elif provider == "Groq":
             keys = self.groq_keys if self.groq_keys else [""]
             base_url = GROQ_API_BASE
@@ -1156,6 +1160,12 @@ class ModelRouter:
                             )
                         elif provider == "Antigravity":
                             response = await call_antigravity_endpoint(
+                                selected_id,
+                                request,
+                                on_usage=on_request_usage
+                            )
+                        elif provider == "DeepSeek Web":
+                            response = await call_deepseek_web_endpoint(
                                 selected_id,
                                 request,
                                 on_usage=on_request_usage
