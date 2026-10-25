@@ -542,9 +542,12 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
 
     for m in deepseek_web_discovered:
         mid = m.get("id")
-        if not mid or mid in latencies_dict:
+        if not mid:
             continue
-        latencies_dict[mid] = 2.0
+        if mid not in latencies_dict:
+            latencies_dict[mid] = 2.0
+        if any(existing.get("id") == mid for existing in all_discovered):
+            continue
         all_discovered.append(m)
 
     if not all_discovered:
