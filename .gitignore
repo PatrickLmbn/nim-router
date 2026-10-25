@@ -11,6 +11,7 @@ config/antigravity_credentials.json
 config/settings.yaml
 !config/settings.yaml.example
 config/runtime_state.json
+config/provider_parking.json
 config/usage.db
 *.db
 *.db-wal

@@ -77,33 +77,41 @@ class _WasmSolver:
 
     def __init__(self, path: Path) -> None:
         import wasmtime
+        self._wasmtime = wasmtime
         self._engine = wasmtime.Engine()
-        self._store = wasmtime.Store(self._engine)
-        module = wasmtime.Module.from_file(self._engine, str(path))
-        instance = wasmtime.Instance(self._store, module, [])
-        exports = instance.exports(self._store)
-        self._memory = exports["memory"]
-        self._solve = exports["wasm_solve"]
-        self._stack = exports["__wbindgen_add_to_stack_pointer"]
-        self._alloc = exports["__wbindgen_export_0"]
+        self._module = wasmtime.Module.from_file(self._engine, str(path))
 
-    def _write(self, data: bytes) -> int:
-        ptr = int(self._alloc(self._store, len(data), 1)) & 0xFFFFFFFF
-        self._memory.write(self._store, data, ptr)
-        return ptr
+    def _solve_once(self, challenge: str, prefix: str, difficulty: int) -> int:
+        wasmtime = self._wasmtime
+        store = wasmtime.Store(self._engine)
+        instance = wasmtime.Instance(store, self._module, [])
+        exports = instance.exports(store)
+        memory = exports["memory"]
+        solve = exports["wasm_solve"]
+        stack = exports["__wbindgen_add_to_stack_pointer"]
+        allocate = exports["__wbindgen_export_0"]
 
-    def solve(self, challenge: str, prefix: str, difficulty: int) -> int:
-        store = self._store
-        challenge_ptr = self._write(challenge.encode())
-        prefix_ptr = self._write(prefix.encode())
-        ret = int(self._stack(store, -16)) & 0xFFFFFFFF
-        self._solve(store, ret, challenge_ptr, len(challenge), prefix_ptr, len(prefix), float(difficulty))
-        status = struct.unpack("<i", bytes(self._memory.read(store, ret, ret + 4)))[0]
-        answer = struct.unpack("<d", bytes(self._memory.read(store, ret + 8, ret + 16)))[0]
-        self._stack(store, 16)
+        def write(data: bytes) -> int:
+            ptr = int(allocate(store, len(data), 1)) & 0xFFFFFFFF
+            memory.write(store, data, ptr)
+            return ptr
+
+        challenge_ptr = write(challenge.encode())
+        prefix_ptr = write(prefix.encode())
+        ret = int(stack(store, -16)) & 0xFFFFFFFF
+        solve(store, ret, challenge_ptr, len(challenge), prefix_ptr, len(prefix), float(difficulty))
+        status = struct.unpack("<i", bytes(memory.read(store, ret, ret + 4)))[0]
+        answer = struct.unpack("<d", bytes(memory.read(store, ret + 8, ret + 16)))[0]
+        stack(store, 16)
         if status != 1:
             raise RuntimeError("DeepSeek PoW: wasm solver found no solution in range")
         return int(answer)
+
+    def solve(self, challenge: str, prefix: str, difficulty: int) -> int:
+        try:
+            return self._solve_once(challenge, prefix, difficulty)
+        except Exception:
+            return self._solve_once(challenge, prefix, difficulty)
 
 
 _solver: Optional[_WasmSolver] = None

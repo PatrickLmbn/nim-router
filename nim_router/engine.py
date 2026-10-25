@@ -24,6 +24,7 @@ from nim_router.config import (
     BAI_API_BASE,
     get_primary_model,
     get_routing_strategy,
+    get_kiro_enabled,
 )
 from nim_router.combos import get_combo, load_combos
 from nim_router.logger import logger
@@ -41,6 +42,7 @@ from nim_router.classifier import (
 )
 from nim_router.client import probe_model, discover_models, call_provider_endpoint, call_kiro_endpoint, get_kiro_client, call_antigravity_endpoint, get_antigravity_client, call_deepseek_web_endpoint
 from nim_router.catalog import is_banned_model, load_fallback_models, get_provider_name as _catalog_get_provider_name, save_working_models
+from nim_router.parking import is_parked, note_success
 from nim_router.tracker import get_usage_tracker
 from nim_router.kiro import KIRO_PREFIX, KIRO_API_BASE, kiro_upstream_model_id
 from nim_router.antigravity import ANTIGRAVITY_PREFIX, ANTIGRAVITY_API_BASE, antigravity_upstream_model_id
@@ -92,6 +94,7 @@ class ModelRouter:
         self._quality_n: dict[str, int] = {}
         self._rate_limited_until: dict[str, float] = {}
         self._key_cooldowns: dict[tuple[str, str], float] = {}
+        self._provider_cooldowns: dict[str, float] = {}
         self._consecutive_failures: dict[str, int] = {}
         self._request_history: dict[str, list[float]] = {}
         self._in_flight: dict[str, int] = {}
@@ -293,17 +296,48 @@ class ModelRouter:
         return load_fallback_models(self._latencies)
 
     def _is_model_healthy(self, model_id: str) -> bool:
+        if is_parked(f"model:{model_id}"):
+            return False
         if self._is_banned_model(model_id):
             return False
-        if model_id not in self._health:
+        if not get_kiro_enabled() and self._is_kiro_model(model_id):
+            return False
+        provider = self._get_provider_name(model_id)
+        if not self._is_provider_available(provider):
+            return False
+        record = self._health.get(model_id)
+        if not record:
             return True
-        record = self._health[model_id]
+        if record.get("healthy", True):
+            return True
         now = time.time()
         if now - record.get("last_check", 0) > get_health_refresh_interval():
-            record["failures"] = 0
             record["last_check"] = now
-            record["healthy"] = True
-        return record.get("healthy", True)
+            logger.info(f"Model {model_id} entering half-open trial after unhealthy cooldown.")
+            return True
+        return False
+
+    def _is_provider_available(self, provider: str) -> bool:
+        if is_parked(f"provider:{provider}"):
+            return False
+        until = self._provider_cooldowns.get(provider, 0.0)
+        if not until:
+            return True
+        if until > time.time():
+            return False
+        self._provider_cooldowns.pop(provider, None)
+        return True
+
+    def _mark_provider_auth_failure(self, provider: str, cooldown: float = 300.0):
+        self._provider_cooldowns[provider] = time.time() + max(5.0, cooldown)
+        logger.warning(
+            f"Provider {provider} parked for {cooldown:.0f}s after an authentication failure; "
+            f"skipping its models until the credential is refreshed."
+        )
+
+    def clear_provider_cooldown(self, provider: str):
+        self._provider_cooldowns.pop(provider, None)
+        note_success(f"provider:{provider}")
 
     def _record_key_failure(self, provider: str, key: str, model_id: str, status_code: int, retry_after: float | None = None):
         now = time.time()
@@ -364,8 +398,10 @@ class ModelRouter:
             logger.warning(f"Model {model_id} temporarily marked unhealthy after {self._health[model_id]['failures']} failures")
 
     def _record_success(self, model_id: str, elapsed: float, token_count: int = 0):
+        note_success(f"model:{model_id}")
         if model_id in self._health:
             self._health[model_id]["failures"] = 0
+            self._health[model_id]["last_check"] = time.time()
             self._health[model_id]["healthy"] = True
         self._rate_limited_until.pop(model_id, None)
 
@@ -483,7 +519,13 @@ class ModelRouter:
         now = time.time()
         max_rpm = get_model_max_rpm()
         max_concurrency = get_model_max_concurrency()
-        all_ids = [m.get("id") for m in self.models if m.get("id") and not self._is_banned_model(m.get("id"))]
+        all_ids = [
+            m.get("id")
+            for m in self.models
+            if m.get("id")
+            and not self._is_banned_model(m.get("id"))
+            and (get_kiro_enabled() or not self._is_kiro_model(m.get("id")))
+        ]
         healthy = [mid for mid in all_ids if self._is_model_healthy(mid)]
 
         if not healthy and all_ids:
@@ -618,12 +660,21 @@ class ModelRouter:
             logger.info("Auto background health prober started: probing model catalog & endpoints...")
             new_models = await self._discover_models()
             if new_models:
+                now = time.time()
+                probed_providers = set()
+                for m in new_models:
+                    mid = m.get("id")
+                    if not mid:
+                        continue
+                    provider = m.get("provider") or self._get_provider_name(mid)
+                    self._model_providers[mid] = provider
+                    self._health[mid] = {"failures": 0, "last_check": now, "healthy": True}
+                    self._rate_limited_until.pop(mid, None)
+                    probed_providers.add(provider)
+                for provider in probed_providers:
+                    self.clear_provider_cooldown(provider)
                 async with self._write_lock:
                     self.models = new_models
-                    for m in self.models:
-                        mid = m.get("id")
-                        if mid:
-                            self._model_providers[mid] = m.get("provider") or self._get_provider_name(mid)
                     self._healthy_pool = self._build_healthy_pool()
                     self._pool_updated = time.time()
                     logger.success(f"Refreshed pool: {len(self._healthy_pool)} active models available.")
@@ -1097,6 +1148,12 @@ class ModelRouter:
             if provider in context_rejected_providers:
                 logger.info(f"Skipping {provider} :: {selected_id}: provider already rejected this payload size (413).")
                 continue
+            if not self._is_provider_available(provider):
+                logger.info(f"Skipping {provider} :: {selected_id}: provider is cooling down after an authentication failure.")
+                continue
+            if not self._is_model_healthy(selected_id):
+                logger.info(f"Skipping {selected_id}: model is marked unhealthy.")
+                continue
             current_latency = self._latencies.get(selected_id, 0.0)
             current_rpm = self._get_recent_rpm(selected_id, time.time())
             in_flight_num = self._in_flight.get(selected_id, 0)
@@ -1182,6 +1239,7 @@ class ModelRouter:
                         if not usage_recorded and not request.stream:
                             self._record_success(selected_id, elapsed, token_count=recorded_tokens[0])
                         self._record_key_success(provider, current_key, selected_id)
+                        self.clear_provider_cooldown(provider)
                         logger.success(f"Request completed successfully via {provider} :: {selected_id} ({elapsed:.3f}s)")
                         if isinstance(response, StreamingResponse):
                             defer_release[0] = True
@@ -1220,10 +1278,15 @@ class ModelRouter:
                         raise
             except HTTPException as e:
                 last_error = e
-                self._record_failure(selected_id, status_code=e.status_code)
+                if e.status_code in (401, 403) and provider == "DeepSeek Web":
+                    self._mark_provider_auth_failure(provider)
+                else:
+                    self._record_failure(selected_id, status_code=e.status_code)
                 if e.status_code == 413:
                     context_rejected_providers.add(provider)
                     logger.warning(f"Model {provider} :: {selected_id} returned 413 (payload too large), skipping remaining {provider} candidates...")
+                elif e.status_code in (401, 403):
+                    logger.warning(f"Model {provider} :: {selected_id} returned status {e.status_code} (Authentication Failed), failing over...")
                 elif e.status_code in (429, 402):
                     logger.warning(f"Model {provider} :: {selected_id} returned status {e.status_code} (Rate Limited/Billing), backing off and failing over...")
                 elif e.status_code == 404:

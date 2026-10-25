@@ -31,6 +31,7 @@ def _load_settings() -> dict:
         "fallback_models": [],
         "first_token_timeout": 20.0,
         "stream_idle_timeout": 120.0,
+        "kiro_enabled": False,
     }
     example = _SETTINGS_FILE.replace(".yaml", ".yaml.example")
     if not os.path.exists(_SETTINGS_FILE) and os.path.exists(example):
@@ -124,6 +125,9 @@ def get_bai_key() -> str:
 
 def get_kiro_refresh_token() -> str:
     return os.getenv("KIRO_REFRESH_TOKEN", "").strip()
+
+def get_kiro_enabled() -> bool:
+    return bool(_load_settings().get("kiro_enabled", False))
 
 def get_antigravity_refresh_token() -> str:
     return os.getenv("ANTIGRAVITY_REFRESH_TOKEN", "").strip()

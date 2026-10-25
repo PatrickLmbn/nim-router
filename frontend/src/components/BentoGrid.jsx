@@ -456,21 +456,32 @@ export function BentoGrid({
 
                     <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                       {Object.entries(stats?.providers || {}).map(([name, p]) => {
-                        if (!p.active && !p.models_count) return null;
+                        const isDisabled = Boolean(p.disabled);
+                        if (!p.active && !p.models_count && !isDisabled) return null;
                         const hasModels = (p.models_count || 0) > 0;
+                        const disabledReason = p.disabled_reason || 'Kiro is temporarily disabled and will be continued.';
                         return (
                           <button
                             key={name}
                             type="button"
                             onClick={onOpenKeysManager}
-                            className="px-2 py-0.5 rounded-lg bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5 hover:border-[#ff6b35]/40 flex items-center gap-1.5 text-[9.5px] transition cursor-pointer"
-                            title={`${name}: ${p.models_count || 0} models probed & responsive. Click to manage API keys.`}
+                            aria-disabled={isDisabled}
+                            className={`px-2 py-0.5 rounded-lg bg-black/5 dark:bg-white/5 border flex items-center gap-1.5 text-[9.5px] transition ${isDisabled
+                              ? 'opacity-60 border-amber-500/30 cursor-help'
+                              : 'border-black/5 dark:border-white/5 hover:border-[#ff6b35]/40 cursor-pointer'
+                              }`}
+                            title={isDisabled
+                              ? disabledReason
+                              : `${name}: ${p.models_count || 0} working models in the healthy pool. Click to manage API keys.`}
                           >
-                            <span className={`w-1.5 h-1.5 rounded-full ${hasModels ? 'bg-[#00f5a0] shadow-[0_0_4px_#00f5a0]' : 'bg-slate-400'}`} />
+                            <span className={`w-1.5 h-1.5 rounded-full ${isDisabled ? 'bg-amber-400' : hasModels ? 'bg-[#00f5a0] shadow-[0_0_4px_#00f5a0]' : 'bg-slate-400'}`} />
                             <ProviderIcon provider={name} className="h-3 w-auto max-w-[42px] max-h-3 shrink-0" />
                             <span className="text-slate-600 dark:text-slate-300 font-medium">{name}</span>
-                            <span className="font-mono font-bold text-slate-800 dark:text-slate-200 text-[8px] px-1 bg-black/10 dark:bg-white/10 rounded">
-                              {p.models_count || 0}
+                            <span className={`font-mono font-bold text-[8px] px-1 rounded ${isDisabled
+                              ? 'text-amber-600 dark:text-amber-400 bg-amber-500/10'
+                              : 'text-slate-800 dark:text-slate-200 bg-black/10 dark:bg-white/10'
+                              }`}>
+                              {isDisabled ? 'Paused' : (p.models_count || 0)}
                             </span>
                           </button>
                         );
@@ -741,7 +752,10 @@ export function BentoGrid({
                   </div>
                 ) : (
                   <div className="space-y-2 max-h-[300px] lg:h-[235px] overflow-y-auto pr-1 sm:pr-1.5">
-                    {filteredCombos.map(c => (
+                    {filteredCombos.map(c => {
+                      const workingModels = c.models.filter(m => !(c.unavailable_models || []).includes(m));
+                      const hiddenCount = c.models.length - workingModels.length;
+                      return (
                       <div
                         key={c.name}
                         onClick={() => onOpenComboEditor(c)}
@@ -763,14 +777,6 @@ export function BentoGrid({
                             </code>
 
                             <div className="flex items-center gap-1 shrink-0">
-                              {c.has_unavailable && (
-                                <span
-                                  className="inline-flex items-center justify-center w-4 h-4 rounded bg-rose-500/20 border border-rose-500/50 text-rose-500 dark:text-rose-400 font-black text-[11px] font-mono shadow-[0_0_8px_rgba(244,63,94,0.4)] animate-pulse cursor-help shrink-0"
-                                  title={`⚠️ Unavailable model(s) after probing (${c.unavailable_models?.length}): ${c.unavailable_models?.join(', ')}`}
-                                >
-                                  !
-                                </span>
-                              )}
                               {c.has_high_latency && (
                                 <span
                                   className="inline-flex items-center justify-center w-4 h-4 rounded bg-amber-500/20 border border-amber-500/50 text-amber-500 dark:text-amber-400 font-black text-[11px] font-mono shadow-[0_0_8px_rgba(245,158,11,0.35)] cursor-help shrink-0"
@@ -782,19 +788,16 @@ export function BentoGrid({
                             </div>
 
                             <div className="hidden sm:flex items-center gap-1 overflow-hidden flex-1">
-                              {c.models.slice(0, 3).map((m, i) => {
-                                const isUnavail = c.unavailable_models?.includes(m);
+                              {workingModels.slice(0, 3).map((m, i) => {
                                 const isHighLat = c.high_latency_models?.some(h => h.id === m);
                                 return (
                                   <span
                                     key={m}
                                     className={`inline-flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded truncate max-w-[130px] ${
-                                      isUnavail
-                                        ? 'bg-rose-500/15 border border-rose-500/30 text-rose-400 font-semibold'
-                                        : isHighLat
+                                      isHighLat
                                         ? 'bg-amber-500/15 border border-amber-500/30 text-amber-400 font-semibold'
                                         : i === 0 && c.strategy === 'fallback'
-                                        ? 'bg-[#ff6b35]/15 text-[#ff6b35]'
+                                        ? 'bg-[#ff6b35]/15 border border-[#ff6b35]/30 text-[#ff6b35]'
                                         : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-slate-400'
                                     }`}
                                     title={m}
@@ -804,9 +807,20 @@ export function BentoGrid({
                                   </span>
                                 );
                               })}
-                              {c.models.length > 3 && (
+                              {workingModels.length > 3 && (
                                 <span className="text-[9px] text-slate-400 shrink-0 font-mono">
-                                  +{c.models.length - 3} more
+                                  +{workingModels.length - 3} more
+                                </span>
+                              )}
+                              {workingModels.length === 0 && (
+                                <span className="text-[9px] text-slate-400 italic">No working models</span>
+                              )}
+                              {hiddenCount > 0 && (
+                                <span
+                                  className="text-[9px] text-slate-400 shrink-0 font-mono"
+                                  title="Hidden until a probe confirms they are working again"
+                                >
+                                  +{hiddenCount} hidden
                                 </span>
                               )}
                             </div>
@@ -814,7 +828,7 @@ export function BentoGrid({
 
                           <div className="flex items-center gap-1.5 shrink-0">
                             <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 font-mono">
-                              {c.models.length} <span className="hidden sm:inline">models</span>
+                              {workingModels.length} <span className="hidden sm:inline">working</span>
                             </span>
                             <button
                               type="button"
@@ -855,21 +869,18 @@ export function BentoGrid({
                           </div>
                         </div>
 
-                        {c.models && c.models.length > 0 && (
+                        {workingModels.length > 0 && (
                           <div className="flex sm:hidden items-center gap-1 overflow-x-auto scrollbar-none w-full pt-1 border-t border-black/5 dark:border-white/5">
-                            {c.models.map((m, idx) => {
-                              const isUnavail = c.unavailable_models?.includes(m);
+                            {workingModels.map((m, idx) => {
                               const isHighLat = c.high_latency_models?.some(h => h.id === m);
                               return (
                                 <span
                                   key={m}
                                   className={`inline-flex items-center gap-1 text-[8.5px] font-mono px-1.5 py-0.5 rounded shrink-0 ${
-                                    isUnavail
-                                      ? 'bg-rose-500/15 border border-rose-500/30 text-rose-400 font-semibold'
-                                      : isHighLat
+                                    isHighLat
                                       ? 'bg-amber-500/15 border border-amber-500/30 text-amber-400 font-semibold'
                                       : idx === 0 && c.strategy === 'fallback'
-                                      ? 'bg-[#ff6b35]/15 text-[#ff6b35]'
+                                      ? 'bg-[#ff6b35]/15 border border-[#ff6b35]/30 text-[#ff6b35]'
                                       : 'bg-black/5 dark:bg-white/10 text-slate-600 dark:text-slate-400'
                                   }`}
                                   title={m}
@@ -882,7 +893,8 @@ export function BentoGrid({
                           </div>
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

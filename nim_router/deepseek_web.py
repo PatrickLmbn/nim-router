@@ -183,12 +183,120 @@ def _client_headers(token: str, accept: str = "application/json") -> dict:
     }
 
 
-def _unwrap_biz(payload: dict) -> dict:
+class DeepSeekWebError(RuntimeError):
+
+    def __init__(self, message: str, status_code: int = 502, code: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+
+
+class DeepSeekAuthError(DeepSeekWebError):
+
+    def __init__(self, message: str, code: Optional[int] = None) -> None:
+        super().__init__(message, status_code=401, code=code)
+
+
+class DeepSeekUpstreamError(DeepSeekWebError):
+
+    def __init__(self, message: str, status_code: int = 502, code: Optional[int] = None) -> None:
+        super().__init__(message, status_code=status_code, code=code)
+
+
+_AUTH_CODES = {40002, 40003}
+
+
+def _as_int(value: Any) -> Optional[int]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _envelope_code(payload: Any) -> Optional[int]:
+    if not isinstance(payload, dict):
+        return None
+    return _as_int(payload.get("code"))
+
+
+def _checked_biz(payload: Any, context: str, require_biz: bool = False) -> dict:
+    if not isinstance(payload, dict):
+        raise DeepSeekUpstreamError(f"DeepSeek Web: {context} returned a non-object response")
+
+    code = _as_int(payload.get("code"))
+    message = str(payload.get("msg") or "").strip()
+    if code is not None and code != 0:
+        detail = message or "unknown upstream error"
+        if code in _AUTH_CODES:
+            raise DeepSeekAuthError(
+                f"DeepSeek Web: {context} rejected the token (code={code}): {detail}", code=code
+            )
+        raise DeepSeekUpstreamError(
+            f"DeepSeek Web: {context} failed (code={code}): {detail}", code=code
+        )
+
     data = payload.get("data")
     if not isinstance(data, dict):
+        if require_biz:
+            raise DeepSeekUpstreamError(
+                f"DeepSeek Web: {context} returned no data payload (code={code if code is not None else 'none'})"
+            )
         return {}
-    biz = data.get("biz_data")
-    return biz if isinstance(biz, dict) else {}
+
+    biz_code = _as_int(data.get("biz_code"))
+    biz_message = str(data.get("biz_msg") or "").strip()
+    if biz_code is not None and biz_code != 0:
+        detail = biz_message or "unknown upstream error"
+        if biz_code in _AUTH_CODES:
+            raise DeepSeekAuthError(
+                f"DeepSeek Web: {context} rejected the token (biz_code={biz_code}): {detail}",
+                code=biz_code,
+            )
+        raise DeepSeekUpstreamError(
+            f"DeepSeek Web: {context} failed (biz_code={biz_code}): {detail}", code=biz_code
+        )
+
+    biz_data = data.get("biz_data")
+    if not isinstance(biz_data, dict):
+        if require_biz:
+            raise DeepSeekUpstreamError(f"DeepSeek Web: {context} returned no biz_data payload")
+        return {}
+    return biz_data
+
+
+def _error_from_response(response: httpx.Response, body: bytes, context: str) -> DeepSeekWebError:
+    text = body.decode("utf-8", "replace")
+    parsed: Any = None
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        parsed = None
+    code = _envelope_code(parsed)
+    message = text.strip()[:300] or "empty response body"
+    if code in _AUTH_CODES:
+        parsed_message = parsed.get("msg") if isinstance(parsed, dict) else None
+        return DeepSeekAuthError(
+            f"DeepSeek Web: {context} rejected the token (code={code}, HTTP {response.status_code}): "
+            f"{str(parsed_message or message)[:200]}",
+            code=code,
+        )
+    status = response.status_code if response.status_code in (400, 402, 403, 404, 429, 500, 502, 503) else 502
+    suffix = f" (code={code})" if code is not None else ""
+    return DeepSeekUpstreamError(
+        f"DeepSeek Web: {context} failed with HTTP {response.status_code}{suffix}: {message}",
+        status_code=status,
+        code=code,
+    )
+
+
+def _refresh_token_if_possible(previous_token: str) -> str:
+    fresh = resolve_credentials(force=True)
+    token = (fresh.get("token") or "").strip()
+    if token and token != previous_token:
+        return token
+    return ""
 
 
 async def fetch_hif_tokens(client: httpx.AsyncClient) -> dict[str, str]:
@@ -226,10 +334,16 @@ async def fetch_pow_challenge(client: httpx.AsyncClient, token: str) -> dict:
         timeout=20.0,
     )
     if resp.status_code != 200:
-        raise RuntimeError(f"DeepSeek Web: pow challenge failed with HTTP {resp.status_code}: {resp.text[:200]}")
-    challenge = _unwrap_biz(resp.json()).get("challenge")
+        raise _error_from_response(resp, resp.content, "create_pow_challenge")
+    try:
+        payload = resp.json()
+    except (TypeError, ValueError):
+        raise DeepSeekUpstreamError(
+            f"DeepSeek Web: create_pow_challenge returned invalid JSON: {resp.text[:200]}"
+        )
+    challenge = _checked_biz(payload, "create_pow_challenge", require_biz=True).get("challenge")
     if not isinstance(challenge, dict):
-        raise RuntimeError("DeepSeek Web: pow challenge payload missing")
+        raise DeepSeekUpstreamError("DeepSeek Web: create_pow_challenge returned no challenge object")
     return challenge
 
 
@@ -244,25 +358,49 @@ async def create_chat_session(client: httpx.AsyncClient, token: str, thinking_en
         timeout=20.0,
     )
     if resp.status_code != 200:
-        raise RuntimeError(f"DeepSeek Web: session create failed with HTTP {resp.status_code}: {resp.text[:200]}")
-    session = (_unwrap_biz(resp.json()).get("chat_session") or {}).get("id") or ""
+        raise _error_from_response(resp, resp.content, "create_chat_session")
+    try:
+        payload = resp.json()
+    except (TypeError, ValueError):
+        raise DeepSeekUpstreamError(
+            f"DeepSeek Web: create_chat_session returned invalid JSON: {resp.text[:200]}"
+        )
+    session = (_checked_biz(payload, "create_chat_session", require_biz=True).get("chat_session") or {}).get("id") or ""
     if not session:
-        raise RuntimeError("DeepSeek Web: session create returned no id")
+        raise DeepSeekUpstreamError("DeepSeek Web: create_chat_session returned no session id")
     return str(session)
+
+
+async def _fetch_current_user(client: httpx.AsyncClient, token: str) -> dict:
+    resp = await client.get(
+        f"{DEEPSEEK_WEB_BASE}/users/current",
+        headers=_client_headers(token),
+    )
+    if resp.status_code != 200:
+        raise _error_from_response(resp, resp.content, "users/current")
+    try:
+        payload = resp.json()
+    except (TypeError, ValueError):
+        raise DeepSeekUpstreamError(
+            f"DeepSeek Web: users/current returned invalid JSON: {resp.text[:200]}"
+        )
+    return _checked_biz(payload, "users/current")
 
 
 async def list_models() -> list[dict]:
     credentials = resolve_credentials()
     token = credentials["token"]
     if not token:
-        raise RuntimeError("DeepSeek Web is not configured. Set DEEPSEEK_WEB_TOKEN or sign in to chat.deepseek.com in a local browser.")
+        raise DeepSeekAuthError("DeepSeek Web is not configured. Set DEEPSEEK_WEB_TOKEN or sign in to chat.deepseek.com in a local browser.")
     async with httpx.AsyncClient(timeout=20.0) as client:
-        resp = await client.get(
-            f"{DEEPSEEK_WEB_BASE}/users/current",
-            headers=_client_headers(token),
-        )
-    if resp.status_code != 200:
-        raise RuntimeError(f"DeepSeek Web auth check failed with HTTP {resp.status_code}: {resp.text[:200]}")
+        try:
+            await _fetch_current_user(client, token)
+        except DeepSeekAuthError:
+            fresh_token = _refresh_token_if_possible(token)
+            if not fresh_token:
+                raise
+            token = fresh_token
+            await _fetch_current_user(client, token)
     return [
         {
             "id": f"{DEEPSEEK_WEB_PREFIX}chat",
@@ -682,32 +820,71 @@ async def stream_chat_completion(
     credentials = resolve_credentials()
     token = credentials["token"]
     if not token:
-        raise RuntimeError("DeepSeek Web is not configured. Set DEEPSEEK_WEB_TOKEN or sign in to chat.deepseek.com in a local browser.")
+        raise DeepSeekAuthError("DeepSeek Web is not configured. Set DEEPSEEK_WEB_TOKEN or sign in to chat.deepseek.com in a local browser.")
 
     prompt = _flatten_messages(messages, tools, tool_choice)
     if not prompt.strip():
-        raise RuntimeError("DeepSeek Web: empty prompt after flattening messages")
+        raise DeepSeekUpstreamError("DeepSeek Web: empty prompt after flattening messages")
 
-    challenge = await fetch_pow_challenge(client, token)
-    pow_header = await asyncio.to_thread(build_pow_header, challenge, DEEPSEEK_WEB_COMPLETION_PATH)
-    hif = await fetch_hif_tokens(client)
+    async def open_completion(active_token: str) -> tuple[httpx.Response, Any, Optional[str]]:
+        challenge = await fetch_pow_challenge(client, active_token)
+        pow_header = await asyncio.to_thread(build_pow_header, challenge, DEEPSEEK_WEB_COMPLETION_PATH)
+        hif = await fetch_hif_tokens(client)
 
-    session_id = await create_chat_session(client, token, thinking_enabled=thinking_enabled)
+        session_id = await create_chat_session(client, active_token, thinking_enabled=thinking_enabled)
 
-    headers = _client_headers(token, accept="text/event-stream")
-    headers["x-ds-pow-response"] = pow_header
-    if hif.get("leim"):
-        headers["x-hif-leim"] = hif["leim"]
-    if hif.get("dliq"):
-        headers["x-hif-dliq"] = hif["dliq"]
+        headers = _client_headers(active_token, accept="text/event-stream")
+        headers["x-ds-pow-response"] = pow_header
+        if hif.get("leim"):
+            headers["x-hif-leim"] = hif["leim"]
+        if hif.get("dliq"):
+            headers["x-hif-dliq"] = hif["dliq"]
 
-    body: dict = {
-        "chat_session_id": session_id,
-        "prompt": prompt,
-        "ref_file_ids": [],
-        "thinking_enabled": bool(thinking_enabled),
-        "search_enabled": False,
-    }
+        body: dict = {
+            "chat_session_id": session_id,
+            "prompt": prompt,
+            "ref_file_ids": [],
+            "thinking_enabled": bool(thinking_enabled),
+            "search_enabled": False,
+        }
+        request = client.build_request("POST", f"{DEEPSEEK_WEB_BASE}/chat/completion", headers=headers, json=body)
+        response = await client.send(request, stream=True)
+        if response.status_code != 200:
+            error_body = await response.aread()
+            await response.aclose()
+            raise _error_from_response(response, error_body, "chat/completion")
+
+        line_iterator = response.aiter_lines()
+        first_line: Optional[str] = None
+        async for line in line_iterator:
+            if line.strip():
+                first_line = line
+                break
+
+        if first_line is not None and not first_line.startswith(("event: ", "data: ")):
+            stripped = first_line.strip()
+            try:
+                envelope = json.loads(stripped)
+            except (TypeError, ValueError):
+                envelope = None
+            await response.aclose()
+            if isinstance(envelope, dict) and _as_int(envelope.get("code")) not in (None, 0):
+                _checked_biz(envelope, "chat/completion", require_biz=False)
+            raise DeepSeekUpstreamError(
+                f"DeepSeek Web: chat/completion returned an unexpected response: {stripped[:200]}"
+            )
+
+        return response, line_iterator, first_line
+
+    try:
+        response, line_iterator, first_line = await open_completion(token)
+    except DeepSeekAuthError:
+        fresh_token = _refresh_token_if_possible(token)
+        if not fresh_token:
+            raise
+        logger.warning("DeepSeek Web: token was rejected; retrying once with refreshed credentials.")
+        token = fresh_token
+        response, line_iterator, first_line = await open_completion(token)
 
     completion_id = _chunk_id()
     created = int(time.time())
@@ -723,17 +900,17 @@ async def stream_chat_completion(
             "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
         }
 
-    request = client.build_request("POST", f"{DEEPSEEK_WEB_BASE}/chat/completion", headers=headers, json=body)
-    response = await client.send(request, stream=True)
-    if response.status_code != 200:
-        detail = (await response.aread()).decode("utf-8", "replace")[:400]
-        await response.aclose()
-        raise RuntimeError(f"DeepSeek Web completion failed with HTTP {response.status_code}: {detail}")
+
+    async def iter_lines():
+        if first_line is not None:
+            yield first_line
+        async for pending in line_iterator:
+            yield pending
 
     yield _sse(base_chunk({"role": "assistant", "content": ""}))
 
     try:
-        async for line in response.aiter_lines():
+        async for line in iter_lines():
             if not line:
                 continue
             if line.startswith("event: "):

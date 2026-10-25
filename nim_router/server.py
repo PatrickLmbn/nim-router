@@ -26,6 +26,7 @@ from nim_router.config import (
     get_cerebras_keys,
     get_bai_key,
     get_kiro_refresh_token,
+    get_kiro_enabled,
     get_antigravity_refresh_token,
     get_routing_strategy,
     get_primary_model,
@@ -62,6 +63,8 @@ from nim_router.updater import (
     build_frontend,
     GitUpdateError,
 )
+
+KIRO_DISABLED_REASON = "Kiro is temporarily disabled and will be continued."
 
 _router_instance: Optional[ModelRouter] = None
 _server_start_time: float = time.time()
@@ -356,8 +359,10 @@ def create_app() -> FastAPI:
         enriched_combos = _enrich_combos(load_combos(), model_items, max_lat_threshold)
 
         prov_models_count = {}
-        for m in _router_instance.models:
-            p = m.get("provider") or _router_instance._get_provider_name(m.get("id", ""))
+        for item in model_items:
+            if not item.get("healthy"):
+                continue
+            p = item.get("provider") or _router_instance._get_provider_name(item.get("id", ""))
             prov_models_count[p] = prov_models_count.get(p, 0) + 1
 
         interval_sec = get_health_refresh_interval()
@@ -397,7 +402,7 @@ def create_app() -> FastAPI:
                 "OpenRouter": {"keys_count": len(or_keys), "active": len(or_keys) > 0, "models_count": prov_models_count.get("OpenRouter", 0)},
                 "OpenCode": {"keys_count": 1 if oc_key else 0, "active": bool(oc_key), "models_count": prov_models_count.get("OpenCode", 0)},
                 "BAI": {"keys_count": 1 if bai_key else 0, "active": bool(bai_key), "models_count": prov_models_count.get("BAI", 0)},
-                "Kiro": {"keys_count": 1 if kiro_token else 0, "active": bool(kiro_token), "models_count": prov_models_count.get("Kiro", 0)},
+                "Kiro": {"keys_count": 1 if kiro_token else 0, "active": bool(kiro_token) and get_kiro_enabled(), "disabled": not get_kiro_enabled(), "disabled_reason": KIRO_DISABLED_REASON, "models_count": prov_models_count.get("Kiro", 0)},
                 "Antigravity": {"keys_count": 1 if antigravity_token else 0, "active": bool(antigravity_token), "models_count": prov_models_count.get("Antigravity", 0)},
             },
             "usage_summary": usage_summary,
@@ -466,6 +471,14 @@ def create_app() -> FastAPI:
         kiro_token = get_kiro_refresh_token() or resolve_refresh_token()
         antigravity_token = get_antigravity_refresh_token() or resolve_antigravity_refresh_token()
 
+        try:
+            from nim_router.deepseek_web import resolve_credentials as resolve_ds_credentials
+            ds_creds = resolve_ds_credentials()
+        except Exception:
+            ds_creds = {"token": "", "source": ""}
+        ds_token = ds_creds.get("token", "")
+        ds_source = ds_creds.get("source", "")
+
         return {
             "providers": [
                 {"id": "NVIDIA", "name": "NVIDIA NIM", "env_var": "NVIDIA_API_KEYS", "keys": [mask(k) for k in nv_keys], "count": len(nv_keys)},
@@ -474,8 +487,9 @@ def create_app() -> FastAPI:
                 {"id": "OpenRouter", "name": "OpenRouter Free", "env_var": "OPENROUTER_API_KEYS", "keys": [mask(k) for k in or_keys], "count": len(or_keys)},
                 {"id": "OpenCode", "name": "OpenCode Zen", "env_var": "OPENCODE_API_KEY", "keys": [mask(oc_key)] if oc_key else [], "count": 1 if oc_key else 0},
                 {"id": "BAI", "name": "B.AI Free", "env_var": "BAI_API_KEY", "keys": [mask(bai_key)] if bai_key else [], "count": 1 if bai_key else 0},
-                {"id": "Kiro", "name": "Kiro (AWS CodeWhisperer)", "env_var": "KIRO_REFRESH_TOKEN", "keys": [mask(kiro_token)] if kiro_token else [], "count": 1 if kiro_token else 0},
+                {"id": "Kiro", "name": "Kiro (AWS CodeWhisperer)", "env_var": "KIRO_REFRESH_TOKEN", "keys": [mask(kiro_token)] if kiro_token else [], "count": 1 if kiro_token else 0, "disabled": not get_kiro_enabled(), "disabled_reason": KIRO_DISABLED_REASON},
                 {"id": "Antigravity", "name": "Antigravity (Google)", "env_var": "ANTIGRAVITY_REFRESH_TOKEN", "keys": [mask(antigravity_token)] if antigravity_token else [], "count": 1 if antigravity_token else 0, "scopes_ok": _antigravity_scopes_ok(), "missing_scopes": _antigravity_missing_scopes()},
+                {"id": "DeepSeek Web", "name": "DeepSeek Web", "env_var": "DEEPSEEK_WEB_TOKEN", "keys": [mask(ds_token)] if ds_token else [], "count": 1 if ds_token else 0, "source": ds_source or "none"},
             ]
         }
 
@@ -496,6 +510,8 @@ def create_app() -> FastAPI:
             "BAI": "BAI_API_KEY",
             "KIRO": "KIRO_REFRESH_TOKEN",
             "ANTIGRAVITY": "ANTIGRAVITY_REFRESH_TOKEN",
+            "DEEPSEEK WEB": "DEEPSEEK_WEB_TOKEN",
+            "DEEPSEEK_WEB": "DEEPSEEK_WEB_TOKEN",
         }
         env_var = env_map.get(provider)
         if not env_var:
@@ -516,6 +532,8 @@ def create_app() -> FastAPI:
         if action == "clear":
             env_vars.pop(env_var, None)
             env_vars.pop(env_var.rstrip("S"), None)
+            if provider in ("DEEPSEEK WEB", "DEEPSEEK_WEB"):
+                env_vars.pop("DEEPSEEK_WEB_DS_SESSION_ID", None)
             if provider == "KIRO":
                 from nim_router.kiro_login import clear_stored_credentials
                 clear_stored_credentials()
@@ -572,6 +590,14 @@ def create_app() -> FastAPI:
                 f.write(f"{k}={v}\n")
 
         reload_env()
+        if provider in ("DEEPSEEK WEB", "DEEPSEEK_WEB"):
+            try:
+                from nim_router.deepseek_web import resolve_credentials as resolve_ds_credentials
+                resolve_ds_credentials(force=True)
+            except Exception:
+                pass
+            if _router_instance:
+                _router_instance.clear_provider_cooldown("DeepSeek Web")
         if _router_instance:
             _router_instance.api_keys = get_nvidia_keys()
             _router_instance.openrouter_keys = get_openrouter_keys()
@@ -583,12 +609,18 @@ def create_app() -> FastAPI:
                 kiro_token = get_kiro_refresh_token() or resolve_refresh_token()
                 _router_instance.kiro_refresh_token = kiro_token
                 set_kiro_refresh_token(kiro_token)
+                from nim_router.parking import clear_prefix as _clear_parked
+                _clear_parked("model:kiro/")
+                _clear_parked("provider:Kiro")
                 if not kiro_token:
                     _router_instance._invalidate_kiro_models()
             if provider == "ANTIGRAVITY":
                 antigravity_token = get_antigravity_refresh_token() or resolve_antigravity_refresh_token()
                 _router_instance.antigravity_refresh_token = antigravity_token
                 set_antigravity_refresh_token(antigravity_token)
+                from nim_router.parking import clear_prefix as _clear_parked
+                _clear_parked("model:antigravity/")
+                _clear_parked("provider:Antigravity")
                 if not antigravity_token:
                     _router_instance._invalidate_antigravity_models()
 
@@ -598,6 +630,8 @@ def create_app() -> FastAPI:
     @app.post("/api/kiro/login/start")
     async def kiro_login_start(request: Request):
         _check_auth(request)
+        if not get_kiro_enabled():
+            raise HTTPException(status_code=409, detail=KIRO_DISABLED_REASON)
         try:
             from nim_router.kiro_login import KiroLoginSession
 
@@ -970,11 +1004,117 @@ def create_app() -> FastAPI:
             ]
         }
 
+    @app.post("/api/deepseek-web/fetch")
+    async def fetch_deepseek_web_token(request: Request):
+        _check_auth(request)
+        from nim_router.deepseek_web import (
+            extract_browser_credentials,
+            resolve_credentials as resolve_ds_credentials,
+        )
+
+        try:
+            found = await asyncio.to_thread(extract_browser_credentials)
+        except Exception as e:
+            logger.warning(f"DeepSeek Web browser scan failed: {e}")
+            return {"success": False, "detail": f"Browser scan failed: {e}", "source": ""}
+
+        token = found.get("userToken", "")
+        if not token:
+            return {
+                "success": False,
+                "detail": "No chat.deepseek.com session found in Brave, Chrome or Chromium profiles on this machine.",
+                "source": "",
+            }
+
+        resolve_ds_credentials(force=True)
+        masked = f"{token[:6]}...{token[-4:]}" if len(token) > 10 else f"{token[:4]}..."
+        logger.success(f"DeepSeek Web token fetched from browser profile via Web UI ({found.get('source', '')}).")
+        return {
+            "success": True,
+            "masked": masked,
+            "source": found.get("source", ""),
+            "has_session": bool(found.get("ds_session_id")),
+        }
+
+    @app.post("/api/probe/deepseek-web")
+    async def run_deepseek_web_probe(request: Request):
+        _check_auth(request)
+        if not _router_instance:
+            raise HTTPException(status_code=500, detail="Router not initialized")
+
+        from nim_router.deepseek_web import (
+            DeepSeekAuthError,
+            list_models as list_ds_models,
+            resolve_credentials as resolve_ds_credentials,
+        )
+
+        async def drop_deepseek_models() -> None:
+            async with _router_instance._write_lock:
+                _router_instance.models = [
+                    m for m in _router_instance.models
+                    if not str(m.get("id") or "").startswith("deepseek-web/")
+                ]
+                _router_instance._healthy_pool = _router_instance._build_healthy_pool()
+                _router_instance._pool_updated = time.time()
+
+        creds = resolve_ds_credentials(force=True)
+        if not creds.get("token"):
+            await drop_deepseek_models()
+            return {
+                "success": False,
+                "detail": "No DeepSeek Web token found. Paste a userToken below, set DEEPSEEK_WEB_TOKEN, or sign in to chat.deepseek.com in a supported local browser.",
+                "source": "",
+                "models": [],
+            }
+
+        try:
+            ds_models = await list_ds_models()
+        except DeepSeekAuthError as e:
+            _router_instance._mark_provider_auth_failure("DeepSeek Web")
+            await drop_deepseek_models()
+            logger.warning(f"DeepSeek Web probe failed (authentication): {e}")
+            return {"success": False, "detail": str(e), "source": creds.get("source", ""), "models": []}
+        except Exception as e:
+            logger.warning(f"DeepSeek Web probe failed: {e}")
+            return {"success": False, "detail": str(e), "source": creds.get("source", ""), "models": []}
+
+        ids = {m.get("id") for m in ds_models}
+        async with _router_instance._write_lock:
+            _router_instance.models = [
+                m for m in _router_instance.models if m.get("id") not in ids
+            ] + ds_models
+            for m in ds_models:
+                mid = m.get("id")
+                if mid:
+                    _router_instance._model_providers[mid] = "DeepSeek Web"
+                    _router_instance._latencies[mid] = 2.0
+            _router_instance._healthy_pool = _router_instance._build_healthy_pool()
+            _router_instance._pool_updated = time.time()
+        _router_instance.clear_provider_cooldown("DeepSeek Web")
+
+        logger.success(
+            f"DeepSeek Web probe ok (source: {creds.get('source') or 'unknown'}), "
+            f"{len(ds_models)} models available."
+        )
+        return {
+            "success": True,
+            "source": creds.get("source", ""),
+            "models": [{"id": m.get("id"), "provider": "DeepSeek Web"} for m in ds_models],
+        }
+
     @app.post("/api/probe/kiro")
     async def run_kiro_only_probe(request: Request):
         _check_auth(request)
         if not _router_instance:
             raise HTTPException(status_code=500, detail="Router not initialized")
+        if not get_kiro_enabled():
+            return {
+                "success": False,
+                "disabled": True,
+                "detail": KIRO_DISABLED_REASON,
+                "kiro_models_discovered": 0,
+                "models": [],
+            }
 
         logger.info("Executing Kiro-only model discovery via Web UI...")
         from nim_router.client import discover_kiro_models
@@ -999,6 +1139,7 @@ def create_app() -> FastAPI:
                         _router_instance._model_providers[mid] = "Kiro"
                 _router_instance._healthy_pool = _router_instance._build_healthy_pool()
                 _router_instance._pool_updated = time.time()
+                _router_instance.clear_provider_cooldown("Kiro")
                 logger.info(f"Updated pool with {len(kiro_models)} Kiro models.")
 
         return {
@@ -1043,6 +1184,7 @@ def create_app() -> FastAPI:
                         _router_instance._model_providers[mid] = "Antigravity"
                 _router_instance._healthy_pool = _router_instance._build_healthy_pool()
                 _router_instance._pool_updated = time.time()
+                _router_instance.clear_provider_cooldown("Antigravity")
                 logger.info(f"Updated pool with {len(antigravity_models)} Antigravity models.")
 
         return {
@@ -1137,10 +1279,11 @@ def create_app() -> FastAPI:
                 data.append({"id": cname, "object": "model", "owned_by": "nim-router-combo"})
 
         target_task = (task or "").strip().lower()
+        healthy_ids = set(_router_instance._healthy_pool)
 
         for m in _router_instance.models:
             mid = m.get("id")
-            if mid and mid not in added_ids and " " not in mid:
+            if mid and mid not in added_ids and " " not in mid and mid in healthy_ids:
                 prov = _router_instance._get_provider_name(mid)
                 if target_task:
                     caps = get_model_capabilities(mid, prov, m)
@@ -1184,9 +1327,10 @@ def create_app() -> FastAPI:
             added_names.add(cat_name)
             tags.append({"name": cat_name, "model": cat_name, "modified_at": "2026-08-30T00:00:00Z", "size": 0})
 
+        healthy_ids = set(_router_instance._healthy_pool)
         for m in _router_instance.models:
             mid = m.get("id")
-            if mid and mid not in added_names and " " not in mid:
+            if mid and mid not in added_names and " " not in mid and mid in healthy_ids:
                 added_names.add(mid)
                 tags.append({"name": mid, "model": mid, "modified_at": "2026-08-30T00:00:00Z", "size": 0})
 
