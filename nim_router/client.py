@@ -1239,6 +1239,8 @@ async def call_deepseek_web_endpoint(
                 [m if isinstance(m, dict) else m.model_dump() for m in request.messages],
                 client,
                 thinking_enabled=thinking_enabled,
+                tools=request.tools,
+                tool_choice=getattr(request, "tool_choice", None),
             )
 
             prompt_tokens = 0
@@ -1318,6 +1320,8 @@ async def call_deepseek_web_endpoint(
             [m if isinstance(m, dict) else m.model_dump() for m in request.messages],
             client,
             thinking_enabled=thinking_enabled,
+            tools=request.tools,
+            tool_choice=getattr(request, "tool_choice", None),
         )
         usage = result.get("usage") or {}
         if on_usage:

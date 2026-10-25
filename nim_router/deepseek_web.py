@@ -18,6 +18,7 @@ DEEPSEEK_HIF_QUERY_URL = "https://hif-leim.deepseek.com/query"
 DEEPSEEK_HIF_DLIQ_HOST = "hif-dliq.deepseek.com"
 DEEPSEEK_WEB_PREFIX = "deepseek-web/"
 DEEPSEEK_WEB_COMPLETION_PATH = "/api/v0/chat/completion"
+_DSML_TOKEN = "\uff5cDSML\uff5c"
 
 DEEPSEEK_WEB_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -278,7 +279,99 @@ async def list_models() -> list[dict]:
     ]
 
 
-def _flatten_messages(messages: list[dict]) -> str:
+def _tool_specs(tools: Optional[list[dict]]) -> list[dict]:
+    specs: list[dict] = []
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function") if tool.get("type") == "function" else tool
+        if not isinstance(fn, dict) or not fn.get("name"):
+            continue
+        specs.append({
+            "name": str(fn["name"]),
+            "description": str(fn.get("description") or ""),
+            "parameters": fn.get("parameters") or {"type": "object", "properties": {}},
+        })
+    return specs
+
+
+def _tools_prompt(tools: Optional[list[dict]], tool_choice: Any = None) -> str:
+    if tool_choice == "none":
+        return ""
+    specs = _tool_specs(tools)
+    if not specs:
+        return ""
+    lines = [
+        "## Tools",
+        "You have access to these tools:",
+        json.dumps(specs, ensure_ascii=False),
+        "",
+        "Invoke tools by writing a block in this exact format:",
+        f"<{_DSML_TOKEN}tool_calls>",
+        f'<{_DSML_TOKEN}invoke name="$TOOL_NAME">',
+        f'<{_DSML_TOKEN}parameter name="$PARAMETER_NAME" string="true">$PARAMETER_VALUE</{_DSML_TOKEN}parameter>',
+        f"</{_DSML_TOKEN}invoke>",
+        f"</{_DSML_TOKEN}tool_calls>",
+        "Repeat the invoke block inside the same tool_calls block for each call.",
+        'Use string="true" for literal text and string="false" for numbers, booleans, arrays and objects.',
+        "Write nothing else when calling tools. Tool results arrive as "
+        '"Tool result (<name>): ..." messages; use them to answer the user.',
+    ]
+    if tool_choice == "required":
+        lines.append("You MUST call at least one tool in this reply.")
+    return "\n".join(lines)
+
+
+def _assistant_calls_text(msg: dict) -> str:
+    blocks: list[str] = []
+    for call in msg.get("tool_calls") or []:
+        if not isinstance(call, dict):
+            continue
+        fn = call.get("function") or {}
+        name = str(fn.get("name") or "").strip()
+        if not name:
+            continue
+        args = fn.get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args or "{}")
+            except (TypeError, ValueError):
+                args = {}
+        if not isinstance(args, dict):
+            args = {}
+        lines = [f'<{_DSML_TOKEN}invoke name="{name}">']
+        for key, value in args.items():
+            if isinstance(value, str):
+                lines.append(
+                    f'<{_DSML_TOKEN}parameter name="{key}" string="true">{value}</{_DSML_TOKEN}parameter>'
+                )
+            else:
+                lines.append(
+                    f'<{_DSML_TOKEN}parameter name="{key}" string="false">'
+                    f'{json.dumps(value, ensure_ascii=False)}</{_DSML_TOKEN}parameter>'
+                )
+        lines.append(f"</{_DSML_TOKEN}invoke>")
+        blocks.append("\n".join(lines))
+    if not blocks:
+        return ""
+    return "\n".join(blocks)
+
+
+def _flatten_messages(
+    messages: list[dict],
+    tools: Optional[list[dict]] = None,
+    tool_choice: Any = None,
+) -> str:
+    tool_names: dict[str, str] = {}
+    for msg in messages or []:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        for call in msg.get("tool_calls") or []:
+            if isinstance(call, dict) and call.get("id"):
+                fn = call.get("function") or {}
+                if fn.get("name"):
+                    tool_names[str(call["id"])] = str(fn["name"])
+
     system_parts: list[str] = []
     turns: list[str] = []
     for msg in messages or []:
@@ -294,16 +387,25 @@ def _flatten_messages(messages: list[dict]) -> str:
             )
         else:
             text = str(content or "")
+        if role == "assistant":
+            if text.strip():
+                turns.append(f"Assistant: {text.strip()}")
+            calls_text = _assistant_calls_text(msg)
+            if calls_text:
+                turns.append(f"Assistant: {calls_text}")
+            continue
         if not text.strip():
             continue
         if role == "system":
             system_parts.append(text.strip())
-        elif role == "assistant":
-            turns.append(f"Assistant: {text.strip()}")
         elif role == "tool":
-            turns.append(f"Tool result: {text.strip()}")
+            name = msg.get("name") or tool_names.get(str(msg.get("tool_call_id") or "")) or "tool"
+            turns.append(f"Tool result ({name}): {text.strip()}")
         else:
             turns.append(text.strip())
+    tools_prompt = _tools_prompt(tools, tool_choice)
+    if tools_prompt:
+        system_parts.insert(0, tools_prompt)
     prompt = "\n\n".join(turns) if turns else ""
     if system_parts:
         prompt = "\n\n".join(system_parts) + "\n\n" + prompt
@@ -342,48 +444,231 @@ class _StreamState:
     def feed(self, payload: dict) -> list[tuple[str, str]]:
         events: list[tuple[str, str]] = []
         value = payload.get("v")
+        path = payload.get("p")
+        op = payload.get("o")
+
         if isinstance(value, dict):
             response = value.get("response")
-            if isinstance(response, dict):
-                fragments = response.get("fragments") or []
-                if fragments:
-                    last = fragments[-1]
-                    if isinstance(last, dict) and last.get("type") in ("THINK", "RESPONSE"):
-                        self._last_type = str(last["type"])
-                for fragment in fragments:
-                    if isinstance(fragment, dict):
-                        event = self._classify(fragment)
-                        if event:
-                            events.append(event)
+            if not isinstance(response, dict):
                 return events
-        if payload.get("o") == "APPEND":
-            if isinstance(value, str):
-                event = self._classify({"type": self._last_type, "content": value})
-                if event:
-                    events.append(event)
-            elif isinstance(value, list):
-                for item in value:
-                    if isinstance(item, dict):
-                        event = self._classify(item)
-                        if event:
-                            events.append(event)
+            fragments = response.get("fragments") or []
+            if fragments:
+                last = fragments[-1]
+                if isinstance(last, dict) and last.get("type") in ("THINK", "RESPONSE"):
+                    self._last_type = str(last["type"])
+            for fragment in fragments:
+                if isinstance(fragment, dict):
+                    event = self._classify(fragment)
+                    if event:
+                        events.append(event)
             return events
-        if isinstance(value, str) and "p" not in payload and "o" not in payload:
-            if value == "FINISHED":
-                self.finished = True
-            else:
-                event = self._classify({"type": self._last_type, "content": value})
-                if event:
-                    events.append(event)
-            return events
+
         if isinstance(value, list):
             for item in value:
-                if isinstance(item, dict) and item.get("p") == "accumulated_token_usage":
+                if not isinstance(item, dict):
+                    continue
+                if item.get("p") == "accumulated_token_usage":
                     try:
                         self.usage = int(item.get("v") or 0)
                     except Exception:
                         pass
+                    continue
+                if item.get("type") in ("THINK", "RESPONSE"):
+                    self._last_type = str(item["type"])
+                    event = self._classify(item)
+                    if event:
+                        events.append(event)
+            return events
+
+        if isinstance(value, str):
+            if path and path.endswith("/content"):
+                if value == "FINISHED":
+                    self.finished = True
+                else:
+                    event = self._classify({"type": self._last_type, "content": value})
+                    if event:
+                        events.append(event)
+                return events
+            if op == "APPEND":
+                event = self._classify({"type": self._last_type, "content": value})
+                if event:
+                    events.append(event)
+                return events
+            if path is None:
+                if value == "FINISHED":
+                    self.finished = True
+                else:
+                    event = self._classify({"type": self._last_type, "content": value})
+                    if event:
+                        events.append(event)
+            return events
+
         return events
+
+
+_FENCE = "```"
+_DSML_MARK = re.compile(r"<\s*(/?)\s*[\uff5c|]{1,2}\s*DSML\s*[\uff5c|]{1,2}\s*")
+_DSML_START = re.compile(r"<\s*[\uff5c|]{1,2}\s*DSML\s*[\uff5c|]{1,2}")
+_HOLDBACK = 16
+
+
+def _normalize_dsml(raw: str) -> str:
+    return _DSML_MARK.sub(lambda m: "\x02" if m.group(1) else "\x01", raw)
+
+
+def _parse_dsml_calls(raw: str) -> list[dict]:
+    text = _normalize_dsml(raw)
+    if "\x01invoke" not in text:
+        return []
+    calls: list[dict] = []
+    for invoke in re.finditer(
+        r"\x01invoke\s+name\s*=\s*\"([^\"]+)\"\s*>(.*?)(?=\x01invoke\s+name\s*=|\Z)",
+        text,
+        re.S,
+    ):
+        name = invoke.group(1).strip()
+        if not name:
+            continue
+        body = invoke.group(2)
+        stop = body.find("\x02invoke>")
+        if stop != -1:
+            body = body[:stop]
+        args: dict = {}
+        for param in re.finditer(
+            r"\x01parameter\s+name\s*=\s*\"([^\"]+)\"\s*(?:string\s*=\s*\"(true|false)\"\s*)?>(.*?)(?=\x01parameter\s+name\s*=|\Z)",
+            body,
+            re.S,
+        ):
+            key = param.group(1).strip()
+            flag = param.group(2)
+            value = param.group(3)
+            cut = value.find("\x02parameter>")
+            if cut != -1:
+                value = value[:cut]
+            value = value.strip()
+            if flag != "true":
+                try:
+                    value = json.loads(value)
+                except (TypeError, ValueError):
+                    pass
+            args[key] = value
+        calls.append({
+            "id": f"call_{uuid.uuid4().hex[:24]}",
+            "name": name,
+            "arguments": args,
+        })
+    return calls
+
+
+def _parse_json_calls(raw: str) -> list[dict]:
+    text = raw.strip()
+    if text.endswith(_FENCE):
+        text = text[: -len(_FENCE)].strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end <= start:
+        return []
+    try:
+        data = json.loads(text[start:end + 1])
+    except (TypeError, ValueError):
+        return []
+    if isinstance(data, list):
+        raw_calls = data
+    elif isinstance(data, dict):
+        raw_calls = data.get("tool_calls")
+        if raw_calls is None and data.get("name"):
+            raw_calls = [data]
+    else:
+        return []
+    if not isinstance(raw_calls, list):
+        return []
+    calls: list[dict] = []
+    for call in raw_calls:
+        if not isinstance(call, dict):
+            continue
+        fn = call.get("function") if isinstance(call.get("function"), dict) else call
+        name = str(fn.get("name") or "").strip()
+        if not name:
+            continue
+        args = fn.get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args or "{}")
+            except (TypeError, ValueError):
+                args = {}
+        calls.append({
+            "id": f"call_{uuid.uuid4().hex[:24]}",
+            "name": name,
+            "arguments": args if isinstance(args, dict) else {},
+        })
+    return calls
+
+
+def _parse_tool_calls(raw: str) -> list[dict]:
+    calls = _parse_json_calls(raw)
+    if calls:
+        return calls
+    return _parse_dsml_calls(raw)
+
+
+class _ToolCallExtractor:
+
+    def __init__(self, enabled: bool) -> None:
+        self.enabled = enabled
+        self._pending = ""
+        self._payload = ""
+        self._collecting = False
+
+    def feed(self, text: str) -> list[str]:
+        if not self.enabled:
+            return [text] if text else []
+        self._pending += text
+        if self._collecting:
+            self._payload += self._pending
+            self._pending = ""
+            return []
+        idx = self._pending.find(_FENCE)
+        dsml = _DSML_START.search(self._pending)
+        if idx == -1 and dsml is None:
+            if len(self._pending) <= _HOLDBACK:
+                return []
+            emit = self._pending[:-_HOLDBACK]
+            self._pending = self._pending[-_HOLDBACK:]
+            return [emit] if emit else []
+        if dsml is not None and (idx == -1 or dsml.start() <= idx):
+            emit = self._pending[:dsml.start()]
+            self._collecting = True
+            self._payload = self._pending[dsml.start():]
+            self._pending = ""
+            return [emit] if emit else []
+        rest = self._pending[idx + len(_FENCE):]
+        probe = rest.strip()
+        if not probe or probe in ("j", "js", "jso", "json"):
+            return []
+        body = probe[4:].lstrip() if probe.lower().startswith("json") else probe
+        if not body:
+            return []
+        if not body.startswith("{"):
+            emit = self._pending[: idx + len(_FENCE)]
+            remainder = self._pending[idx + len(_FENCE):]
+            self._pending = ""
+            self.enabled = False
+            return [emit + remainder] if (emit or remainder) else []
+        emit = self._pending[:idx]
+        self._collecting = True
+        self._payload = rest
+        self._pending = ""
+        return [emit] if emit else []
+
+    def finish(self) -> tuple[list[str], list[dict]]:
+        pending, self._pending = self._pending, ""
+        raw, self._payload = self._payload, ""
+        if not self._collecting:
+            return ([pending] if pending else []), []
+        calls = _parse_tool_calls(raw)
+        if calls:
+            return [], calls
+        return [raw], []
 
 
 async def stream_chat_completion(
@@ -391,13 +676,15 @@ async def stream_chat_completion(
     messages: list[dict],
     client: httpx.AsyncClient,
     thinking_enabled: bool = False,
+    tools: Optional[list[dict]] = None,
+    tool_choice: Any = None,
 ) -> AsyncGenerator[bytes, None]:
     credentials = resolve_credentials()
     token = credentials["token"]
     if not token:
         raise RuntimeError("DeepSeek Web is not configured. Set DEEPSEEK_WEB_TOKEN or sign in to chat.deepseek.com in a local browser.")
 
-    prompt = _flatten_messages(messages)
+    prompt = _flatten_messages(messages, tools, tool_choice)
     if not prompt.strip():
         raise RuntimeError("DeepSeek Web: empty prompt after flattening messages")
 
@@ -425,6 +712,7 @@ async def stream_chat_completion(
     completion_id = _chunk_id()
     created = int(time.time())
     state = _StreamState()
+    extractor = _ToolCallExtractor(bool(_tool_specs(tools)))
 
     def base_chunk(delta: dict, finish_reason: Optional[str] = None) -> dict:
         return {
@@ -467,11 +755,30 @@ async def stream_chat_completion(
                 if kind == "reasoning_content":
                     yield _sse(base_chunk({"reasoning_content": text}))
                 else:
-                    yield _sse(base_chunk({"content": text}))
+                    for piece in extractor.feed(text):
+                        if piece:
+                            yield _sse(base_chunk({"content": piece}))
     finally:
         await response.aclose()
 
-    yield _sse(base_chunk({}, finish_reason="stop"))
+    leftover, calls = extractor.finish()
+    for piece in leftover:
+        if piece:
+            yield _sse(base_chunk({"content": piece}))
+
+    for index, call in enumerate(calls):
+        yield _sse(base_chunk({"tool_calls": [{
+            "index": index,
+            "id": call["id"],
+            "type": "function",
+            "function": {"name": call["name"], "arguments": ""},
+        }]}))
+        yield _sse(base_chunk({"tool_calls": [{
+            "index": index,
+            "function": {"arguments": json.dumps(call["arguments"], ensure_ascii=False)},
+        }]}))
+
+    yield _sse(base_chunk({}, finish_reason="tool_calls" if calls else "stop"))
 
     prompt_tokens = max(1, int(len(prompt) / 3.8))
     completion_tokens = state.usage or max(1, int(len("".join(state.text)) / 3.8))
@@ -495,13 +802,18 @@ async def create_chat_completion(
     messages: list[dict],
     client: httpx.AsyncClient,
     thinking_enabled: bool = False,
+    tools: Optional[list[dict]] = None,
+    tool_choice: Any = None,
 ) -> dict:
     text_parts: list[str] = []
     reasoning_parts: list[str] = []
     usage_total = 0
-    prompt = _flatten_messages(messages)
+    tool_calls: dict[int, dict] = {}
+    prompt = _flatten_messages(messages, tools, tool_choice)
 
-    async for chunk in stream_chat_completion(model_id, messages, client, thinking_enabled=thinking_enabled):
+    async for chunk in stream_chat_completion(
+        model_id, messages, client, thinking_enabled=thinking_enabled, tools=tools, tool_choice=tool_choice
+    ):
         if not chunk.startswith(b"data: "):
             continue
         raw = chunk[6:].strip()
@@ -518,6 +830,21 @@ async def create_chat_completion(
                 text_parts.append(str(delta["content"]))
             if delta.get("reasoning_content"):
                 reasoning_parts.append(str(delta["reasoning_content"]))
+            for call in delta.get("tool_calls") or []:
+                if not isinstance(call, dict):
+                    continue
+                try:
+                    index = int(call.get("index") or 0)
+                except (TypeError, ValueError):
+                    index = 0
+                entry = tool_calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                if call.get("id"):
+                    entry["id"] = str(call["id"])
+                fn = call.get("function") or {}
+                if fn.get("name"):
+                    entry["name"] = str(fn["name"])
+                if fn.get("arguments"):
+                    entry["arguments"] += str(fn["arguments"])
         usage = payload.get("usage") or {}
         if usage.get("total_tokens"):
             usage_total = int(usage["total_tokens"])
@@ -528,12 +855,22 @@ async def create_chat_completion(
     message: dict = {"role": "assistant", "content": text}
     if reasoning_parts:
         message["reasoning_content"] = "".join(reasoning_parts)
+    calls = [
+        {
+            "id": entry["id"] or f"call_{uuid.uuid4().hex[:24]}",
+            "type": "function",
+            "function": {"name": entry["name"], "arguments": entry["arguments"] or "{}"},
+        }
+        for _, entry in sorted(tool_calls.items())
+    ]
+    if calls:
+        message["tool_calls"] = calls
     return {
         "id": _chunk_id(),
         "object": "chat.completion",
         "created": int(time.time()),
         "model": model_id,
-        "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "message": message, "finish_reason": "tool_calls" if calls else "stop"}],
         "usage": {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,

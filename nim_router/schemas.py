@@ -10,6 +10,7 @@ class ChatCompletionRequest(BaseModel):
     stream: Optional[bool] = False
     stop: Optional[list[str]] = None
     tools: Optional[list[dict]] = None
+    tool_choice: Optional[Union[str, dict]] = None
 
 
 class ResponsesRequest(BaseModel):
