@@ -51,7 +51,7 @@ export function ModelSelectorModal({ stats, onClose, onSelectModel }) {
   const [providerFilter, setProviderFilter] = useState('ALL');
 
   const models = stats?.models || [];
-  const providers = ['ALL', 'NVIDIA', 'Groq', 'Cerebras', 'OpenRouter', 'OpenCode', 'BAI', 'Kiro', 'Antigravity'];
+  const providers = ['ALL', 'NVIDIA', 'Groq', 'Cerebras', 'OpenRouter', 'OpenCode', 'BAI', 'Kiro', 'Antigravity', 'DeepSeek Web'];
 
   const filtered = models.filter(m => {
     const matchesSearch = m.id.toLowerCase().includes(search.toLowerCase()) || m.provider.toLowerCase().includes(search.toLowerCase());
