@@ -21,6 +21,8 @@ async function safeJson(res) {
   }
 }
 
+const isWorkingModel = (model) => Boolean(model && model.healthy !== false);
+
 export function ModalWrapper({ title, icon: Icon, onClose, children, maxWidth = "max-w-2xl", closeDisabled = false }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
@@ -50,12 +52,13 @@ export function ModelSelectorModal({ stats, onClose, onSelectModel }) {
   const [search, setSearch] = useState('');
   const [providerFilter, setProviderFilter] = useState('ALL');
 
-  const models = stats?.models || [];
-  const providers = ['ALL', 'NVIDIA', 'Groq', 'Cerebras', 'OpenRouter', 'OpenCode', 'BAI', 'Kiro', 'Antigravity', 'DeepSeek Web'];
+  const models = (stats?.models || []).filter(isWorkingModel);
+  const providers = ['ALL', 'NVIDIA', 'Groq', 'Cerebras', 'OpenRouter', 'OpenCode', 'BAI', 'Kiro', 'Antigravity', 'DeepSeek Web']
+    .filter(p => p === 'ALL' || models.some(m => (m.provider || '').toUpperCase() === p.toUpperCase()));
 
   const filtered = models.filter(m => {
-    const matchesSearch = m.id.toLowerCase().includes(search.toLowerCase()) || m.provider.toLowerCase().includes(search.toLowerCase());
-    const matchesProv = providerFilter === 'ALL' || m.provider.toUpperCase() === providerFilter.toUpperCase();
+    const matchesSearch = m.id.toLowerCase().includes(search.toLowerCase()) || (m.provider || '').toLowerCase().includes(search.toLowerCase());
+    const matchesProv = providerFilter === 'ALL' || (m.provider || '').toUpperCase() === providerFilter.toUpperCase();
     return matchesSearch && matchesProv;
   });
 
@@ -94,7 +97,7 @@ export function ModelSelectorModal({ stats, onClose, onSelectModel }) {
 
       <div className="pt-2">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Discovered Provider Models ({filtered.length})</h3>
+          <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Healthy Provider Models ({filtered.length})</h3>
         </div>
 
         <div className="flex flex-col sm:flex-row gap-2 mb-3">
@@ -149,7 +152,7 @@ export function ModelSelectorModal({ stats, onClose, onSelectModel }) {
             </div>
           ))}
           {filtered.length === 0 && (
-            <div className="text-center py-6 text-xs text-slate-500">No matching models found in active pool.</div>
+            <div className="text-center py-6 text-xs text-slate-500">No healthy models match these filters.</div>
           )}
         </div>
       </div>
@@ -168,6 +171,12 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
   const [editingIndex, setEditingIndex] = useState(null);
   const [kiroSigningIn, setKiroSigningIn] = useState(false);
   const [antigravitySigningIn, setAntigravitySigningIn] = useState(false);
+  const [dsTesting, setDsTesting] = useState(false);
+  const [dsTestResult, setDsTestResult] = useState(null);
+  const [dsMode, setDsMode] = useState('fetch');
+  const [dsConfirm, setDsConfirm] = useState(false);
+  const [dsFetching, setDsFetching] = useState(false);
+  const [dsFetchResult, setDsFetchResult] = useState(null);
 
   const providerMeta = {
     NVIDIA: { name: 'NVIDIA NIM', short: 'NVIDIA', color: '#76B900', env: 'NVIDIA_API_KEYS', multi: true, placeholder: 'nvapi-...' },
@@ -177,7 +186,8 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
     OpenCode: { name: 'OpenCode Zen', short: 'OpenCode', color: '#00D2FF', env: 'OPENCODE_API_KEY', multi: false, placeholder: 'opencode_...' },
     BAI: { name: 'B.AI Free', short: 'B.AI', color: '#A855F7', env: 'BAI_API_KEY', multi: false, placeholder: 'bai_...' },
     Kiro: { name: 'Kiro (AWS CodeWhisperer)', short: 'Kiro', color: '#FF9900', env: 'KIRO_REFRESH_TOKEN', multi: false, placeholder: 'aor_...' },
-    Antigravity: { name: 'Antigravity (Google)', short: 'Antigravity', color: '#4285F4', env: 'ANTIGRAVITY_REFRESH_TOKEN', multi: false, placeholder: '1//...' }
+    Antigravity: { name: 'Antigravity (Google)', short: 'Antigravity', color: '#4285F4', env: 'ANTIGRAVITY_REFRESH_TOKEN', multi: false, placeholder: '1//...' },
+    'DeepSeek Web': { name: 'DeepSeek Web', short: 'DeepSeek', color: '#4D6BFE', env: 'DEEPSEEK_WEB_TOKEN', multi: false, placeholder: 'userToken from chat.deepseek.com' }
   };
 
   const fetchKeys = async () => {
@@ -224,6 +234,53 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
       }
     } catch (e) {
       setActionStatus('Error saving key.');
+    }
+  };
+
+  const testDeepSeekWeb = async () => {
+    setDsTesting(true);
+    setDsTestResult(null);
+    try {
+      const res = await authFetch('/api/probe/deepseek-web', { method: 'POST' });
+      const data = await safeJson(res);
+      if (data.success) {
+        const label = data.source ? `via ${data.source}` : 'token accepted';
+        setDsTestResult({ ok: true, message: `Connected ${label} · ${data.models?.length || 0} models` });
+        await fetchKeys();
+        if (onKeysUpdated) onKeysUpdated();
+      } else {
+        setDsTestResult({ ok: false, message: data.detail || 'Connection failed' });
+      }
+    } catch (e) {
+      setDsTestResult({ ok: false, message: 'Test failed' });
+      console.error(e);
+    } finally {
+      setDsTesting(false);
+    }
+  };
+
+  const runDeepSeekFetch = async () => {
+    setDsFetching(true);
+    setDsFetchResult(null);
+    try {
+      const res = await authFetch('/api/deepseek-web/fetch', { method: 'POST' });
+      const data = await safeJson(res);
+      if (data.success) {
+        setDsFetchResult({
+          ok: true,
+          message: `Token found: ${data.masked}${data.has_session ? ' · session id found' : ''}`
+        });
+        await fetchKeys();
+        if (onKeysUpdated) onKeysUpdated();
+      } else {
+        setDsFetchResult({ ok: false, message: data.detail || 'No token found' });
+      }
+    } catch (e) {
+      setDsFetchResult({ ok: false, message: 'Browser scan failed' });
+      console.error(e);
+    } finally {
+      setDsFetching(false);
+      setDsConfirm(false);
     }
   };
 
@@ -362,7 +419,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
   }, [keysData, selectedProvider]);
 
   return (
-    <ModalWrapper title="Multi-Provider Key Manager" icon={Key} onClose={onClose} closeDisabled={anySigningIn}>
+    <ModalWrapper title="Providers" icon={Key} onClose={onClose} closeDisabled={anySigningIn}>
       <p className="text-xs text-slate-500 dark:text-slate-400">
         Configure single or multiple keys per provider. The router rotates requests across multiple keys in round-robin to maximize throughput and avoid rate limits.
       </p>
@@ -372,12 +429,17 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
           const isSelected = selectedProvider === p.id;
           const meta = providerMeta[p.id] || { name: p.name, short: p.id, color: '#ff6b35' };
           const hasKeys = p.count > 0;
+          const isDisabled = Boolean(p.disabled);
+          const disabledReason = p.disabled_reason || 'Kiro is temporarily disabled and will be continued.';
           return (
             <button
               key={p.id}
               type="button"
               disabled={anySigningIn}
+              aria-disabled={isDisabled}
+              title={isDisabled ? disabledReason : undefined}
               onClick={() => {
+                if (isDisabled) return;
                 setSelectedProvider(p.id);
                 setKeyInput('');
                 setEditingIndex(null);
@@ -386,9 +448,11 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                 borderColor: isSelected ? meta.color : undefined,
                 boxShadow: isSelected ? `0 0 12px ${meta.color}33` : undefined
               }}
-              className={`p-2.5 rounded-2xl text-center transition-all flex flex-col items-center justify-center gap-1.5 border neu-button disabled:opacity-40 disabled:pointer-events-none ${isSelected
-                ? 'bg-black/5 dark:bg-white/10 text-slate-900 dark:text-white font-semibold'
-                : 'bg-slate-100 dark:bg-white/5 border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              className={`p-2.5 rounded-2xl text-center transition-all flex flex-col items-center justify-center gap-1.5 border neu-button disabled:opacity-40 disabled:pointer-events-none ${isDisabled
+                ? 'opacity-50 cursor-not-allowed grayscale'
+                : isSelected
+                  ? 'bg-black/5 dark:bg-white/10 text-slate-900 dark:text-white font-semibold'
+                  : 'bg-slate-100 dark:bg-white/5 border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                 }`}
             >
               <div
@@ -399,12 +463,14 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
               </div>
               <div className="text-[11px] font-semibold tracking-tight">{meta.short}</div>
               <span
-                className={`text-[9px] px-1.5 py-0.5 rounded-full font-mono ${hasKeys
-                  ? 'bg-black/5 dark:bg-white/10 text-slate-700 dark:text-slate-300 font-semibold'
-                  : 'text-slate-400 dark:text-slate-500'
+                className={`text-[9px] px-1.5 py-0.5 rounded-full font-mono ${isDisabled
+                  ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 font-semibold'
+                  : hasKeys
+                    ? 'bg-black/5 dark:bg-white/10 text-slate-700 dark:text-slate-300 font-semibold'
+                    : 'text-slate-400 dark:text-slate-500'
                   }`}
               >
-                {hasKeys ? `${p.count} key${p.count > 1 ? 's' : ''}` : 'No key'}
+                {isDisabled ? 'Paused' : hasKeys ? `${p.count} key${p.count > 1 ? 's' : ''}` : 'No key'}
               </span>
             </button>
           );
@@ -429,7 +495,9 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                   </span>
                 </div>
                 <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                  {currentMeta.multi ? 'Supports multi-key pool rotation (Round Robin)' : 'Single key provider'}
+                  {selectedProvider === 'DeepSeek Web'
+                    ? 'Session token provider (read-only once saved)'
+                    : currentMeta.multi ? 'Supports multi-key pool rotation (Round Robin)' : 'Single key provider'}
                 </p>
               </div>
             </div>
@@ -440,7 +508,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
 
           <div>
             <div className="text-[10px] uppercase text-slate-500 dark:text-slate-400 font-bold tracking-wider mb-1.5 flex items-center justify-between">
-              <span>Configured Keys ({configuredKeys.length})</span>
+              <span>{selectedProvider === 'DeepSeek Web' ? 'Saved token' : `Configured Keys (${configuredKeys.length})`}</span>
             </div>
             {configuredKeys.length > 0 ? (
               <div className="flex flex-wrap gap-2">
@@ -456,7 +524,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                     >
                       <Key className={`w-3 h-3 ${isEditingThis ? 'text-[#ff6b35]' : 'text-slate-400'}`} />
                       <span>{k}</span>
-                      {selectedProvider !== 'Kiro' && selectedProvider !== 'Antigravity' && (
+                      {selectedProvider !== 'Kiro' && selectedProvider !== 'Antigravity' && selectedProvider !== 'DeepSeek Web' && (
                         <>
                           <button
                             type="button"
@@ -488,7 +556,9 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
               </div>
             ) : (
               <div className="text-xs text-slate-400 dark:text-slate-500 italic py-1">
-                No keys configured yet. Paste a key below to connect {currentMeta.name}.
+                {selectedProvider === 'DeepSeek Web'
+                  ? 'No token configured yet. Choose an option below to connect DeepSeek Web.'
+                  : `No keys configured yet. Paste a key below to connect ${currentMeta.name}.`}
               </div>
             )}
           </div>
@@ -556,6 +626,186 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                     </p>
                   )}
                 </div>
+              </div>
+            ) : selectedProvider === 'DeepSeek Web' ? (
+              <div className="space-y-4">
+                <div>
+                  <div className="text-[10px] uppercase text-slate-500 dark:text-slate-400 font-bold tracking-wider mb-1.5">
+                    Current token (read-only)
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <input
+                      readOnly
+                      value={configuredKeys[0] || ''}
+                      placeholder="No token configured"
+                      className="flex-1 min-w-[140px] px-3.5 py-2 text-xs font-mono rounded-xl bg-slate-200/70 dark:bg-white/5 border border-black/10 dark:border-white/10 text-slate-600 dark:text-slate-300 cursor-default focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={testDeepSeekWeb}
+                      disabled={dsTesting}
+                      className="px-3 py-2 rounded-xl text-white text-xs font-semibold transition disabled:opacity-40 flex items-center gap-1.5"
+                      style={{ backgroundColor: '#4D6BFE' }}
+                    >
+                      {dsTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                      {dsTesting ? 'Testing' : 'Test'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleUpdate('clear')}
+                      disabled={configuredKeys.length === 0}
+                      className="px-3 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 disabled:opacity-30 text-rose-600 dark:text-rose-400 text-xs font-semibold transition"
+                      title="Remove the saved token from .env"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <p className="mt-1.5 text-[10px] text-slate-500 dark:text-slate-400">
+                    {currentProviderInfo?.source && currentProviderInfo.source !== 'none'
+                      ? <>Active source: <span className="font-mono break-all">{currentProviderInfo.source}</span></>
+                      : 'Used as the Authorization bearer token for chat.deepseek.com and never shown in full.'}
+                  </p>
+                  {dsTestResult && (
+                    <p className={`mt-1 text-[11px] font-semibold ${dsTestResult.ok ? 'text-[#00f5a0]' : 'text-rose-500'}`}>
+                      {dsTestResult.message}
+                    </p>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {[
+                    ['fetch', 'Fetch from browser'],
+                    ['manual', 'Paste token'],
+                    ['steps', 'How to get it']
+                  ].map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => {
+                        setDsMode(id);
+                        setDsConfirm(false);
+                        setDsFetchResult(null);
+                      }}
+                      className={`px-3 py-2 rounded-xl text-xs font-semibold transition border ${dsMode === id
+                        ? 'bg-[#4D6BFE]/15 border-[#4D6BFE]/60 text-[#4D6BFE] dark:text-white'
+                        : 'bg-white dark:bg-white/5 border-black/10 dark:border-white/10 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {dsMode === 'fetch' && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-slate-600 dark:text-slate-400">
+                      Scan Brave, Chrome and Chromium profiles on this machine for a signed-in chat.deepseek.com
+                      session and read its <span className="font-mono">userToken</span>.
+                    </p>
+                    {!dsConfirm ? (
+                      <button
+                        type="button"
+                        onClick={() => setDsConfirm(true)}
+                        className="px-3.5 py-2 rounded-xl bg-[#4D6BFE] hover:bg-[#4D6BFE]/85 text-white text-xs font-semibold transition flex items-center gap-1.5"
+                      >
+                        <Search className="w-3.5 h-3.5" />
+                        Scan browser profiles
+                      </button>
+                    ) : (
+                      <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 space-y-2">
+                        <p className="text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+                          This starts a background task that reads the Local Storage (LevelDB) of your local browser
+                          profiles to find the chat.deepseek.com session. It only reads — nothing is modified, saved to
+                          .env or uploaded.
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={runDeepSeekFetch}
+                            disabled={dsFetching}
+                            className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-white text-xs font-semibold transition flex items-center gap-1.5"
+                          >
+                            {dsFetching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                            {dsFetching ? 'Scanning...' : 'Yes, scan now'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDsConfirm(false)}
+                            disabled={dsFetching}
+                            className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-white/10 hover:bg-slate-300 dark:hover:bg-white/15 disabled:opacity-40 text-slate-700 dark:text-slate-300 text-xs font-semibold transition"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {dsFetchResult && (
+                      <p className={`text-[11px] font-semibold ${dsFetchResult.ok ? 'text-[#00f5a0]' : 'text-rose-500'}`}>
+                        {dsFetchResult.message}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {dsMode === 'manual' && (
+                  <div className="space-y-2">
+                    <div className="text-[10px] uppercase text-slate-500 dark:text-slate-400 font-bold tracking-wider">
+                      userToken (not an API key)
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <div className="relative flex-1">
+                        <input
+                          type={showKey ? 'text' : 'password'}
+                          placeholder="Paste the userToken value from chat.deepseek.com"
+                          value={keyInput}
+                          onChange={(e) => setKeyInput(e.target.value)}
+                          className="w-full pl-3.5 pr-10 py-2 text-xs font-mono rounded-xl bg-white dark:bg-black/60 border border-black/10 dark:border-white/10 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-[#4D6BFE]/60 transition"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowKey(!showKey)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition"
+                          title={showKey ? 'Hide token' : 'Show token'}
+                        >
+                          {showKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                      <button
+                        onClick={() => handleUpdate('set')}
+                        disabled={!keyInput.trim()}
+                        className="px-3.5 py-2 rounded-xl bg-[#ff6b35] hover:bg-[#ff8c42] disabled:opacity-40 text-white text-xs font-semibold transition flex items-center justify-center gap-1"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        Save token
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                      Stored as <span className="font-mono">DEEPSEEK_WEB_TOKEN</span> in .env and applied immediately.
+                      The input is masked; the saved value is read-only above.
+                    </p>
+                  </div>
+                )}
+
+                {dsMode === 'steps' && (
+                  <div className="space-y-2">
+                    <ol className="list-decimal list-inside space-y-1.5 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+                      <li>
+                        Open{' '}
+                        <a href="https://chat.deepseek.com" target="_blank" rel="noreferrer" className="text-[#4D6BFE] hover:underline">
+                          chat.deepseek.com
+                        </a>{' '}
+                        and sign in.
+                      </li>
+                      <li>Open DevTools (F12) → <b>Application</b> tab (Chrome/Edge) or <b>Storage</b> (Firefox).</li>
+                      <li>Go to <b>Local Storage</b> → <span className="font-mono">https://chat.deepseek.com</span>.</li>
+                      <li>Find the <span className="font-mono">userToken</span> key and copy its value.</li>
+                      <li>Come back here, open <b>Paste token</b> and save it.</li>
+                    </ol>
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 italic">
+                      Treat this token like a password: it grants full access to the signed-in DeepSeek account.
+                    </p>
+                  </div>
+                )}
               </div>
             ) : (
               <>
@@ -953,6 +1203,8 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  const workingModels = allModels.filter(isWorkingModel);
+
   const slugify = (s) => s.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
 
   const matchesTask = (m, task) => {
@@ -995,10 +1247,10 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
     { id: 'moe', label: 'MoE', icon: Layers },
   ];
 
-  const availableProviders = ['ALL', ...Array.from(new Set(allModels.map(m => m.provider).filter(Boolean)))];
+  const availableProviders = ['ALL', ...Array.from(new Set(workingModels.map(m => m.provider).filter(Boolean)))];
 
   const getTaskCount = (task) => {
-    return allModels.filter(m =>
+    return workingModels.filter(m =>
       matchesTask(m, task) &&
       (providerFilter === 'ALL' || (m.provider || '').toUpperCase() === providerFilter.toUpperCase()) &&
       !models.includes(m.id)
@@ -1006,14 +1258,14 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
   };
 
   const getProviderCount = (prov) => {
-    return allModels.filter(m =>
+    return workingModels.filter(m =>
       (prov === 'ALL' || (m.provider || '').toUpperCase() === prov.toUpperCase()) &&
       matchesTask(m, taskFilter) &&
       !models.includes(m.id)
     ).length;
   };
 
-  const filtered = allModels.filter(m =>
+  const filtered = workingModels.filter(m =>
     matchesTask(m, taskFilter) &&
     (providerFilter === 'ALL' || (m.provider || '').toUpperCase() === providerFilter.toUpperCase()) &&
     m.id.toLowerCase().includes(search.toLowerCase()) &&
@@ -1037,6 +1289,10 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
   };
 
   const unavailableIds = models.filter(isModelUnavailable);
+  const workingModelIds = new Set(workingModels.map(m => m.id.toLowerCase()));
+  const visibleModels = models
+    .map((id, index) => ({ id, index }))
+    .filter(({ id }) => workingModelIds.has(id.toLowerCase()));
 
   const handleRemoveUnavailable = () => {
     if (unavailableIds.length === 0) return;
@@ -1205,10 +1461,10 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
       <div className="space-y-2.5">
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <label className="text-[11px] uppercase font-bold text-slate-500 dark:text-slate-400 tracking-wider">
-            Models <span className="normal-case text-slate-400">({models.length}){strategy === 'fallback' ? ' — first = primary' : ''}</span>
+            Models <span className="normal-case text-slate-400">({visibleModels.length} working){strategy === 'fallback' ? ' — first = primary' : ''}</span>
           </label>
 
-          {models.length > 1 && (
+          {(visibleModels.length > 1 || unavailableIds.length > 0) && (
             <div className="flex items-center gap-1.5">
               {showSortWarning ? (
                 <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-amber-500/10 border border-amber-500/40 text-[10px] animate-fade-in shadow-sm">
@@ -1428,9 +1684,8 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
               }
             }}
           >
-            {models.map((id, i) => {
+            {visibleModels.map(({ id, index: i }, visibleIndex) => {
               const m = allModels.find(x => x.id === id || x.id.toLowerCase() === id.toLowerCase());
-              const isUnavailable = isModelUnavailable(id);
               const isHighLatency = m && m.healthy && m.latency > maxLatencyThreshold;
               const isDragging = draggedIndex === i;
               const isDragOver = dragOverIndex === i && draggedIndex !== null && draggedIndex !== i;
@@ -1455,8 +1710,8 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
                       <GripVertical className="w-3.5 h-3.5" />
                     </div>
                     {strategy === 'fallback' && (
-                      <span className={`text-[8.5px] sm:text-[9.5px] font-bold shrink-0 w-11 sm:w-13 text-center ${i === 0 ? 'text-[#ff6b35]' : 'text-slate-400'}`}>
-                        {i === 0 ? 'PRIMARY' : `FB ${i}`}
+                      <span className={`text-[8.5px] sm:text-[9.5px] font-bold shrink-0 w-11 sm:w-13 text-center ${visibleIndex === 0 ? 'text-[#ff6b35]' : 'text-slate-400'}`}>
+                        {visibleIndex === 0 ? 'PRIMARY' : `FB ${visibleIndex}`}
                       </span>
                     )}
                     <ModelIcon model={id} provider={m?.provider} className="h-3.5 sm:h-4 w-auto max-w-[34px] sm:max-w-[42px] max-h-3.5 sm:max-h-4 shrink-0" />
@@ -1466,14 +1721,7 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
                   </div>
 
                   <div className="flex items-center gap-1 sm:gap-2 shrink-0 ml-1 sm:ml-2">
-                    {isUnavailable ? (
-                      <span
-                        className="inline-flex items-center gap-0.5 sm:gap-1 px-1.5 py-0.5 rounded bg-rose-500/20 border border-rose-500/40 text-rose-500 dark:text-rose-400 text-[8px] sm:text-[9px] font-bold font-mono shrink-0 animate-pulse"
-                        title="Model unavailable after background probing"
-                      >
-                        ! <span className="hidden sm:inline">Unavailable</span><span className="sm:hidden">Unavail</span>
-                      </span>
-                    ) : isHighLatency ? (
+                    {isHighLatency ? (
                       <span
                         className="inline-flex items-center gap-0.5 sm:gap-1 px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-500 dark:text-amber-400 text-[8px] sm:text-[9px] font-bold font-mono shrink-0"
                         title={`High latency: ${m.latency}s > ${maxLatencyThreshold}s`}
@@ -1501,6 +1749,11 @@ function ComboEditor({ combo, allModels, onSave, onCancel, isNew, maxLatencyThre
                 </div>
               );
             })}
+            {visibleModels.length === 0 && (
+              <div className="text-center py-4 text-xs text-slate-500">
+                No working models in this combo. Hidden entries return after a successful probe.
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1625,6 +1878,8 @@ export function CombosModal({ stats, onClose, onCombosUpdated }) {
         )}
         {combos.map(c => {
           const strat = STRATEGY_LABELS[c.strategy] || STRATEGY_LABELS.fallback;
+          const workingModels = c.models.filter(m => !(c.unavailable_models || []).includes(m));
+          const hiddenCount = c.models.length - workingModels.length;
           return (
             <div key={c.name} className="flex items-center gap-3 p-3 rounded-2xl bg-slate-100 dark:bg-white/[0.03] border border-black/5 dark:border-white/5">
               <div className="flex-1 min-w-0">
@@ -1632,14 +1887,6 @@ export function CombosModal({ stats, onClose, onCombosUpdated }) {
                   <code className="text-xs font-mono font-semibold text-slate-800 dark:text-slate-200">{c.name}</code>
                   <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border ${strat.bg} ${strat.color}`}>{strat.label}</span>
 
-                  {c.has_unavailable && (
-                    <span
-                      className="inline-flex items-center justify-center w-4 h-4 rounded bg-rose-500/20 border border-rose-500/50 text-rose-500 dark:text-rose-400 font-black text-[11px] font-mono shadow-[0_0_8px_rgba(244,63,94,0.4)] animate-pulse cursor-help shrink-0"
-                      title={`⚠️ Unavailable model(s) after probing (${c.unavailable_models?.length}): ${c.unavailable_models?.join(', ')}`}
-                    >
-                      !
-                    </span>
-                  )}
                   {c.has_high_latency && (
                     <span
                       className="inline-flex items-center justify-center w-4 h-4 rounded bg-amber-500/20 border border-amber-500/50 text-amber-500 dark:text-amber-400 font-black text-[11px] font-mono shadow-[0_0_8px_rgba(245,158,11,0.35)] cursor-help shrink-0"
@@ -1650,29 +1897,34 @@ export function CombosModal({ stats, onClose, onCombosUpdated }) {
                   )}
                 </div>
                 <div className="flex flex-wrap gap-1">
-                  {c.models.slice(0, 4).map((m, i) => {
-                    const isUnavail = c.unavailable_models?.includes(m);
+                  {workingModels.slice(0, 4).map((m, i) => {
                     const isHighLat = c.high_latency_models?.some(h => h.id === m);
                     return (
                       <span
                         key={m}
-                        className={`text-[9px] font-mono px-1.5 py-0.5 rounded flex items-center gap-1 ${isUnavail
-                          ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40 font-semibold'
-                          : isHighLat
-                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40 font-semibold'
-                            : i === 0 && c.strategy === 'fallback'
-                              ? 'bg-[#ff6b35]/15 text-[#ff6b35]'
-                              : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-slate-400'
+                        className={`text-[9px] font-mono px-1.5 py-0.5 rounded flex items-center gap-1 ${isHighLat
+                          ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40 font-semibold'
+                          : i === 0 && c.strategy === 'fallback'
+                            ? 'bg-[#ff6b35]/15 text-[#ff6b35]'
+                            : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-slate-400'
                           }`}
-                        title={isUnavail ? 'Unavailable after background probing' : isHighLat ? `High latency (>${maxLatencyThreshold}s)` : m}
+                        title={isHighLat ? `High latency (>${maxLatencyThreshold}s)` : m}
                       >
-                        {isUnavail && <span className="text-rose-400 font-black">!</span>}
-                        {isHighLat && !isUnavail && <span className="text-amber-400 font-black">?</span>}
+                        {isHighLat && <span className="text-amber-400 font-black">?</span>}
                         {m.split('/').pop()}
                       </span>
                     );
                   })}
-                  {c.models.length > 4 && <span className="text-[9px] text-slate-400">+{c.models.length - 4} more</span>}
+                  {workingModels.length > 4 && <span className="text-[9px] text-slate-400">+{workingModels.length - 4} more</span>}
+                  {workingModels.length === 0 && <span className="text-[9px] text-slate-400 italic">No working models</span>}
+                  {hiddenCount > 0 && (
+                    <span
+                      className="text-[9px] text-slate-400"
+                      title="Hidden until a probe confirms they are working again"
+                    >
+                      +{hiddenCount} hidden
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">

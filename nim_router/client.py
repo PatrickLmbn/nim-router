@@ -4,6 +4,7 @@ import re
 import sys
 import time
 import anyio
+from datetime import datetime, timezone
 import httpx
 from fastapi import HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -17,10 +18,11 @@ from nim_router.config import (
     BAI_API_BASE,
     get_first_token_timeout,
     get_stream_idle_timeout,
+    get_kiro_enabled,
 )
 from nim_router.logger import logger
 from nim_router.schemas import ChatCompletionRequest
-from nim_router.catalog import is_banned_model, load_fallback_models
+from nim_router.catalog import is_banned_model
 from nim_router.kiro import KiroClient, KiroAuth, resolve_refresh_token, kiro_upstream_model_id
 from nim_router.antigravity import (
     AntigravityClient,
@@ -30,11 +32,14 @@ from nim_router.antigravity import (
 from nim_router.antigravity import resolve_refresh_token as resolve_antigravity_refresh_token
 from nim_router.deepseek_web import (
     DEEPSEEK_WEB_PREFIX,
+    DeepSeekAuthError,
+    DeepSeekUpstreamError,
     deepseek_web_upstream_model_id,
     list_models as list_deepseek_web_models,
     stream_chat_completion as stream_deepseek_web,
     create_chat_completion as create_deepseek_web_completion,
 )
+from nim_router.parking import is_parked, note_failure, note_success
 
 import email.utils
 from typing import Callable, Optional
@@ -208,23 +213,132 @@ async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, se
         except Exception:
             return False, 999.0
 
+_INTERNAL_MODEL_IDS = re.compile(r"^chat_\d+$")
+
+_PERMANENT_PROBE_MARKERS = ("NOT_FOUND", "INVALID_ARGUMENT", "HTTP 400", "HTTP 404")
+_QUOTA_PROBE_MARKERS = (
+    "MONTHLY_REQUEST_COUNT",
+    "QUOTA_EXHAUSTED",
+    "RESOURCE_EXHAUSTED",
+    "reached the limit",
+    "Resets in",
+    "reset after",
+    "reset in",
+)
+_TRANSIENT_PROBE_MARKERS = (
+    "MODEL_CAPACITY_EXHAUSTED",
+    "UNAVAILABLE",
+    "HTTP 502",
+    "HTTP 503",
+    "timed out",
+    "Timeout",
+    "ConnectError",
+    "connection",
+)
+
+
+def _skip_probe_model(model_id: str) -> bool:
+    mid = (model_id or "").strip().lower()
+    if not mid:
+        return True
+    if mid.endswith("-disabled"):
+        return True
+    return bool(_INTERNAL_MODEL_IDS.match(mid.split("/")[-1]))
+
+
+def _quota_reset_seconds(text: str) -> float:
+    match = re.search(r"(?:Resets in|reset after|reset in)\s+(\d+)h(\d+)m(\d+)s", text)
+    if match:
+        hours, minutes, seconds = (int(part) for part in match.groups())
+        return max(60.0, hours * 3600.0 + minutes * 60.0 + seconds)
+    match = re.search(r"(?:Resets in|reset after|reset in)\s+(\d+)h(\d+)m", text)
+    if match:
+        hours, minutes = (int(part) for part in match.groups())
+        return max(60.0, hours * 3600.0 + minutes * 60.0)
+    match = re.search(r'"quotaResetTimeStamp"\s*:\s*"([^"]+)"', text)
+    if match:
+        try:
+            stamp = match.group(1).replace("Z", "+00:00")
+            reset_at = datetime.fromisoformat(stamp)
+            if reset_at.tzinfo is None:
+                reset_at = reset_at.replace(tzinfo=timezone.utc)
+            return max(60.0, (reset_at - datetime.now(timezone.utc)).total_seconds())
+        except (TypeError, ValueError):
+            pass
+    return 3600.0
+
+
+def _next_month_seconds() -> float:
+    now = datetime.now(timezone.utc)
+    year, month = (now.year + 1, 1) if now.month == 12 else (now.year, now.month + 1)
+    reset_at = datetime(year, month, 1, tzinfo=timezone.utc)
+    return max(3600.0, (reset_at - now).total_seconds())
+
+
+def _park_quota_failure(provider: str, model_id: str, text: str) -> bool:
+    if provider == "Kiro" and (
+        "MONTHLY_REQUEST_COUNT" in text or "ServiceQuotaExceededException" in text
+    ):
+        seconds = _next_month_seconds()
+        note_failure("provider:Kiro", seconds, "monthly quota", threshold=1)
+        note_failure(f"model:{model_id}", seconds, "monthly quota", threshold=1)
+        return True
+    if any(
+        marker in text
+        for marker in ("RESOURCE_EXHAUSTED", "QUOTA_EXHAUSTED", "Individual quota reached")
+    ):
+        seconds = _quota_reset_seconds(text)
+        note_failure(f"model:{model_id}", seconds, "quota", threshold=1)
+        return True
+    return False
+
+
+def _classify_probe_failure(provider: str, model_id: str, exc: Exception) -> str:
+    text = str(exc)
+    key = f"model:{model_id}"
+    if "MONTHLY_REQUEST_COUNT" in text or "You have reached the limit" in text:
+        seconds = _next_month_seconds()
+        note_failure(key, seconds, "monthly quota", threshold=1)
+        if provider == "Kiro":
+            note_failure("provider:Kiro", seconds, "monthly quota", threshold=1)
+        return f"monthly quota ({seconds / 3600.0:.1f}h)"
+    if any(marker in text for marker in _QUOTA_PROBE_MARKERS):
+        seconds = _quota_reset_seconds(text)
+        note_failure(key, seconds, "quota", threshold=1)
+        return f"quota ({seconds / 3600.0:.1f}h)"
+    if any(marker in text for marker in _TRANSIENT_PROBE_MARKERS):
+        note_failure(key, 300.0, "transient", threshold=1)
+        return "transient"
+    if any(marker in text for marker in _PERMANENT_PROBE_MARKERS):
+        note_failure(key, 6 * 3600.0, "permanent", threshold=2)
+        return "permanent"
+    note_failure(key, 600.0, "unknown", threshold=2)
+    return "unknown"
+
+
 async def discover_kiro_models(
     latencies_dict: dict,
     kiro_refresh_token: str = "",
     verify: bool = True,
 ) -> list[dict]:
+    if not get_kiro_enabled():
+        logger.info("Kiro probe skipped: provider is temporarily disabled.")
+        return []
     kiro_client, kiro_auth = get_kiro_client()
     if kiro_refresh_token:
         kiro_auth.refresh_token = kiro_refresh_token.strip()
     if not kiro_auth.configured:
         logger.info("Kiro probe skipped: no refresh token configured.")
         return []
+    if is_parked("provider:Kiro"):
+        logger.info("Kiro probe skipped: monthly quota is exhausted until it resets.")
+        return []
 
     catalogue = await kiro_client.list_models()
     discovered: list[dict] = []
     for model in catalogue:
         mid = model.get("id")
-        if not mid or is_banned_model(mid):
+        if not mid or is_banned_model(mid) or _skip_probe_model(mid):
             continue
         discovered.append(model)
 
@@ -234,6 +348,8 @@ async def discover_kiro_models(
     verified: list[dict] = []
     for model in discovered:
         mid = model.get("id", "")
+        if is_parked(f"model:{mid}"):
+            continue
         try:
             t0 = time.time()
             result = await asyncio.wait_for(
@@ -248,8 +364,10 @@ async def discover_kiro_models(
             if result.get("choices"):
                 latencies_dict[mid] = elapsed
                 verified.append(model)
+                note_success(f"model:{mid}")
         except Exception as e:
-            logger.warning(f"Kiro model {mid} failed probe: {e}")
+            classification = _classify_probe_failure("Kiro", mid, e)
+            logger.warning(f"Kiro model {mid} failed probe ({classification}): {e}")
 
     logger.success(f"Kiro: {len(verified)}/{len(discovered)} models verified.")
     return verified
@@ -271,7 +389,7 @@ async def discover_antigravity_models(
     discovered: list[dict] = []
     for model in catalogue:
         mid = model.get("id")
-        if not mid or is_banned_model(mid):
+        if not mid or is_banned_model(mid) or _skip_probe_model(mid):
             continue
         discovered.append(model)
 
@@ -281,6 +399,8 @@ async def discover_antigravity_models(
     verified: list[dict] = []
     for model in discovered:
         mid = model.get("id", "")
+        if is_parked(f"model:{mid}"):
+            continue
         try:
             t0 = time.time()
             result = await asyncio.wait_for(
@@ -295,8 +415,10 @@ async def discover_antigravity_models(
             if result.get("choices"):
                 latencies_dict[mid] = elapsed
                 verified.append(model)
+                note_success(f"model:{mid}")
         except Exception as e:
-            logger.warning(f"Antigravity model {mid} failed probe: {e}")
+            classification = _classify_probe_failure("Antigravity", mid, e)
+            logger.warning(f"Antigravity model {mid} failed probe ({classification}): {e}")
 
     logger.success(f"Antigravity: {len(verified)}/{len(discovered)} models verified.")
     return verified
@@ -506,37 +628,20 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
         kiro_verified = await discover_kiro_models(
             latencies_dict, kiro_refresh_token, verify=True
         )
-        for m in kiro_discovered:
-            mid = m.get("id")
-            if not mid: continue
-            if mid in latencies_dict: continue
-            latencies_dict[mid] = 999.0
         all_discovered.extend(kiro_verified)
-        for m in kiro_discovered:
-            mid = m.get("id")
-            if not mid: continue
-            if any(existing.get("id") == mid for existing in kiro_verified): continue
-            all_discovered.append(m)
 
     if antigravity_discovered:
         antigravity_verified = await discover_antigravity_models(
             latencies_dict, antigravity_refresh_token, verify=True
         )
-        for m in antigravity_discovered:
-            mid = m.get("id")
-            if not mid: continue
-            if mid in latencies_dict: continue
-            latencies_dict[mid] = 999.0
         all_discovered.extend(antigravity_verified)
-        for m in antigravity_discovered:
-            mid = m.get("id")
-            if not mid: continue
-            if any(existing.get("id") == mid for existing in antigravity_verified): continue
-            all_discovered.append(m)
 
     deepseek_web_discovered: list[dict] = []
     try:
         deepseek_web_discovered = await list_deepseek_web_models()
+    except DeepSeekAuthError as e:
+        note_failure("provider:DeepSeek Web", 300.0, "authentication", threshold=1)
+        logger.info(f"DeepSeek Web model discovery skipped: {e}")
     except Exception as e:
         logger.info(f"DeepSeek Web model discovery skipped: {e}")
 
@@ -551,10 +656,7 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
         all_discovered.append(m)
 
     if not all_discovered:
-        all_discovered = load_fallback_models(latencies_dict)
-        for m in all_discovered:
-            if "provider" not in m:
-                m["provider"] = "NVIDIA"
+        logger.warning("No models passed endpoint probing; keeping the existing pool unchanged.")
 
     all_discovered.sort(key=lambda m: latencies_dict.get(m.get("id", ""), 999.0))
     logger.success(f"Multi-provider model discovery complete: {len(all_discovered)} active models in pool.")
@@ -923,6 +1025,11 @@ async def call_kiro_endpoint(
     request: ChatCompletionRequest,
     on_usage: Optional[Callable[[int, int, int, bool, bool], None]] = None
 ) -> Response:
+    if not get_kiro_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Kiro is temporarily disabled and will be continued.",
+        )
     kiro_client, auth = get_kiro_client()
     if not auth.configured:
         raise HTTPException(
@@ -941,6 +1048,9 @@ async def call_kiro_endpoint(
                     logger.warning(f"Kiro stream read error for {model_id}: {exc}")
                     return HTTPException(status_code=504, detail=f"Stream connection timed out from Kiro model ({model_id}).")
                 err_msg = str(exc)
+                if _park_quota_failure("Kiro", model_id, err_msg):
+                    logger.warning(f"Kiro monthly quota exhausted for {model_id}; parking Kiro until the quota resets.")
+                    return HTTPException(status_code=429, detail=err_msg)
                 match = re.search(r"HTTP (\d{3})", err_msg)
                 status = int(match.group(1)) if match else 0
                 if status in (400, 402, 404, 429, 500, 502, 503):
@@ -1056,6 +1166,10 @@ async def call_kiro_endpoint(
     except HTTPException:
         raise
     except Exception as e:
+        err_msg = str(e)
+        if _park_quota_failure("Kiro", model_id, err_msg):
+            logger.warning(f"Kiro monthly quota exhausted for {model_id}; parking Kiro until the quota resets.")
+            raise HTTPException(status_code=429, detail=err_msg)
         logger.error(f"Kiro request failed for {model_id}: {e}")
         raise HTTPException(status_code=502, detail=f"Kiro request failed: {e}")
 
@@ -1083,6 +1197,9 @@ async def call_antigravity_endpoint(
                     logger.warning(f"Antigravity stream read error for {model_id}: {exc}")
                     return HTTPException(status_code=504, detail=f"Stream connection timed out from Antigravity model ({model_id}).")
                 err_msg = str(exc)
+                if _park_quota_failure("Antigravity", model_id, err_msg):
+                    logger.warning(f"Antigravity quota exhausted for {model_id}; parking it until the quota resets.")
+                    return HTTPException(status_code=429, detail=err_msg)
                 match = re.search(r"HTTP (\d{3})", err_msg)
                 status = int(match.group(1)) if match else 0
                 if status in (400, 402, 404, 429, 500, 502, 503):
@@ -1196,6 +1313,10 @@ async def call_antigravity_endpoint(
     except HTTPException:
         raise
     except Exception as e:
+        err_msg = str(e)
+        if _park_quota_failure("Antigravity", model_id, err_msg):
+            logger.warning(f"Antigravity quota exhausted for {model_id}; parking it until the quota resets.")
+            raise HTTPException(status_code=429, detail=err_msg)
         logger.error(f"Antigravity request failed for {model_id}: {e}")
         raise HTTPException(status_code=502, detail=f"Antigravity request failed: {e}")
 
@@ -1209,7 +1330,7 @@ async def call_deepseek_web_endpoint(
     credentials = resolve_ds_credentials()
     if not credentials["token"]:
         raise HTTPException(
-            status_code=503,
+            status_code=401,
             detail="DeepSeek Web is not configured. Set DEEPSEEK_WEB_TOKEN or sign in to chat.deepseek.com in a local browser.",
         )
 
@@ -1222,6 +1343,13 @@ async def call_deepseek_web_endpoint(
             def stream_failure(exc: Exception) -> HTTPException:
                 if isinstance(exc, HTTPException):
                     return exc
+                if isinstance(exc, DeepSeekAuthError):
+                    logger.error(f"DeepSeek Web authentication failed for {model_id}: {exc}")
+                    return HTTPException(status_code=401, detail=str(exc))
+                if isinstance(exc, DeepSeekUpstreamError):
+                    status = exc.status_code if exc.status_code in (400, 401, 402, 403, 404, 429, 500, 502, 503) else 502
+                    logger.error(f"DeepSeek Web stream error for {model_id}: {exc}")
+                    return HTTPException(status_code=status, detail=str(exc))
                 if isinstance(exc, (httpx.ReadTimeout, httpx.RequestError)):
                     logger.warning(f"DeepSeek Web stream read error for {model_id}: {exc}")
                     return HTTPException(status_code=504, detail=f"Stream connection timed out from DeepSeek Web ({model_id}).")
@@ -1338,6 +1466,12 @@ async def call_deepseek_web_endpoint(
         return Response(content=json.dumps(result), media_type="application/json", status_code=200)
     except HTTPException:
         raise
+    except DeepSeekAuthError as e:
+        logger.error(f"DeepSeek Web authentication failed for {model_id}: {e}")
+        raise HTTPException(status_code=401, detail=str(e))
+    except DeepSeekUpstreamError as e:
+        logger.error(f"DeepSeek Web request failed for {model_id}: {e}")
+        raise HTTPException(status_code=e.status_code, detail=str(e))
     except Exception as e:
         logger.error(f"DeepSeek Web request failed for {model_id}: {e}")
         raise HTTPException(status_code=502, detail=f"DeepSeek Web request failed: {e}")

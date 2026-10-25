@@ -333,7 +333,7 @@ export default function App() {
             className="px-2.5 py-1 rounded-xl bg-white dark:bg-white/5 text-slate-700 dark:text-slate-300 text-xs font-semibold hover:bg-slate-50 dark:hover:bg-white/10 transition neu-button flex items-center gap-1 border border-black/5 dark:border-transparent"
           >
             <Key className="w-3 h-3 text-[#00d2ff]" />
-            <span>Keys</span>
+            <span>Providers</span>
           </button>
           <button
             onClick={() => setEditingCombo('new')}
