@@ -32,9 +32,10 @@ _BROWSER_PROFILES = (
     "~/.config/chromium/Default",
 )
 
-_LEVELDB_TOKEN_JSON = re.compile(rb'"userToken"\s*:\s*"([A-Za-z0-9_\-]{16,})"')
-_LEVELDB_DS_SESSION_JSON = re.compile(rb'"ds_session_id"\s*:\s*"([A-Za-z0-9_\-]{16,})"')
-_LEVELDB_RUN = re.compile(rb'[A-Za-z0-9_\-]{32,256}')
+_LEVELDB_TOKEN_JSON = re.compile(rb'"userToken"\s*:\s*"([A-Za-z0-9_+\/=\.\-]{16,})"')
+_LEVELDB_DS_SESSION_JSON = re.compile(rb'"ds_session_id"\s*:\s*"([A-Za-z0-9_+\/=\.\-]{16,})"')
+_LEVELDB_RUN = re.compile(rb'[A-Za-z0-9_+\/=\.\-]{32,256}')
+_TOKEN_CHARS_RE = re.compile(rb'^[A-Za-z0-9_+\/=\.\-]{16,256}$')
 
 _TOKEN_CACHE: dict[str, Any] = {"value": "", "ds_session_id": "", "source": "", "stamp": 0.0}
 _TOKEN_TTL = 300.0
@@ -54,8 +55,18 @@ def _leveldb_binary_value(blob: bytes, key: bytes) -> str:
         idx = blob.find(key, start)
         if idx < 0:
             return ""
-        if blob[idx + len(key):idx + len(key) + 1] not in (b"s",):
-            window = blob[idx + len(key):idx + len(key) + 96]
+        next_char = blob[idx + len(key):idx + len(key) + 1]
+        if not (next_char.isalnum() or next_char == b"_"):
+            # If the value is a quoted string immediately after the key, extract it
+            q1 = blob.find(b'"', idx + len(key))
+            if 0 <= q1 - (idx + len(key)) <= 40:
+                q2 = blob.find(b'"', q1 + 1)
+                if q2 > q1 and 16 <= (q2 - q1 - 1) <= 256:
+                    val = blob[q1 + 1:q2]
+                    if _TOKEN_CHARS_RE.fullmatch(val):
+                        return val.decode("ascii", "ignore")
+            # Fallback to scanning a character run
+            window = blob[idx + len(key):idx + len(key) + 300]
             for match in _LEVELDB_RUN.finditer(window):
                 return match.group(0).decode("ascii", "ignore")
         start = idx + 1
