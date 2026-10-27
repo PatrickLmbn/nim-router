@@ -14,17 +14,21 @@ import baiSvg from '../../icons/b.ai.svg';
 import kiroSvg from '../../icons/kiro.svg';
 import antigravitySvg from '../../icons/antigravity.svg';
 import deepseekSvg from '../../icons/deepseek.svg';
+import geminiSvg from '../../icons/gemini.svg';
 
 export function resolveProvider(input) {
   if (!input) return 'NVIDIA';
   const str = String(input).trim().toLowerCase();
 
-  for (const prefix of ['[nvidia] ', '[openrouter] ', '[opencode] ', '[groq] ', '[cerebras] ', '[bai] ', '[kiro] ', '[antigravity] ', '[deepseek web] ', '[category] ']) {
+  for (const prefix of ['[nvidia] ', '[openrouter] ', '[opencode] ', '[groq] ', '[cerebras] ', '[bai] ', '[kiro] ', '[antigravity] ', '[deepseek web] ', '[gemini web] ', '[category] ']) {
     if (str.startsWith(prefix)) return resolveProvider(str.slice(prefix.length).trim());
   }
 
   if (str === 'kiro' || str.startsWith('kiro/') || str.includes('[kiro]')) {
     return 'Kiro';
+  }
+  if (str === 'gemini web' || str.startsWith('gemini-web/') || str.includes('[gemini web]')) {
+    return 'Gemini Web';
   }
   if (str === 'antigravity' || str.startsWith('antigravity/') || str.includes('[antigravity]') || str.includes('gemini-') || str.includes('claude-opus-4-6') || str.includes('claude-sonnet-4-6')) {
     return 'Antigravity';
@@ -59,7 +63,8 @@ const providerIcons = {
   BAI: { light: baiSvg, dark: baiSvg, name: 'B.AI', isSingle: true, invertDark: true },
   Kiro: { light: kiroSvg, dark: kiroSvg, name: 'Kiro', isSingle: true },
   Antigravity: { light: antigravitySvg, dark: antigravitySvg, name: 'Antigravity', isSingle: true },
-  'DeepSeek Web': { light: deepseekSvg, dark: deepseekSvg, name: 'DeepSeek Web', isSingle: true }
+  'DeepSeek Web': { light: deepseekSvg, dark: deepseekSvg, name: 'DeepSeek Web', isSingle: true },
+  'Gemini Web': { light: geminiSvg, dark: geminiSvg, name: 'Gemini Web', isSingle: true }
 };
 
 export function ModelIcon({ model, provider, className = "h-4 w-auto max-h-4" }) {

@@ -53,7 +53,7 @@ export function ModelSelectorModal({ stats, onClose, onSelectModel }) {
   const [providerFilter, setProviderFilter] = useState('ALL');
 
   const models = (stats?.models || []).filter(isWorkingModel);
-  const providers = ['ALL', 'NVIDIA', 'Groq', 'Cerebras', 'OpenRouter', 'OpenCode', 'BAI', 'Kiro', 'Antigravity', 'DeepSeek Web']
+  const providers = ['ALL', 'NVIDIA', 'Groq', 'Cerebras', 'OpenRouter', 'OpenCode', 'BAI', 'Kiro', 'Antigravity', 'DeepSeek Web', 'Gemini Web']
     .filter(p => p === 'ALL' || models.some(m => (m.provider || '').toUpperCase() === p.toUpperCase()));
 
   const filtered = models.filter(m => {
@@ -177,6 +177,12 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
   const [dsConfirm, setDsConfirm] = useState(false);
   const [dsFetching, setDsFetching] = useState(false);
   const [dsFetchResult, setDsFetchResult] = useState(null);
+  const [gwTesting, setGwTesting] = useState(false);
+  const [gwTestResult, setGwTestResult] = useState(null);
+  const [gwMode, setGwMode] = useState('fetch');
+  const [gwConfirm, setGwConfirm] = useState(false);
+  const [gwFetching, setGwFetching] = useState(false);
+  const [gwFetchResult, setGwFetchResult] = useState(null);
 
   const providerMeta = {
     NVIDIA: { name: 'NVIDIA NIM', short: 'NVIDIA', color: '#76B900', env: 'NVIDIA_API_KEYS', multi: true, placeholder: 'nvapi-...' },
@@ -187,7 +193,8 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
     BAI: { name: 'B.AI Free', short: 'B.AI', color: '#A855F7', env: 'BAI_API_KEY', multi: false, placeholder: 'bai_...' },
     Kiro: { name: 'Kiro (AWS CodeWhisperer)', short: 'Kiro', color: '#FF9900', env: 'KIRO_REFRESH_TOKEN', multi: false, placeholder: 'aor_...' },
     Antigravity: { name: 'Antigravity (Google)', short: 'Antigravity', color: '#4285F4', env: 'ANTIGRAVITY_REFRESH_TOKEN', multi: false, placeholder: '1//...' },
-    'DeepSeek Web': { name: 'DeepSeek Web', short: 'DeepSeek', color: '#4D6BFE', env: 'DEEPSEEK_WEB_TOKEN', multi: false, placeholder: 'userToken from chat.deepseek.com' }
+    'DeepSeek Web': { name: 'DeepSeek Web', short: 'DeepSeek', color: '#4D6BFE', env: 'DEEPSEEK_WEB_TOKEN', multi: false, placeholder: 'userToken from chat.deepseek.com' },
+    'Gemini Web': { name: 'Gemini Web', short: 'Gemini', color: '#4285F4', env: 'GEMINI_WEB_COOKIE', multi: false, placeholder: '__Secure-1PSID cookie from gemini.google.com' }
   };
 
   const fetchKeys = async () => {
@@ -281,6 +288,50 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
     } finally {
       setDsFetching(false);
       setDsConfirm(false);
+    }
+  };
+
+  const testGeminiWeb = async () => {
+    setGwTesting(true);
+    setGwTestResult(null);
+    try {
+      const res = await authFetch('/api/probe/gemini-web', { method: 'POST' });
+      const data = await safeJson(res);
+      if (data.success) {
+        const label = data.source ? `via ${data.source}` : 'cookie accepted';
+        setGwTestResult({ ok: true, message: `Connected ${label} · ${data.models?.length || 0} models` });
+        await fetchKeys();
+        if (onKeysUpdated) onKeysUpdated();
+      } else {
+        setGwTestResult({ ok: false, message: data.detail || 'Connection failed' });
+      }
+    } catch (e) {
+      setGwTestResult({ ok: false, message: 'Test failed' });
+      console.error(e);
+    } finally {
+      setGwTesting(false);
+    }
+  };
+
+  const runGeminiFetch = async () => {
+    setGwFetching(true);
+    setGwFetchResult(null);
+    try {
+      const res = await authFetch('/api/gemini-web/fetch', { method: 'POST' });
+      const data = await safeJson(res);
+      if (data.success) {
+        setGwFetchResult({ ok: true, message: `Cookie found: ${data.masked}` });
+        await fetchKeys();
+        if (onKeysUpdated) onKeysUpdated();
+      } else {
+        setGwFetchResult({ ok: false, message: data.detail || 'No cookie found' });
+      }
+    } catch (e) {
+      setGwFetchResult({ ok: false, message: 'Browser scan failed' });
+      console.error(e);
+    } finally {
+      setGwFetching(false);
+      setGwConfirm(false);
     }
   };
 
@@ -495,7 +546,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                   </span>
                 </div>
                 <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                  {selectedProvider === 'DeepSeek Web'
+                  {selectedProvider === 'DeepSeek Web' || selectedProvider === 'Gemini Web'
                     ? 'Session token provider (read-only once saved)'
                     : currentMeta.multi ? 'Supports multi-key pool rotation (Round Robin)' : 'Single key provider'}
                 </p>
@@ -508,7 +559,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
 
           <div>
             <div className="text-[10px] uppercase text-slate-500 dark:text-slate-400 font-bold tracking-wider mb-1.5 flex items-center justify-between">
-              <span>{selectedProvider === 'DeepSeek Web' ? 'Saved token' : `Configured Keys (${configuredKeys.length})`}</span>
+              <span>{selectedProvider === 'DeepSeek Web' ? 'Saved token' : selectedProvider === 'Gemini Web' ? 'Saved cookie' : `Configured Keys (${configuredKeys.length})`}</span>
             </div>
             {configuredKeys.length > 0 ? (
               <div className="flex flex-wrap gap-2">
@@ -524,7 +575,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                     >
                       <Key className={`w-3 h-3 ${isEditingThis ? 'text-[#ff6b35]' : 'text-slate-400'}`} />
                       <span>{k}</span>
-                      {selectedProvider !== 'Kiro' && selectedProvider !== 'Antigravity' && selectedProvider !== 'DeepSeek Web' && (
+                      {selectedProvider !== 'Kiro' && selectedProvider !== 'Antigravity' && selectedProvider !== 'DeepSeek Web' && selectedProvider !== 'Gemini Web' && (
                         <>
                           <button
                             type="button"
@@ -558,7 +609,9 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
               <div className="text-xs text-slate-400 dark:text-slate-500 italic py-1">
                 {selectedProvider === 'DeepSeek Web'
                   ? 'No token configured yet. Choose an option below to connect DeepSeek Web.'
-                  : `No keys configured yet. Paste a key below to connect ${currentMeta.name}.`}
+                  : selectedProvider === 'Gemini Web'
+                    ? 'No cookie configured yet. Choose an option below to connect Gemini Web.'
+                    : `No keys configured yet. Paste a key below to connect ${currentMeta.name}.`}
               </div>
             )}
           </div>
@@ -803,6 +856,185 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                     </ol>
                     <p className="text-[10px] text-slate-500 dark:text-slate-400 italic">
                       Treat this token like a password: it grants full access to the signed-in DeepSeek account.
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : selectedProvider === 'Gemini Web' ? (
+              <div className="space-y-4">
+                <div>
+                  <div className="text-[10px] uppercase text-slate-500 dark:text-slate-400 font-bold tracking-wider mb-1.5">
+                    Current cookie (read-only)
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <input
+                      readOnly
+                      value={configuredKeys[0] || ''}
+                      placeholder="No cookie configured"
+                      className="flex-1 min-w-[140px] px-3.5 py-2 text-xs font-mono rounded-xl bg-slate-200/70 dark:bg-white/5 border border-black/10 dark:border-white/10 text-slate-600 dark:text-slate-300 cursor-default focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={testGeminiWeb}
+                      disabled={gwTesting}
+                      className="px-3 py-2 rounded-xl text-white text-xs font-semibold transition disabled:opacity-40 flex items-center gap-1.5"
+                      style={{ backgroundColor: '#4285F4' }}
+                    >
+                      {gwTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                      {gwTesting ? 'Testing' : 'Test'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleUpdate('clear')}
+                      disabled={configuredKeys.length === 0}
+                      className="px-3 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 disabled:opacity-30 text-rose-600 dark:text-rose-400 text-xs font-semibold transition"
+                      title="Remove the saved cookie from .env"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <p className="mt-1.5 text-[10px] text-slate-500 dark:text-slate-400">
+                    {currentProviderInfo?.source && currentProviderInfo.source !== 'none'
+                      ? <>Active source: <span className="font-mono break-all">{currentProviderInfo.source}</span></>
+                      : 'Used as the session cookie for gemini.google.com and never shown in full.'}
+                  </p>
+                  {gwTestResult && (
+                    <p className={`mt-1 text-[11px] font-semibold ${gwTestResult.ok ? 'text-[#00f5a0]' : 'text-rose-500'}`}>
+                      {gwTestResult.message}
+                    </p>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {[
+                    ['fetch', 'Fetch from browser'],
+                    ['manual', 'Paste cookie'],
+                    ['steps', 'How to get it']
+                  ].map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => {
+                        setGwMode(id);
+                        setGwConfirm(false);
+                        setGwFetchResult(null);
+                      }}
+                      className={`px-3 py-2 rounded-xl text-xs font-semibold transition border ${gwMode === id
+                        ? 'bg-[#4285F4]/15 border-[#4285F4]/60 text-[#4285F4] dark:text-white'
+                        : 'bg-white dark:bg-white/5 border-black/10 dark:border-white/10 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {gwMode === 'fetch' && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-slate-600 dark:text-slate-400">
+                      Scan Brave, Chrome and Chromium profiles on this machine for a signed-in gemini.google.com
+                      session and read its <span className="font-mono">__Secure-1PSID</span> cookie.
+                    </p>
+                    {!gwConfirm ? (
+                      <button
+                        type="button"
+                        onClick={() => setGwConfirm(true)}
+                        className="px-3.5 py-2 rounded-xl bg-[#4285F4] hover:bg-[#4285F4]/85 text-white text-xs font-semibold transition flex items-center gap-1.5"
+                      >
+                        <Search className="w-3.5 h-3.5" />
+                        Scan browser profiles
+                      </button>
+                    ) : (
+                      <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 space-y-2">
+                        <p className="text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+                          This starts a background task that reads the cookie database of your local browser
+                          profiles to find the gemini.google.com session. It only reads — nothing is modified,
+                          saved to .env or uploaded.
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={runGeminiFetch}
+                            disabled={gwFetching}
+                            className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-white text-xs font-semibold transition flex items-center gap-1.5"
+                          >
+                            {gwFetching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                            {gwFetching ? 'Scanning...' : 'Yes, scan now'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setGwConfirm(false)}
+                            disabled={gwFetching}
+                            className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-white/10 hover:bg-slate-300 dark:hover:bg-white/15 disabled:opacity-40 text-slate-700 dark:text-slate-300 text-xs font-semibold transition"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {gwFetchResult && (
+                      <p className={`text-[11px] font-semibold ${gwFetchResult.ok ? 'text-[#00f5a0]' : 'text-rose-500'}`}>
+                        {gwFetchResult.message}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {gwMode === 'manual' && (
+                  <div className="space-y-2">
+                    <div className="text-[10px] uppercase text-slate-500 dark:text-slate-400 font-bold tracking-wider">
+                      Cookie string (not an API key)
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <div className="relative flex-1">
+                        <input
+                          type={showKey ? 'text' : 'password'}
+                          placeholder="Paste the full Cookie header or just the __Secure-1PSID value"
+                          value={keyInput}
+                          onChange={(e) => setKeyInput(e.target.value)}
+                          className="w-full pl-3.5 pr-10 py-2 text-xs font-mono rounded-xl bg-white dark:bg-black/60 border border-black/10 dark:border-white/10 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-[#4285F4]/60 transition"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowKey(!showKey)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition"
+                          title={showKey ? 'Hide cookie' : 'Show cookie'}
+                        >
+                          {showKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                      <button
+                        onClick={() => handleUpdate('set')}
+                        disabled={!keyInput.trim()}
+                        className="px-3.5 py-2 rounded-xl bg-[#ff6b35] hover:bg-[#ff8c42] disabled:opacity-40 text-white text-xs font-semibold transition flex items-center justify-center gap-1"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        Save cookie
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                      Stored as <span className="font-mono">GEMINI_WEB_COOKIE</span> in .env and applied immediately.
+                      The input is masked; the saved value is read-only above.
+                    </p>
+                  </div>
+                )}
+
+                {gwMode === 'steps' && (
+                  <div className="space-y-2">
+                    <ol className="list-decimal list-inside space-y-1.5 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+                      <li>
+                        Open{' '}
+                        <a href="https://gemini.google.com" target="_blank" rel="noreferrer" className="text-[#4285F4] hover:underline">
+                          gemini.google.com
+                        </a>{' '}
+                        and sign in with your Google account.
+                      </li>
+                      <li>Open DevTools (F12) → <b>Application</b> tab → <b>Cookies</b> → <span className="font-mono">https://gemini.google.com</span>.</li>
+                      <li>Copy the value of the <span className="font-mono">__Secure-1PSID</span> cookie (and optionally <span className="font-mono">__Secure-1PSIDTS</span>).</li>
+                      <li>Come back here, open <b>Paste cookie</b> and save it.</li>
+                    </ol>
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 italic">
+                      Treat this cookie like a password: it grants full access to the signed-in Google account.
                     </p>
                   </div>
                 )}
