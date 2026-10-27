@@ -283,6 +283,18 @@ def create_app() -> FastAPI:
         bai_key = get_bai_key()
         kiro_token = get_kiro_refresh_token() or resolve_refresh_token()
         antigravity_token = get_antigravity_refresh_token() or resolve_antigravity_refresh_token()
+        try:
+            from nim_router.deepseek_web import resolve_credentials as resolve_ds_credentials
+            ds_creds = resolve_ds_credentials()
+            ds_token = ds_creds.get("token", "")
+        except Exception:
+            ds_token = ""
+        try:
+            from nim_router.gemini_web import resolve_credentials as resolve_gw_credentials
+            gw_creds = resolve_gw_credentials()
+            gw_cookie = gw_creds.get("cookie", "")
+        except Exception:
+            gw_cookie = ""
 
         total_models = len(_router_instance.models)
         healthy_pool = _router_instance._healthy_pool
@@ -404,6 +416,8 @@ def create_app() -> FastAPI:
                 "BAI": {"keys_count": 1 if bai_key else 0, "active": bool(bai_key), "models_count": prov_models_count.get("BAI", 0)},
                 "Kiro": {"keys_count": 1 if kiro_token else 0, "active": bool(kiro_token) and get_kiro_enabled(), "disabled": not get_kiro_enabled(), "disabled_reason": KIRO_DISABLED_REASON, "models_count": prov_models_count.get("Kiro", 0)},
                 "Antigravity": {"keys_count": 1 if antigravity_token else 0, "active": bool(antigravity_token), "models_count": prov_models_count.get("Antigravity", 0)},
+                "DeepSeek Web": {"keys_count": 1 if ds_token else 0, "active": bool(ds_token), "models_count": prov_models_count.get("DeepSeek Web", 0)},
+                "Gemini Web": {"keys_count": 1 if gw_cookie else 0, "active": bool(gw_cookie), "models_count": prov_models_count.get("Gemini Web", 0)},
             },
             "usage_summary": usage_summary,
             "usage_providers": usage_providers
@@ -479,6 +493,14 @@ def create_app() -> FastAPI:
         ds_token = ds_creds.get("token", "")
         ds_source = ds_creds.get("source", "")
 
+        try:
+            from nim_router.gemini_web import resolve_credentials as resolve_gw_credentials
+            gw_creds = resolve_gw_credentials()
+        except Exception:
+            gw_creds = {"cookie": "", "source": ""}
+        gw_cookie = gw_creds.get("cookie", "")
+        gw_source = gw_creds.get("source", "")
+
         return {
             "providers": [
                 {"id": "NVIDIA", "name": "NVIDIA NIM", "env_var": "NVIDIA_API_KEYS", "keys": [mask(k) for k in nv_keys], "count": len(nv_keys)},
@@ -490,6 +512,7 @@ def create_app() -> FastAPI:
                 {"id": "Kiro", "name": "Kiro (AWS CodeWhisperer)", "env_var": "KIRO_REFRESH_TOKEN", "keys": [mask(kiro_token)] if kiro_token else [], "count": 1 if kiro_token else 0, "disabled": not get_kiro_enabled(), "disabled_reason": KIRO_DISABLED_REASON},
                 {"id": "Antigravity", "name": "Antigravity (Google)", "env_var": "ANTIGRAVITY_REFRESH_TOKEN", "keys": [mask(antigravity_token)] if antigravity_token else [], "count": 1 if antigravity_token else 0, "scopes_ok": _antigravity_scopes_ok(), "missing_scopes": _antigravity_missing_scopes()},
                 {"id": "DeepSeek Web", "name": "DeepSeek Web", "env_var": "DEEPSEEK_WEB_TOKEN", "keys": [mask(ds_token)] if ds_token else [], "count": 1 if ds_token else 0, "source": ds_source or "none"},
+                {"id": "Gemini Web", "name": "Gemini Web", "env_var": "GEMINI_WEB_COOKIE", "keys": [mask(gw_cookie)] if gw_cookie else [], "count": 1 if gw_cookie else 0, "source": gw_source or "none"},
             ]
         }
 
@@ -512,6 +535,8 @@ def create_app() -> FastAPI:
             "ANTIGRAVITY": "ANTIGRAVITY_REFRESH_TOKEN",
             "DEEPSEEK WEB": "DEEPSEEK_WEB_TOKEN",
             "DEEPSEEK_WEB": "DEEPSEEK_WEB_TOKEN",
+            "GEMINI WEB": "GEMINI_WEB_COOKIE",
+            "GEMINI_WEB": "GEMINI_WEB_COOKIE",
         }
         env_var = env_map.get(provider)
         if not env_var:
@@ -534,6 +559,10 @@ def create_app() -> FastAPI:
             env_vars.pop(env_var.rstrip("S"), None)
             if provider in ("DEEPSEEK WEB", "DEEPSEEK_WEB"):
                 env_vars.pop("DEEPSEEK_WEB_DS_SESSION_ID", None)
+            if provider in ("GEMINI WEB", "GEMINI_WEB"):
+                env_vars.pop("GEMINI_WEB_1PSID", None)
+                env_vars.pop("GEMINI_WEB_1PSIDTS", None)
+                env_vars.pop("GEMINI_WEB_SAPISID", None)
             if provider == "KIRO":
                 from nim_router.kiro_login import clear_stored_credentials
                 clear_stored_credentials()
@@ -598,6 +627,14 @@ def create_app() -> FastAPI:
                 pass
             if _router_instance:
                 _router_instance.clear_provider_cooldown("DeepSeek Web")
+        if provider in ("GEMINI WEB", "GEMINI_WEB"):
+            try:
+                from nim_router.gemini_web import resolve_credentials as resolve_gw_credentials
+                resolve_gw_credentials(force=True)
+            except Exception:
+                pass
+            if _router_instance:
+                _router_instance.clear_provider_cooldown("Gemini Web")
         if _router_instance:
             _router_instance.api_keys = get_nvidia_keys()
             _router_instance.openrouter_keys = get_openrouter_keys()
@@ -1036,6 +1073,37 @@ def create_app() -> FastAPI:
             "has_session": bool(found.get("ds_session_id")),
         }
 
+    @app.post("/api/gemini-web/fetch")
+    async def fetch_gemini_web_token(request: Request):
+        _check_auth(request)
+        from nim_router.gemini_web import (
+            extract_browser_credentials,
+            resolve_credentials as resolve_gw_credentials,
+        )
+
+        try:
+            found = await asyncio.to_thread(extract_browser_credentials)
+        except Exception as e:
+            logger.warning(f"Gemini Web browser scan failed: {e}")
+            return {"success": False, "detail": f"Browser scan failed: {e}", "source": ""}
+
+        cookie = found.get("cookie", "")
+        if not cookie:
+            return {
+                "success": False,
+                "detail": "No gemini.google.com session found in Brave, Chrome or Chromium profiles on this machine.",
+                "source": "",
+            }
+
+        resolve_gw_credentials(force=True)
+        masked = f"{cookie[:6]}...{cookie[-4:]}" if len(cookie) > 10 else f"{cookie[:4]}..."
+        logger.success(f"Gemini Web cookie fetched from browser profile via Web UI ({found.get('source', '')}).")
+        return {
+            "success": True,
+            "masked": masked,
+            "source": found.get("source", ""),
+        }
+
     @app.post("/api/probe/deepseek-web")
     async def run_deepseek_web_probe(request: Request):
         _check_auth(request)
@@ -1100,6 +1168,72 @@ def create_app() -> FastAPI:
             "success": True,
             "source": creds.get("source", ""),
             "models": [{"id": m.get("id"), "provider": "DeepSeek Web"} for m in ds_models],
+        }
+
+    @app.post("/api/probe/gemini-web")
+    async def run_gemini_web_probe(request: Request):
+        _check_auth(request)
+        if not _router_instance:
+            raise HTTPException(status_code=500, detail="Router not initialized")
+
+        from nim_router.gemini_web import (
+            GeminiWebAuthError,
+            list_models as list_gw_models,
+            resolve_credentials as resolve_gw_credentials,
+        )
+
+        async def drop_gemini_models() -> None:
+            async with _router_instance._write_lock:
+                _router_instance.models = [
+                    m for m in _router_instance.models
+                    if not str(m.get("id") or "").startswith("gemini-web/")
+                ]
+                _router_instance._healthy_pool = _router_instance._build_healthy_pool()
+                _router_instance._pool_updated = time.time()
+
+        creds = resolve_gw_credentials(force=True)
+        if not creds.get("cookie"):
+            await drop_gemini_models()
+            return {
+                "success": False,
+                "detail": "No Gemini Web cookie found. Paste a cookie below, set GEMINI_WEB_COOKIE, or sign in to gemini.google.com in a supported local browser.",
+                "source": "",
+                "models": [],
+            }
+
+        try:
+            gw_models = await list_gw_models()
+        except GeminiWebAuthError as e:
+            _router_instance._mark_provider_auth_failure("Gemini Web")
+            await drop_gemini_models()
+            logger.warning(f"Gemini Web probe failed (authentication): {e}")
+            return {"success": False, "detail": str(e), "source": creds.get("source", ""), "models": []}
+        except Exception as e:
+            logger.warning(f"Gemini Web probe failed: {e}")
+            return {"success": False, "detail": str(e), "source": creds.get("source", ""), "models": []}
+
+        ids = {m.get("id") for m in gw_models}
+        async with _router_instance._write_lock:
+            _router_instance.models = [
+                m for m in _router_instance.models if m.get("id") not in ids
+            ] + gw_models
+            for m in gw_models:
+                mid = m.get("id")
+                if mid:
+                    _router_instance._model_providers[mid] = "Gemini Web"
+                    _router_instance._latencies[mid] = 2.0
+            _router_instance._healthy_pool = _router_instance._build_healthy_pool()
+            _router_instance._pool_updated = time.time()
+        _router_instance.clear_provider_cooldown("Gemini Web")
+
+        logger.success(
+            f"Gemini Web probe ok (source: {creds.get('source') or 'unknown'}), "
+            f"{len(gw_models)} models available."
+        )
+        return {
+            "success": True,
+            "source": creds.get("source", ""),
+            "models": [{"id": m.get("id"), "provider": "Gemini Web"} for m in gw_models],
         }
 
     @app.post("/api/probe/kiro")
