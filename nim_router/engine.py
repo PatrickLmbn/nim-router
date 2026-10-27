@@ -40,13 +40,14 @@ from nim_router.classifier import (
     is_vision_request,
     estimate_token_count,
 )
-from nim_router.client import probe_model, discover_models, call_provider_endpoint, call_kiro_endpoint, get_kiro_client, call_antigravity_endpoint, get_antigravity_client, call_deepseek_web_endpoint
+from nim_router.client import probe_model, discover_models, call_provider_endpoint, call_kiro_endpoint, get_kiro_client, call_antigravity_endpoint, get_antigravity_client, call_deepseek_web_endpoint, call_gemini_web_endpoint
 from nim_router.catalog import is_banned_model, load_fallback_models, get_provider_name as _catalog_get_provider_name, save_working_models
 from nim_router.parking import is_parked, note_success
 from nim_router.tracker import get_usage_tracker
 from nim_router.kiro import KIRO_PREFIX, KIRO_API_BASE, kiro_upstream_model_id
 from nim_router.antigravity import ANTIGRAVITY_PREFIX, ANTIGRAVITY_API_BASE, antigravity_upstream_model_id
 from nim_router.deepseek_web import DEEPSEEK_WEB_PREFIX, DEEPSEEK_WEB_BASE
+from nim_router.gemini_web import GEMINI_WEB_PREFIX, GEMINI_WEB_BASE
 
 class ModelRouter:
     def __init__(self, api_key: str | list[str], openrouter_keys: str | list[str] = "", opencode_key: str = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = "", bai_key: str = "", kiro_refresh_token: str = "", antigravity_refresh_token: str = "", strategy: str = ""):
@@ -115,7 +116,7 @@ class ModelRouter:
 
     def _get_provider_name(self, model_id: str, overrides: dict[str, str] | None = None) -> str:
         mid_clean = model_id
-        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[BAI] ", "[Kiro] ", "[Antigravity] ", "[Category] "):
+        for prefix in ("[NVIDIA] ", "[OpenRouter] ", "[OpenCode] ", "[Groq] ", "[Cerebras] ", "[BAI] ", "[Kiro] ", "[Antigravity] ", "[Gemini Web] ", "[Category] "):
             if mid_clean.startswith(prefix):
                 mid_clean = mid_clean[len(prefix):].strip()
         if overrides and mid_clean in overrides:
@@ -149,6 +150,9 @@ class ModelRouter:
         elif provider == "DeepSeek Web":
             keys = ["deepseek-web"]
             base_url = DEEPSEEK_WEB_BASE
+        elif provider == "Gemini Web":
+            keys = ["gemini-web"]
+            base_url = GEMINI_WEB_BASE
         elif provider == "Groq":
             keys = self.groq_keys if self.groq_keys else [""]
             base_url = GROQ_API_BASE
@@ -1227,6 +1231,12 @@ class ModelRouter:
                                 request,
                                 on_usage=on_request_usage
                             )
+                        elif provider == "Gemini Web":
+                            response = await call_gemini_web_endpoint(
+                                selected_id,
+                                request,
+                                on_usage=on_request_usage
+                            )
                         else:
                             response = await call_provider_endpoint(
                                 current_key,
@@ -1278,7 +1288,7 @@ class ModelRouter:
                         raise
             except HTTPException as e:
                 last_error = e
-                if e.status_code in (401, 403) and provider == "DeepSeek Web":
+                if e.status_code in (401, 403) and provider in ("DeepSeek Web", "Gemini Web"):
                     self._mark_provider_auth_failure(provider)
                 else:
                     self._record_failure(selected_id, status_code=e.status_code)

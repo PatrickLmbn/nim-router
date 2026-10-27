@@ -39,6 +39,15 @@ from nim_router.deepseek_web import (
     stream_chat_completion as stream_deepseek_web,
     create_chat_completion as create_deepseek_web_completion,
 )
+from nim_router.gemini_web import (
+    GEMINI_WEB_PREFIX,
+    GeminiWebAuthError,
+    GeminiWebUpstreamError,
+    gemini_web_upstream_model_id,
+    list_models as list_gemini_web_models,
+    stream_chat_completion as stream_gemini_web,
+    create_chat_completion as create_gemini_web_completion,
+)
 from nim_router.parking import is_parked, note_failure, note_success
 
 import email.utils
@@ -646,6 +655,25 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
         logger.info(f"DeepSeek Web model discovery skipped: {e}")
 
     for m in deepseek_web_discovered:
+        mid = m.get("id")
+        if not mid:
+            continue
+        if mid not in latencies_dict:
+            latencies_dict[mid] = 2.0
+        if any(existing.get("id") == mid for existing in all_discovered):
+            continue
+        all_discovered.append(m)
+
+    gemini_web_discovered: list[dict] = []
+    try:
+        gemini_web_discovered = await list_gemini_web_models()
+    except GeminiWebAuthError as e:
+        note_failure("provider:Gemini Web", 300.0, "authentication", threshold=1)
+        logger.info(f"Gemini Web model discovery skipped: {e}")
+    except Exception as e:
+        logger.info(f"Gemini Web model discovery skipped: {e}")
+
+    for m in gemini_web_discovered:
         mid = m.get("id")
         if not mid:
             continue
@@ -1475,3 +1503,141 @@ async def call_deepseek_web_endpoint(
     except Exception as e:
         logger.error(f"DeepSeek Web request failed for {model_id}: {e}")
         raise HTTPException(status_code=502, detail=f"DeepSeek Web request failed: {e}")
+
+
+async def call_gemini_web_endpoint(
+    model_id: str,
+    request: ChatCompletionRequest,
+    on_usage: Optional[Callable[[int, int, int, bool, bool], None]] = None
+) -> Response:
+    from nim_router.gemini_web import resolve_credentials as resolve_gw_credentials
+    creds = resolve_gw_credentials()
+    if not creds["cookie"]:
+        raise HTTPException(
+            status_code=401,
+            detail="Gemini Web is not configured. Set GEMINI_WEB_COOKIE or GEMINI_WEB_1PSID, or sign in to gemini.google.com in a local browser.",
+        )
+
+    client = get_shared_client()
+    upstream_id = gemini_web_upstream_model_id(model_id)
+
+    try:
+        if request.stream:
+            def stream_failure(exc: Exception) -> HTTPException:
+                if isinstance(exc, HTTPException):
+                    return exc
+                if isinstance(exc, GeminiWebAuthError):
+                    logger.error(f"Gemini Web authentication failed for {model_id}: {exc}")
+                    return HTTPException(status_code=401, detail=str(exc))
+                if isinstance(exc, GeminiWebUpstreamError):
+                    status = exc.status_code if exc.status_code in (400, 401, 402, 403, 404, 429, 500, 502, 503) else 502
+                    logger.error(f"Gemini Web stream error for {model_id}: {exc}")
+                    return HTTPException(status_code=status, detail=str(exc))
+                if isinstance(exc, (httpx.ReadTimeout, httpx.RequestError)):
+                    logger.warning(f"Gemini Web stream read error for {model_id}: {exc}")
+                    return HTTPException(status_code=504, detail=f"Stream connection timed out from Gemini Web ({model_id}).")
+                err_msg = str(exc)
+                match = re.search(r"HTTP (\d{3})", err_msg)
+                status = int(match.group(1)) if match else 0
+                if status in (400, 401, 402, 403, 404, 429, 500, 502, 503):
+                    logger.error(f"Gemini Web stream error for {model_id}: {exc}")
+                    return HTTPException(status_code=status, detail=err_msg)
+                logger.error(f"Gemini Web stream error for {model_id}: {exc}")
+                return HTTPException(status_code=502, detail=f"Gemini Web stream failed for {model_id}: {exc}")
+
+            upstream = stream_gemini_web(
+                upstream_id,
+                [m if isinstance(m, dict) else m.model_dump() for m in request.messages],
+                client,
+            )
+
+            completion_tokens = 0
+            has_visible_content = False
+
+            def consume(chunk: bytes) -> None:
+                nonlocal completion_tokens, has_visible_content
+                if b'"content"' in chunk:
+                    has_visible_content = True
+
+            primed: list[bytes] = []
+            try:
+                for _ in range(2):
+                    primed.append(await upstream.__anext__())
+            except StopAsyncIteration:
+                pass
+            except HTTPException:
+                await upstream.aclose()
+                raise
+            except Exception as e:
+                await upstream.aclose()
+                raise stream_failure(e) from e
+
+            for chunk in primed:
+                consume(chunk)
+
+            async def stream_generator():
+                global _active_streams
+                _active_streams += 1
+                try:
+                    for chunk in primed:
+                        yield chunk
+                    while True:
+                        try:
+                            chunk = await upstream.__anext__()
+                        except StopAsyncIteration:
+                            break
+                        consume(chunk)
+                        yield chunk
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    raise stream_failure(e) from e
+                finally:
+                    _active_streams = max(0, _active_streams - 1)
+                    await upstream.aclose()
+                    if on_usage:
+                        try:
+                            on_usage(0, completion_tokens, completion_tokens, True, not has_visible_content)
+                        except Exception:
+                            pass
+
+            return StreamingResponse(
+                stream_generator(),
+                status_code=200,
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no"
+                }
+            )
+
+        result = await create_gemini_web_completion(
+            upstream_id,
+            [m if isinstance(m, dict) else m.model_dump() for m in request.messages],
+            client,
+        )
+        usage = result.get("usage") or {}
+        if on_usage:
+            try:
+                on_usage(
+                    usage.get("prompt_tokens", 0),
+                    usage.get("completion_tokens", 0),
+                    usage.get("total_tokens", 0),
+                    True,
+                    False,
+                )
+            except Exception:
+                pass
+        return Response(content=json.dumps(result), media_type="application/json", status_code=200)
+    except HTTPException:
+        raise
+    except GeminiWebAuthError as e:
+        logger.error(f"Gemini Web authentication failed for {model_id}: {e}")
+        raise HTTPException(status_code=401, detail=str(e))
+    except GeminiWebUpstreamError as e:
+        logger.error(f"Gemini Web request failed for {model_id}: {e}")
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    except Exception as e:
+        logger.error(f"Gemini Web request failed for {model_id}: {e}")
+        raise HTTPException(status_code=502, detail=f"Gemini Web request failed: {e}")
