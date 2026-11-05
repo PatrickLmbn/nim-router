@@ -161,6 +161,148 @@ export function ModelSelectorModal({ stats, onClose, onSelectModel }) {
 }
 
 
+export function DiscoveryReportModal({ onClose }) {
+  const [report, setReport] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [probing, setProbing] = useState(false);
+  const [error, setError] = useState('');
+  const [providerFilter, setProviderFilter] = useState('ALL');
+
+  const load = async () => {
+    try {
+      const res = await authFetch('/api/discovery/report');
+      const data = await safeJson(res);
+      if (!res.ok) throw new Error(data.detail || `Request failed (HTTP ${res.status})`);
+      setReport(data);
+      setError('');
+    } catch (e) {
+      setError(e.message || 'Failed to load discovery report');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const handleRescan = async () => {
+    setProbing(true);
+    setError('');
+    try {
+      const res = await authFetch('/api/probe', { method: 'POST' });
+      if (!res.ok) {
+        const data = await safeJson(res);
+        throw new Error(data.detail || `Probe failed (HTTP ${res.status})`);
+      }
+      await load();
+    } catch (e) {
+      setError(e.message || 'Rescan failed');
+    } finally {
+      setProbing(false);
+    }
+  };
+
+  const providers = Object.keys(report?.providers || {});
+  const visible = providerFilter === 'ALL' ? providers : providers.filter((p) => p === providerFilter);
+  const scanned = report?.scanned_at ? new Date(report.scanned_at * 1000).toLocaleString() : 'never';
+
+  return (
+    <ModalWrapper title="Discovery Report" icon={Activity} onClose={onClose} maxWidth="max-w-3xl">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+          Per-endpoint probe results from the last scan: <span className="font-mono">{scanned}</span>
+        </p>
+        <button
+          type="button"
+          onClick={handleRescan}
+          disabled={probing}
+          className="px-2.5 py-1 rounded-xl bg-[#00d2ff]/15 text-[#00d2ff] hover:bg-[#00d2ff]/25 text-[11px] font-semibold transition neu-button flex items-center gap-1.5 disabled:opacity-50"
+        >
+          <RefreshCw className={`w-3 h-3 ${probing ? 'animate-spin' : ''}`} />
+          <span>{probing ? 'Scanning...' : 'Rescan Endpoints'}</span>
+        </button>
+      </div>
+
+      {error && (
+        <div className="p-2.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-500 text-[11px] flex items-center gap-2">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="py-10 text-center text-xs text-slate-500 dark:text-slate-400">Loading report...</div>
+      ) : providers.length === 0 ? (
+        <div className="py-10 text-center text-xs text-slate-500 dark:text-slate-400">
+          No discovery data yet. Run a probe to populate this report.
+        </div>
+      ) : (
+        <>
+          <div className="flex flex-wrap gap-1">
+            {['ALL', ...providers].map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setProviderFilter(p)}
+                className={`px-2.5 py-1 text-[11px] font-medium rounded-lg transition ${providerFilter === p
+                  ? 'bg-[#ff6b35] text-white'
+                  : 'bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+
+          <div className="space-y-3">
+            {visible.map((name) => {
+              const data = report.providers[name];
+              return (
+                <div key={name} className="p-3 rounded-2xl bg-slate-100 dark:bg-white/5 border border-black/5 dark:border-white/5">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <ProviderIcon provider={name} className="h-3.5 w-auto max-w-[48px] max-h-3.5" />
+                      <span className="text-xs font-semibold">{name}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-[10px] font-mono">
+                      <span className="text-[#00f5a0] font-bold">{data.ok} responding</span>
+                      <span className="text-slate-400">/ {data.total} scanned</span>
+                    </div>
+                  </div>
+                  <div className="max-h-[42vh] overflow-y-auto space-y-0.5 pr-1">
+                    {data.models.map((m) => {
+                      const status = m.status == null ? 'ERR' : m.status;
+                      const tone = m.ok
+                        ? (m.status === 200 ? 'text-[#00a86b] dark:text-[#00f5a0] bg-[#00f5a0]/10' : 'text-amber-500 bg-amber-500/10')
+                        : 'text-red-500 bg-red-500/10';
+                      return (
+                        <div
+                          key={m.id}
+                          className="flex items-center gap-2 px-1.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/5"
+                          title={m.detail || ''}
+                        >
+                          <span className={`w-11 shrink-0 text-center font-mono font-bold text-[9px] px-1 py-0.5 rounded ${tone}`}>
+                            {status}
+                          </span>
+                          <span className="flex-1 min-w-0 truncate font-mono text-[10px] text-slate-700 dark:text-slate-300">
+                            {m.id}
+                          </span>
+                          <span className="shrink-0 font-mono text-[9px] text-slate-400">
+                            {m.ok ? `${m.latency}s` : '—'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </ModalWrapper>
+  );
+}
+
 export function KeysManagerModal({ onClose, onKeysUpdated }) {
   const [keysData, setKeysData] = useState([]);
   const [loading, setLoading] = useState(true);

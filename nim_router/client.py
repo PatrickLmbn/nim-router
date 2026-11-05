@@ -173,8 +173,14 @@ def parse_retry_after(header_val: str | None) -> float | None:
         pass
     return None
 
-async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, sem: asyncio.Semaphore, base_url: str = NIM_API_BASE, probe_endpoint: str = "chat/completions", timeout_sec: float = 8.0) -> tuple[bool, float]:
-    if is_banned_model(model_id):
+async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, sem: asyncio.Semaphore, base_url: str = NIM_API_BASE, probe_endpoint: str = "chat/completions", timeout_sec: float = 8.0, report: dict | None = None) -> tuple[bool, float]:
+    def _record(status: int | None, ok: bool, latency: float, detail: str = ""):
+        if report is not None:
+            report.clear()
+            report.update({"status": status, "ok": ok, "latency": latency, "detail": detail[:240]})
+
+    if not base_url.startswith("https://integrate.api.nvidia.com") and is_banned_model(model_id):
+        _record(None, False, 999.0, "blocked by router keyword filter")
         return False, 999.0
     async with sem:
         t0 = time.time()
@@ -214,12 +220,25 @@ async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, se
             )
             elapsed = round(time.time() - t0, 3)
             if resp.status_code == 200:
+                _record(resp.status_code, True, elapsed)
                 return True, elapsed
             elif resp.status_code in (400, 429, 500, 502, 503):
-                return True, 10.0 + elapsed
+                detail = resp.text
+                if resp.status_code == 429 and "opencode.ai" in base_url and (
+                    "FreeUsageLimitError" in detail
+                    or "Free usage limit reached" in detail
+                    or "free tier" in detail.lower()
+                ):
+                    _record(resp.status_code, False, 999.0, detail)
+                    return False, 999.0
+                latency = 10.0 + elapsed
+                _record(resp.status_code, True, latency, detail)
+                return True, latency
             else:
+                _record(resp.status_code, False, 999.0, resp.text)
                 return False, 999.0
-        except Exception:
+        except Exception as e:
+            _record(None, False, 999.0, f"{type(e).__name__}: {e}")
             return False, 999.0
 
 _INTERNAL_MODEL_IDS = re.compile(r"^chat_\d+$")
@@ -347,7 +366,7 @@ async def discover_kiro_models(
     discovered: list[dict] = []
     for model in catalogue:
         mid = model.get("id")
-        if not mid or is_banned_model(mid) or _skip_probe_model(mid):
+        if not mid or is_banned_model(mid, "Kiro") or _skip_probe_model(mid):
             continue
         discovered.append(model)
 
@@ -398,7 +417,7 @@ async def discover_antigravity_models(
     discovered: list[dict] = []
     for model in catalogue:
         mid = model.get("id")
-        if not mid or is_banned_model(mid) or _skip_probe_model(mid):
+        if not mid or is_banned_model(mid, "Antigravity") or _skip_probe_model(mid):
             continue
         discovered.append(model)
 
@@ -433,7 +452,7 @@ async def discover_antigravity_models(
     return verified
 
 
-async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_keys: list[str] | str = "", opencode_key: str = "", groq_keys: list[str] | str = "", cerebras_keys: list[str] | str = "", bai_key: str = "", kiro_refresh_token: str = "", antigravity_refresh_token: str = "") -> list[dict]:
+async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_keys: list[str] | str = "", opencode_key: str = "", groq_keys: list[str] | str = "", cerebras_keys: list[str] | str = "", bai_key: str = "", kiro_refresh_token: str = "", antigravity_refresh_token: str = "", report: dict | None = None) -> list[dict]:
     primary_nvidia_key = api_keys[0] if isinstance(api_keys, list) and api_keys else (api_keys if isinstance(api_keys, str) else "")
     primary_groq_key = groq_keys[0] if isinstance(groq_keys, list) and groq_keys else (groq_keys if isinstance(groq_keys, str) else "")
     primary_cerebras_key = cerebras_keys[0] if isinstance(cerebras_keys, list) and cerebras_keys else (cerebras_keys if isinstance(cerebras_keys, str) else "")
@@ -453,10 +472,7 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                 if response.status_code == 200:
                     data = response.json()
                     all_models = data.get("data", [])
-                    valid_models = [
-                        m for m in all_models
-                        if m.get("id") and not is_banned_model(m.get("id"))
-                    ]
+                    valid_models = [m for m in all_models if m.get("id")]
                     for m in valid_models:
                         m_copy = dict(m)
                         m_copy["provider"] = "NVIDIA"
@@ -505,7 +521,7 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                     data = response.json()
                     oc_models = [
                         m for m in data.get("data", [])
-                        if "free" in m.get("id", "").lower() and not is_banned_model(m.get("id", ""))
+                        if "free" in m.get("id", "").lower() and not is_banned_model(m.get("id", ""), "OpenCode")
                     ]
                     for m in oc_models:
                         m_copy = dict(m)
@@ -525,7 +541,7 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                     data = response.json()
                     groq_models = [
                         m for m in data.get("data", [])
-                        if m.get("id") and not is_banned_model(m.get("id")) and "whisper" not in m.get("id", "").lower()
+                        if m.get("id") and not is_banned_model(m.get("id"), "Groq") and "whisper" not in m.get("id", "").lower()
                     ]
                     for m in groq_models:
                         m_copy = dict(m)
@@ -545,7 +561,7 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                     data = response.json()
                     cerebras_models = [
                         m for m in data.get("data", [])
-                        if m.get("id") and not is_banned_model(m.get("id"))
+                        if m.get("id") and not is_banned_model(m.get("id"), "Cerebras")
                     ]
                     for m in cerebras_models:
                         m_copy = dict(m)
@@ -566,7 +582,7 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                     bai_free_set = {"glm-5.3-flash", "qwen3.8-flash", "hy3"}
                     bai_models = [
                         m for m in data.get("data", [])
-                        if m.get("id") in bai_free_set and not is_banned_model(m.get("id"))
+                        if m.get("id") in bai_free_set and not is_banned_model(m.get("id"), "BAI")
                     ]
                     for m in bai_models:
                         m_copy = dict(m)
@@ -605,10 +621,15 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                 nonlocal completed_count
                 key, m_obj, base_url = item
                 mid = m_obj.get("id", "")
+                probe_report: dict = {}
                 try:
-                    ok, latency = await asyncio.wait_for(probe_model(key, client, mid, sem, base_url, timeout_sec=8.0), timeout=10.0)
-                except Exception:
+                    ok, latency = await asyncio.wait_for(probe_model(key, client, mid, sem, base_url, timeout_sec=8.0, report=probe_report), timeout=10.0)
+                except Exception as e:
                     ok, latency = False, 999.0
+                    probe_report = {"status": None, "ok": False, "latency": 999.0, "detail": f"{type(e).__name__}: {e}"[:240]}
+                if report is not None:
+                    provider = m_obj.get("provider") or "Unknown"
+                    report.setdefault(provider, {})[mid] = probe_report
                 async with lock:
                     completed_count += 1
                     if is_tty:

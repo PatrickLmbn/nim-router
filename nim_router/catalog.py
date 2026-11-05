@@ -1,4 +1,5 @@
 import os
+import re
 import json
 from nim_router.logger import logger
 
@@ -66,20 +67,37 @@ NON_CHAT_KEYWORDS = (
     "groq/compound",
 )
 
+_TOKEN_SPLIT = re.compile(r"[/\-_.:\s]+")
+
+def _matches_keyword(mid: str, keyword: str) -> bool:
+    tokens = [t for t in _TOKEN_SPLIT.split(mid) if t]
+    parts = [p for p in _TOKEN_SPLIT.split(keyword) if p]
+    if not parts:
+        return False
+    span = len(parts)
+    for i in range(len(tokens) - span + 1):
+        head = tokens[i]
+        if head == parts[0] or head.startswith(parts[0]) or head.endswith(parts[0]):
+            if tokens[i + 1:i + span] == parts[1:]:
+                return True
+    return False
+
 def _strip_variant_suffix(mid: str) -> str:
     return mid.split(":", 1)[0].strip()
 
-def is_banned_model(model_id: str) -> bool:
+def is_banned_model(model_id: str, provider: str = "") -> bool:
     if not model_id:
         return True
+    if (provider or "").strip().lower() == "nvidia":
+        return False
     mid = model_id.lower().strip()
     if mid in BANNED_MODELS:
         return True
     if _strip_variant_suffix(mid) in BANNED_MODELS:
         return True
-    if any(k in mid for k in BANNED_KEYWORDS):
+    if any(_matches_keyword(mid, k) for k in BANNED_KEYWORDS):
         return True
-    return any(k in mid for k in NON_CHAT_KEYWORDS)
+    return any(_matches_keyword(mid, k) for k in NON_CHAT_KEYWORDS)
 
 def get_provider_name(m_obj: "dict | str", provider_cache: "dict | None" = None) -> str:
     if isinstance(m_obj, dict):
@@ -180,11 +198,11 @@ def load_fallback_models(latencies_dict: dict) -> list[dict]:
                 for item in working:
                     if isinstance(item, dict):
                         mid = item.get("id")
-                        if mid and not is_banned_model(mid):
+                        if mid and not is_banned_model(mid, item.get("provider", "")):
                             result.append(item)
                             latencies_dict[mid] = 0.3 + (len(result) * 0.05)
                     elif isinstance(item, str):
-                        if not is_banned_model(item):
+                        if not is_banned_model(item, get_provider_name(item)):
                             result.append({"id": item})
                             latencies_dict[item] = 0.3 + (len(result) * 0.05)
                 if result:
@@ -207,7 +225,7 @@ def load_fallback_models(latencies_dict: dict) -> list[dict]:
         "minimaxai/minimax-m3",
         "poolside/laguna-xs-2.1",
     ]
-    clean_fallback = [mid for mid in fallback_list if not is_banned_model(mid)]
+    clean_fallback = [mid for mid in fallback_list if not is_banned_model(mid, "NVIDIA")]
     for i, mid in enumerate(clean_fallback):
         latencies_dict[mid] = 0.3 + (i * 0.05)
     return [{"id": mid, "provider": "NVIDIA"} for mid in clean_fallback]

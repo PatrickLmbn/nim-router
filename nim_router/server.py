@@ -331,8 +331,14 @@ def create_app() -> FastAPI:
         avg_tps = round(sum(tps_vals) / len(tps_vals), 1) if tps_vals else None
 
         all_ids = [m.get("id") for m in _router_instance.models if m.get("id")]
-        vision_pool_size = sum(1 for mid in all_ids if is_vision_model(mid))
-        moe_pool_size = sum(1 for mid in all_ids if is_moe_model(mid))
+        vision_pool_size = sum(
+            1 for mid in all_ids
+            if is_vision_model(mid, provider=_router_instance._get_provider_name(mid))
+        )
+        moe_pool_size = sum(
+            1 for mid in all_ids
+            if is_moe_model(mid, _router_instance._get_provider_name(mid))
+        )
 
         model_items = []
         seen_rows = set()
@@ -1039,6 +1045,31 @@ def create_app() -> FastAPI:
                 }
                 for m in _router_instance.models
             ]
+        }
+
+    @app.get("/api/discovery/report")
+    async def get_discovery_report(request: Request, provider: Optional[str] = None):
+        _check_auth(request)
+        if not _router_instance:
+            raise HTTPException(status_code=500, detail="Router not initialized")
+
+        report = getattr(_router_instance, "discovery_report", {}) or {}
+        providers = {}
+        for provider_name, entries in report.items():
+            if provider and provider_name.lower() != provider.strip().lower():
+                continue
+            models = [{"id": mid, **cell} for mid, cell in entries.items()]
+            models.sort(key=lambda item: (not item.get("ok"), item.get("id", "")))
+            providers[provider_name] = {
+                "total": len(models),
+                "ok": sum(1 for item in models if item.get("ok")),
+                "failed": sum(1 for item in models if not item.get("ok")),
+                "models": models,
+            }
+
+        return {
+            "scanned_at": getattr(_router_instance, "discovery_report_at", 0),
+            "providers": providers,
         }
 
     @app.post("/api/deepseek-web/fetch")
