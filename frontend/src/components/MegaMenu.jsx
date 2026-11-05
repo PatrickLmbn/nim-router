@@ -83,7 +83,7 @@ export function MegaMenu({ groups, openMenu, setOpenMenu }) {
   };
 
   return (
-    <nav ref={navRef} className="relative flex items-center justify-center gap-1" aria-label="Dashboard sections" onMouseLeave={handleHoverLeave}>
+    <nav ref={navRef} className="relative flex items-center justify-center gap-1" aria-label="Dashboard sections" onMouseEnter={clearCloseTimer} onMouseLeave={handleHoverLeave}>
       {groups.map((group) => {
         const GroupIcon = group.icon;
         const isOpen = openMenu === group.id;
