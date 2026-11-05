@@ -888,6 +888,12 @@ def create_app() -> FastAPI:
                     cleaned = [str(m).strip() for m in v if str(m).strip()][:2]
                     update_setting("fallback_models", cleaned)
                     logger.info(f"Fallback chain updated: {cleaned}")
+            if k == "health_refresh_interval":
+                try:
+                    v = min(480, max(60, int(v)))
+                except (TypeError, ValueError):
+                    v = 180
+                update_setting(k, v)
             else:
                 update_setting(k, v)
             if k == "primary_model" and _router_instance:

@@ -160,7 +160,7 @@ def get_api_keys() -> list[str]:
     return get_nvidia_keys()
 
 def get_health_refresh_interval() -> int:
-    return max(30, int(_load_settings().get("health_refresh_interval", 180)))
+    return min(480, max(60, int(_load_settings().get("health_refresh_interval", 180))))
 
 DEFAULT_DASHBOARD_PASSWORD = "nimrouter"
 
