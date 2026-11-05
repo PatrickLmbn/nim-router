@@ -1296,6 +1296,11 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
 export function SettingsModal({ stats, onClose, onSettingsUpdated }) {
   const [strategy, setStrategy] = useState(stats?.routing_strategy || 'fallback');
   const [maxLatency, setMaxLatency] = useState(stats?.max_latency_threshold || 3.0);
+  const [probeIntervalMin, setProbeIntervalMin] = useState(() => {
+    const sec = stats?.probing_status?.interval_seconds;
+    const min = typeof sec === 'number' ? Math.round(sec / 60) : 3;
+    return Math.min(8, Math.max(1, min));
+  });
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState('');
 
@@ -1314,7 +1319,8 @@ export function SettingsModal({ stats, onClose, onSettingsUpdated }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           routing_strategy: strategy,
-          max_latency_threshold: parseFloat(maxLatency)
+          max_latency_threshold: parseFloat(maxLatency),
+          health_refresh_interval: Math.min(8, Math.max(1, Number(probeIntervalMin) || 3)) * 60
         })
       });
       if (res.ok) {
@@ -1415,6 +1421,28 @@ export function SettingsModal({ stats, onClose, onSettingsUpdated }) {
           className="w-full accent-[#00d2ff]"
         />
         <p className="text-[11px] text-slate-500 dark:text-slate-400">Restricts active pool to endpoints responding in under {maxLatency} seconds.</p>
+      </div>
+
+      <div className="space-y-2 pt-2">
+        <div className="flex justify-between items-center">
+          <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Background Probe Interval</label>
+          <span className="text-xs font-mono font-bold text-[#00d2ff]">{probeIntervalMin} min</span>
+        </div>
+        <input
+          type="range"
+          min="1"
+          max="8"
+          step="1"
+          value={probeIntervalMin}
+          onChange={(e) => setProbeIntervalMin(e.target.value)}
+          className="w-full accent-[#00d2ff]"
+        />
+        <div className="flex justify-between text-[10px] text-slate-400 font-mono">
+          <span>1 min</span>
+          <span>3 min (default)</span>
+          <span>8 min</span>
+        </div>
+        <p className="text-[11px] text-slate-500 dark:text-slate-400">How often the gateway re-probes all providers for health and latency. Takes effect on the next cycle.</p>
       </div>
 
       <div className="flex items-center justify-between pt-3 border-t border-black/10 dark:border-white/10">
