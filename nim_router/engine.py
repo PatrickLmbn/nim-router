@@ -108,6 +108,8 @@ class ModelRouter:
         self._last_probe_time: float = time.time()
         self._probe_count: int = 0
         self._bg_probe_task: asyncio.Task | None = None
+        self.discovery_report: dict[str, dict] = {}
+        self.discovery_report_at: float = 0.0
 
     def _get_next_api_key(self) -> str:
         key = self.api_keys[self.key_index % len(self.api_keys)]
@@ -189,7 +191,7 @@ class ModelRouter:
         self._request_history.setdefault(model_id, []).append(now)
 
     def _is_banned_model(self, model_id: str) -> bool:
-        return is_banned_model(model_id)
+        return is_banned_model(model_id, self._get_provider_name(model_id))
 
     def _index_model_meta(self):
         meta: dict[str, dict] = {}
@@ -219,7 +221,11 @@ class ModelRouter:
         )
         if isinstance(meta, dict) and meta.get("supports_image"):
             return True
-        return is_vision_model(model_id, meta if isinstance(meta, dict) else None)
+        return is_vision_model(
+            model_id,
+            meta if isinstance(meta, dict) else None,
+            self._get_provider_name(model_id),
+        )
 
     def _is_vision_request(self, request: ChatCompletionRequest) -> bool:
         return is_vision_request(request)
@@ -279,6 +285,8 @@ class ModelRouter:
         return mid.startswith(KIRO_PREFIX) or mid.startswith("[Kiro] ")
 
     async def _discover_models(self) -> list[dict]:
+        self.discovery_report = {}
+        self.discovery_report_at = 0.0
         discovered = await discover_models(
             self.api_keys,
             self._latencies,
@@ -288,8 +296,10 @@ class ModelRouter:
             self.cerebras_keys,
             self.bai_key,
             self.kiro_refresh_token,
-            self.antigravity_refresh_token
+            self.antigravity_refresh_token,
+            report=self.discovery_report,
         )
+        self.discovery_report_at = time.time()
         for m in discovered:
             mid = m.get("id")
             if mid and "provider" in m:
@@ -993,10 +1003,10 @@ class ModelRouter:
                 logger.info(f"Vision payload detected: overriding target to {len(vision_capable)} vision-capable models first.")
             target_model = "nim-auto"
         elif has_tools and not category_target and (not requested_model or requested_model.lower() in ("nim-auto", "nim_auto", "auto")):
-            tool_capable = [mid for mid in candidate_pool if is_tool_model(mid)]
+            tool_capable = [mid for mid in candidate_pool if is_tool_model(mid, self._get_provider_name(mid))]
             if not tool_capable:
                 all_ids = [m.get("id") for m in self.models if m.get("id")]
-                tool_capable = [mid for mid in all_ids if is_tool_model(mid)]
+                tool_capable = [mid for mid in all_ids if is_tool_model(mid, self._get_provider_name(mid))]
             if tool_capable:
                 other_candidates = [mid for mid in candidate_pool if mid not in tool_capable]
                 candidate_pool = tool_capable + other_candidates
@@ -1004,17 +1014,17 @@ class ModelRouter:
             target_model = "nim-auto"
         elif category_target:
             if category_target == "tools":
-                cat_filtered = [mid for mid in candidate_pool if is_tool_model(mid)]
+                cat_filtered = [mid for mid in candidate_pool if is_tool_model(mid, self._get_provider_name(mid))]
             elif category_target == "coding":
-                cat_filtered = [mid for mid in candidate_pool if is_coding_model(mid)]
+                cat_filtered = [mid for mid in candidate_pool if is_coding_model(mid, provider=self._get_provider_name(mid))]
             elif category_target == "reasoning":
-                cat_filtered = [mid for mid in candidate_pool if is_reasoning_model(mid)]
+                cat_filtered = [mid for mid in candidate_pool if is_reasoning_model(mid, provider=self._get_provider_name(mid))]
             elif category_target == "vision":
-                cat_filtered = [mid for mid in candidate_pool if is_vision_model(mid)]
+                cat_filtered = [mid for mid in candidate_pool if is_vision_model(mid, provider=self._get_provider_name(mid))]
             elif category_target == "moe":
-                cat_filtered = [mid for mid in candidate_pool if is_moe_model(mid)]
+                cat_filtered = [mid for mid in candidate_pool if is_moe_model(mid, self._get_provider_name(mid))]
             elif category_target == "chat":
-                cat_filtered = [mid for mid in candidate_pool if is_chat_model(mid)]
+                cat_filtered = [mid for mid in candidate_pool if is_chat_model(mid, self._get_provider_name(mid))]
             else:
                 cat_filtered = candidate_pool
 

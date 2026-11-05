@@ -201,7 +201,7 @@ export function BentoGrid({
   const handleCopyApiKey = () => copyToClipboard('sk-nim-local', setCopiedApiKey);
 
   return (
-    <div className="w-full max-w-7xl mx-auto px-1 sm:px-2 lg:h-full flex flex-col lg:justify-center">
+    <div className="w-full max-w-7xl mx-auto lg:h-full flex flex-col lg:justify-center">
       <div className="rounded-3xl p-2.5 sm:p-4 bg-[#e8edf5] dark:bg-[#12151c]/95 border border-black/5 dark:border-white/10 shadow-neu-light dark:shadow-neu-dark flex flex-col lg:flex-1 lg:min-h-0 lg:max-h-[700px] lg:justify-between gap-3 sm:gap-3.5 lg:gap-0 transition-all duration-300">
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 lg:gap-4 items-stretch lg:flex-1 lg:min-h-0">

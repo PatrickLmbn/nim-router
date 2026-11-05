@@ -9,7 +9,7 @@ _BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 _ENV_FILE = os.path.join(_BASE_DIR, ".env")
 _SETTINGS_FILE = os.path.join(_BASE_DIR, "config", "settings.yaml")
 
-load_dotenv(dotenv_path=_ENV_FILE)
+load_dotenv(dotenv_path=_ENV_FILE, override=True)
 
 NIM_API_BASE = "https://integrate.api.nvidia.com/v1"
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"

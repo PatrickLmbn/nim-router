@@ -94,7 +94,7 @@ TOOL_KEYWORDS = (
 )
 
 def is_tool_model(model_id: str, provider: str = "", raw_meta: dict | None = None) -> bool:
-    if is_banned_model(model_id):
+    if is_banned_model(model_id, provider):
         return False
     if raw_meta and isinstance(raw_meta, dict):
         params = raw_meta.get("supported_parameters") or []
@@ -103,8 +103,8 @@ def is_tool_model(model_id: str, provider: str = "", raw_meta: dict | None = Non
     mid = model_id.lower().strip()
     return any(k in mid for k in TOOL_KEYWORDS)
 
-def is_vision_model(model_id: str, raw_meta: dict | None = None) -> bool:
-    if is_banned_model(model_id):
+def is_vision_model(model_id: str, raw_meta: dict | None = None, provider: str = "") -> bool:
+    if is_banned_model(model_id, provider):
         return False
     if raw_meta and isinstance(raw_meta, dict):
         arch = raw_meta.get("architecture") or {}
@@ -114,14 +114,14 @@ def is_vision_model(model_id: str, raw_meta: dict | None = None) -> bool:
     mid = model_id.lower().strip()
     return any(k in mid for k in VISION_KEYWORDS)
 
-def is_coding_model(model_id: str, raw_meta: dict | None = None) -> bool:
-    if is_banned_model(model_id):
+def is_coding_model(model_id: str, raw_meta: dict | None = None, provider: str = "") -> bool:
+    if is_banned_model(model_id, provider):
         return False
     mid = model_id.lower().strip()
     return any(k in mid for k in CODING_KEYWORDS) or any(k in mid for k in CODING_FRONTIER_MODELS)
 
-def is_reasoning_model(model_id: str, raw_meta: dict | None = None) -> bool:
-    if is_banned_model(model_id):
+def is_reasoning_model(model_id: str, raw_meta: dict | None = None, provider: str = "") -> bool:
+    if is_banned_model(model_id, provider):
         return False
     if raw_meta and isinstance(raw_meta, dict):
         params = raw_meta.get("supported_parameters") or []
@@ -130,14 +130,14 @@ def is_reasoning_model(model_id: str, raw_meta: dict | None = None) -> bool:
     mid = model_id.lower().strip()
     return any(k in mid for k in REASONING_KEYWORDS)
 
-def is_moe_model(model_id: str) -> bool:
-    if is_banned_model(model_id):
+def is_moe_model(model_id: str, provider: str = "") -> bool:
+    if is_banned_model(model_id, provider):
         return False
     mid = model_id.lower().strip()
     return any(k in mid for k in MOE_KEYWORDS)
 
-def is_chat_model(model_id: str) -> bool:
-    if is_banned_model(model_id):
+def is_chat_model(model_id: str, provider: str = "") -> bool:
+    if is_banned_model(model_id, provider):
         return False
     mid = model_id.lower().strip()
     return any(k in mid for k in CHAT_KEYWORDS)
@@ -145,11 +145,11 @@ def is_chat_model(model_id: str) -> bool:
 def get_model_capabilities(model_id: str, provider: str = "", raw_meta: dict | None = None) -> dict[str, bool]:
     return {
         "tools": is_tool_model(model_id, provider, raw_meta),
-        "coding": is_coding_model(model_id, raw_meta),
-        "reasoning": is_reasoning_model(model_id, raw_meta),
-        "vision": is_vision_model(model_id, raw_meta),
-        "chat": is_chat_model(model_id),
-        "moe": is_moe_model(model_id),
+        "coding": is_coding_model(model_id, raw_meta, provider),
+        "reasoning": is_reasoning_model(model_id, raw_meta, provider),
+        "vision": is_vision_model(model_id, raw_meta, provider),
+        "chat": is_chat_model(model_id, provider),
+        "moe": is_moe_model(model_id, provider),
     }
 
 def get_model_tasks(model_id: str, provider: str = "", raw_meta: dict | None = None) -> list[str]:
