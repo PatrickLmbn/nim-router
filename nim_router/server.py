@@ -1089,61 +1089,70 @@ def create_app() -> FastAPI:
     async def fetch_deepseek_web_token(request: Request):
         _check_auth(request)
         from nim_router.deepseek_web import (
-            extract_browser_credentials,
+            _collect_browser_credentials,
             save_credentials_to_env,
             verify_token,
             resolve_credentials as resolve_ds_credentials,
         )
 
         try:
-            found = await asyncio.to_thread(extract_browser_credentials)
+            sessions = await asyncio.to_thread(_collect_browser_credentials)
         except Exception as e:
             logger.warning(f"DeepSeek Web browser scan failed: {e}")
             return {"success": False, "detail": f"Browser scan failed: {e}", "source": ""}
 
-        token = found.get("userToken", "")
-        if not token:
+        if not sessions:
             return {
                 "success": False,
                 "detail": "No chat.deepseek.com session found in Brave, Chrome or Chromium profiles on this machine.",
                 "source": "",
             }
 
-        masked = f"{token[:6]}...{token[-4:]}" if len(token) > 10 else f"{token[:4]}..."
-        if not await verify_token(token):
-            logger.warning(f"DeepSeek Web token found in {found.get('source', 'browser')} but rejected by the API.")
-            return {
-                "success": False,
-                "found": True,
-                "masked": masked,
-                "source": found.get("source", ""),
-                "detail": (
-                    f"Found {masked} in the browser profile, but DeepSeek rejected it "
-                    "(code 40003). The stored session is expired; sign in again at chat.deepseek.com, "
-                    "then scan once more. Nothing was written to .env."
-                ),
-            }
+        # A profile can hold several stale tokens next to the live one; try
+        # every candidate until DeepSeek accepts one.
+        rejected: list[str] = []
+        for session in sessions:
+            token = session.get("token", "")
+            if not token:
+                continue
+            if await verify_token(token):
+                masked = f"{token[:6]}...{token[-4:]}" if len(token) > 10 else f"{token[:4]}..."
+                try:
+                    save_credentials_to_env(token, session.get("ds_session_id", ""))
+                except Exception as e:
+                    logger.warning(f"DeepSeek Web token found but .env write failed: {e}")
+                    return {
+                        "success": False,
+                        "found": True,
+                        "masked": masked,
+                        "source": session.get("source", ""),
+                        "detail": f"Token verified but could not be saved to .env: {e}",
+                    }
+                resolve_ds_credentials(force=True)
+                logger.success(f"DeepSeek Web token saved to .env from browser profile via Web UI ({session.get('source', '')}).")
+                return {
+                    "success": True,
+                    "saved": True,
+                    "masked": masked,
+                    "source": session.get("source", ""),
+                    "has_session": bool(session.get("ds_session_id")),
+                    "tried": len(rejected) + 1,
+                }
+            rejected.append(token)
 
-        try:
-            save_credentials_to_env(token, found.get("ds_session_id", ""))
-        except Exception as e:
-            logger.warning(f"DeepSeek Web token found but .env write failed: {e}")
-            return {
-                "success": False,
-                "found": True,
-                "masked": masked,
-                "source": found.get("source", ""),
-                "detail": f"Token verified but could not be saved to .env: {e}",
-            }
-
-        resolve_ds_credentials(force=True)
-        logger.success(f"DeepSeek Web token saved to .env from browser profile via Web UI ({found.get('source', '')}).")
+        first = sessions[0]
+        masked = f"{first['token'][:6]}...{first['token'][-4:]}" if len(first["token"]) > 10 else f"{first['token'][:4]}..."
+        logger.warning(f"DeepSeek Web: {len(rejected)} browser token(s) rejected by the API.")
         return {
-            "success": True,
-            "saved": True,
+            "success": False,
+            "found": True,
             "masked": masked,
-            "source": found.get("source", ""),
-            "has_session": bool(found.get("ds_session_id")),
+            "source": first.get("source", ""),
+            "detail": (
+                f"Found {len(rejected)} token(s) in the browser profile, but DeepSeek rejected all of them "
+                "(code 40003). The stored session is expired; sign in again at chat.deepseek.com, "
+                "then scan once more. Nothing was written to .env."
+            ),
         }
 
     @app.post("/api/gemini-web/fetch")

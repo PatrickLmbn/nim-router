@@ -94,15 +94,9 @@ _LEVELDB_USER_TOKEN_ENTRY = re.compile(
 )
 
 
-def _token_from_user_tokens(blob: bytes) -> str:
-    """Pick the freshest token from the `userTokens` map DeepSeek writes.
-
-    The map looks like {"<base64 user id>": {"token": "...", "lastAuth": "..."}}.
-    LevelDB prefix-compresses keys inside the dump, so the literal JSON often
-    cannot be parsed; a tolerant regex over the token/expiration pair is used
-    as a fallback. Chat page cache keys also look token-ish, so this map is
-    preferred over the generic binary scan.
-    """
+def _tokens_from_user_tokens(blob: bytes) -> list[str]:
+    """All tokens from the `userTokens` map, freshest first."""
+    tokens: list[str] = []
     data = _json_object_after(blob, b"userTokens")
     if isinstance(data, dict):
         entries: list[tuple[str, str]] = []
@@ -113,23 +107,48 @@ def _token_from_user_tokens(blob: bytes) -> str:
             if not token or not _TOKEN_CHARS_RE.fullmatch(token.encode("ascii", "ignore")):
                 continue
             entries.append((str(value.get("lastAuth") or value.get("expiration") or ""), token))
-        if entries:
-            entries.sort(reverse=True)
-            return entries[0][1]
+        entries.sort(reverse=True)
+        tokens.extend(token for _, token in entries)
+        if tokens:
+            return tokens
 
     idx = blob.find(b"userTokens")
     if idx < 0:
-        return ""
+        return tokens
     entries = []
     for match in _LEVELDB_USER_TOKEN_ENTRY.finditer(blob, idx, idx + 65536):
         token = match.group(1).decode("ascii", "ignore")
         if "/" in token:
             continue
         entries.append(((match.group(2) or b"").decode("ascii", "ignore"), token))
-    if not entries:
-        return ""
     entries.sort(reverse=True)
-    return entries[0][1]
+    tokens.extend(token for _, token in entries)
+    return tokens
+
+
+def _token_from_user_tokens(blob: bytes) -> str:
+    tokens = _tokens_from_user_tokens(blob)
+    return tokens[0] if tokens else ""
+
+
+def _leveldb_candidates(blob: bytes) -> list[str]:
+    """Every distinct token candidate in one LevelDB dump, best first."""
+    candidates: list[str] = []
+
+    def add(token: str) -> None:
+        token = (token or "").strip()
+        if token and token not in candidates and _TOKEN_CHARS_RE.fullmatch(token.encode("ascii", "ignore")):
+            candidates.append(token)
+
+    for token in _tokens_from_user_tokens(blob):
+        add(token)
+    for match in _LEVELDB_TOKEN_JSON.finditer(blob):
+        add(match.group(1).decode("ascii", "ignore"))
+    binary = _leveldb_binary_value(blob, b"userToken")
+    # Real tokens can contain slashes; cache keys are filtered out later by
+    # API verification, which rejects anything DeepSeek does not accept.
+    add(binary)
+    return candidates
 
 
 def _leveldb_binary_value(blob: bytes, key: bytes) -> str:
@@ -155,46 +174,44 @@ def _leveldb_binary_value(blob: bytes, key: bytes) -> str:
         start = idx + 1
 
 
-def _scan_leveldb(profile: Path) -> dict[str, str]:
-    found: dict[str, str] = {}
+def _scan_leveldb_candidates(profile: Path) -> tuple[list[str], str]:
+    """All token candidates in a profile (newest files first) + session id."""
+    candidates: list[str] = []
+    session_id = ""
     storage = profile / "Local Storage" / "leveldb"
     if not storage.is_dir():
-        return found
-    candidates = sorted(
+        return candidates, session_id
+    paths = sorted(
         list(storage.glob("*.ldb")) + list(storage.glob("*.log")),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
-    for path in candidates:
+    for path in paths:
         try:
             blob = path.read_bytes()
         except Exception:
             continue
-        if "userToken" not in found:
-            token = ""
-            if _LEVELDB_USER_TOKENS_KEY.search(blob):
-                token = _token_from_user_tokens(blob)
-            if not token:
-                match = _LEVELDB_TOKEN_JSON.search(blob)
-                if match:
-                    token = match.group(1).decode("ascii", "ignore")
-                else:
-                    binary = _leveldb_binary_value(blob, b"userToken")
-                    # Chat cache keys contain slashes; never treat those as tokens.
-                    if binary and "/" not in binary:
-                        token = binary
-            if token:
-                found["userToken"] = token
-        if "ds_session_id" not in found:
+        for token in _leveldb_candidates(blob):
+            if token not in candidates:
+                candidates.append(token)
+        if not session_id:
             match = _LEVELDB_DS_SESSION_JSON.search(blob)
             if match:
-                found["ds_session_id"] = match.group(1).decode("ascii", "ignore")
+                session_id = match.group(1).decode("ascii", "ignore")
             else:
                 binary = _leveldb_binary_value(blob, b"ds_session_id")
                 if binary:
-                    found["ds_session_id"] = binary
-        if "userToken" in found and "ds_session_id" in found:
-            break
+                    session_id = binary
+    return candidates, session_id
+
+
+def _scan_leveldb(profile: Path) -> dict[str, str]:
+    candidates, session_id = _scan_leveldb_candidates(profile)
+    found: dict[str, str] = {}
+    if candidates:
+        found["userToken"] = candidates[0]
+    if session_id:
+        found["ds_session_id"] = session_id
     return found
 
 
@@ -238,18 +255,22 @@ def _collect_browser_credentials() -> list[dict[str, str]]:
     sessions: list[dict[str, str]] = []
     seen: set[str] = set()
     for _, profile in profiles:
-        merged = _scan_leveldb(profile)
-        for key, value in _scan_cookies(profile).items():
-            merged.setdefault(key, value)
-        token = (merged.get("userToken") or "").strip()
-        if not token or token in seen:
-            continue
-        seen.add(token)
-        sessions.append({
-            "token": token,
-            "ds_session_id": (merged.get("ds_session_id") or "").strip(),
-            "source": str(profile),
-        })
+        tokens, session_id = _scan_leveldb_candidates(profile)
+        cookies = _scan_cookies(profile)
+        if not session_id:
+            session_id = cookies.get("ds_session_id", "")
+        cookie_token = cookies.get("userToken", "")
+        if cookie_token and cookie_token not in tokens:
+            tokens.append(cookie_token)
+        for token in tokens:
+            if token in seen:
+                continue
+            seen.add(token)
+            sessions.append({
+                "token": token,
+                "ds_session_id": session_id,
+                "source": str(profile),
+            })
     return sessions
 
 
