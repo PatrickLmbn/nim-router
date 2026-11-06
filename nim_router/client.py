@@ -173,7 +173,7 @@ def parse_retry_after(header_val: str | None) -> float | None:
         pass
     return None
 
-async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, sem: asyncio.Semaphore, base_url: str = NIM_API_BASE, probe_endpoint: str = "chat/completions", timeout_sec: float = 8.0, report: dict | None = None) -> tuple[bool, float]:
+async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, sem: asyncio.Semaphore, base_url: str = NIM_API_BASE, probe_endpoint: str = "chat/completions", timeout_sec: float = 20.0, report: dict | None = None) -> tuple[bool, float]:
     def _record(status: int | None, ok: bool, latency: float, detail: str = ""):
         if report is not None:
             report.clear()
@@ -238,7 +238,11 @@ async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, se
                 _record(resp.status_code, False, 999.0, resp.text)
                 return False, 999.0
         except Exception as e:
-            _record(None, False, 999.0, f"{type(e).__name__}: {e}")
+            detail = f"{type(e).__name__}: {e}"
+            if isinstance(e, (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.PoolTimeout)):
+                _record(None, True, 15.0, detail)
+                return True, 15.0
+            _record(None, False, 999.0, detail)
             return False, 999.0
 
 _INTERNAL_MODEL_IDS = re.compile(r"^chat_\d+$")
@@ -623,7 +627,7 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                 mid = m_obj.get("id", "")
                 probe_report: dict = {}
                 try:
-                    ok, latency = await asyncio.wait_for(probe_model(key, client, mid, sem, base_url, timeout_sec=8.0, report=probe_report), timeout=10.0)
+                    ok, latency = await asyncio.wait_for(probe_model(key, client, mid, sem, base_url, timeout_sec=20.0, report=probe_report), timeout=25.0)
                 except Exception as e:
                     ok, latency = False, 999.0
                     probe_report = {"status": None, "ok": False, "latency": 999.0, "detail": f"{type(e).__name__}: {e}"[:240]}

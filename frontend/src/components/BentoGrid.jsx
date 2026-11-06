@@ -29,7 +29,18 @@ export function BentoGrid({
   const [copiedEndpoint, setCopiedEndpoint] = useState(false);
   const [copiedApiKey, setCopiedApiKey] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [logTab, setLogTab] = useState('routing');
   const logsContainerRef = useRef(null);
+
+  const isRoutingLog = (l) => {
+    const msg = l?.message || '';
+    return msg.startsWith('Routing request')
+      || msg.includes('completed successfully via')
+      || msg.includes('backing off and failing over')
+      || msg.includes('cooling down');
+  };
+
+  const visibleLogs = logs.filter((l) => logTab === 'routing' ? isRoutingLog(l) : !isRoutingLog(l));
 
   const isProbingActive = probing || Boolean(stats?.probing_status?.is_probing);
   const [countdown, setCountdown] = useState(null);
@@ -917,6 +928,26 @@ export function BentoGrid({
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-0.5 p-0.5 rounded-xl bg-black/5 dark:bg-white/5">
+                    <button
+                      onClick={() => setLogTab('routing')}
+                      className={`px-2 py-0.5 rounded-lg text-[9.5px] font-semibold transition ${logTab === 'routing'
+                        ? 'bg-white dark:bg-black/60 text-slate-900 dark:text-white shadow-sm'
+                        : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                        }`}
+                    >
+                      Routings
+                    </button>
+                    <button
+                      onClick={() => setLogTab('info')}
+                      className={`px-2 py-0.5 rounded-lg text-[9.5px] font-semibold transition ${logTab === 'info'
+                        ? 'bg-white dark:bg-black/60 text-slate-900 dark:text-white shadow-sm'
+                        : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                        }`}
+                    >
+                      Info / Warnings
+                    </button>
+                  </div>
                   <span className="text-[9px] font-mono text-[#00f5a0] flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-[#00f5a0] animate-pulse" />
                     SSE Stream
@@ -935,7 +966,7 @@ export function BentoGrid({
                 ref={logsContainerRef}
                 className="flex-1 min-h-[120px] max-h-[220px] overflow-hidden p-3 rounded-2xl bg-[#0a0c10] font-mono text-[10.5px] space-y-1.5 shadow-neu-dark-inset text-slate-300 flex flex-col justify-end"
               >
-                {logs.slice(-7).map((l, i) => (
+                {visibleLogs.slice(-7).map((l, i) => (
                   <div key={i} className="flex items-center gap-2 leading-tight truncate">
                     <span className="text-[#00d2ff] shrink-0 font-mono">{l.timestamp}</span>
                     <span className={`font-semibold shrink-0 px-1.5 py-0.2 rounded text-[9px] ${
@@ -949,8 +980,10 @@ export function BentoGrid({
                     <span className="truncate text-slate-300">{l.message}</span>
                   </div>
                 ))}
-                {logs.length === 0 && (
-                  <div className="text-slate-500 italic py-4 text-center">Listening for server events...</div>
+                {visibleLogs.length === 0 && (
+                  <div className="text-slate-500 italic py-4 text-center">
+                    {logTab === 'routing' ? 'No routing events yet...' : 'No info or warning events yet...'}
+                  </div>
                 )}
               </div>
             </div>
