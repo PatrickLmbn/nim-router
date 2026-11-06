@@ -417,7 +417,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
       if (data.success) {
         setDsFetchResult({
           ok: true,
-          message: `Token found: ${data.masked}${data.has_session ? ' · session id found' : ''}`
+          message: `Token verified and saved to .env: ${data.masked}${data.has_session ? ' · session id found' : ''}`
         });
         await fetchKeys();
         if (onKeysUpdated) onKeysUpdated();
@@ -895,7 +895,8 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                   <div className="space-y-2">
                     <p className="text-xs text-slate-600 dark:text-slate-400">
                       Scan Brave, Chrome and Chromium profiles on this machine for a signed-in chat.deepseek.com
-                      session and read its <span className="font-mono">userToken</span>.
+                      session, then verify and save its <span className="font-mono">userToken</span> to
+                      <span className="font-mono"> .env</span>.
                     </p>
                     {!dsConfirm ? (
                       <button
@@ -910,8 +911,8 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
                       <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 space-y-2">
                         <p className="text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
                           This starts a background task that reads the Local Storage (LevelDB) of your local browser
-                          profiles to find the chat.deepseek.com session. It only reads — nothing is modified, saved to
-                          .env or uploaded.
+                          profiles to find the chat.deepseek.com session. It verifies the token with DeepSeek and only
+                          writes it to <span className="font-mono">.env</span> when it is accepted. Nothing is uploaded.
                         </p>
                         <div className="flex gap-2">
                           <button

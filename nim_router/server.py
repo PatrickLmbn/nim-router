@@ -1090,6 +1090,8 @@ def create_app() -> FastAPI:
         _check_auth(request)
         from nim_router.deepseek_web import (
             extract_browser_credentials,
+            save_credentials_to_env,
+            verify_token,
             resolve_credentials as resolve_ds_credentials,
         )
 
@@ -1107,11 +1109,38 @@ def create_app() -> FastAPI:
                 "source": "",
             }
 
-        resolve_ds_credentials(force=True)
         masked = f"{token[:6]}...{token[-4:]}" if len(token) > 10 else f"{token[:4]}..."
-        logger.success(f"DeepSeek Web token fetched from browser profile via Web UI ({found.get('source', '')}).")
+        if not await verify_token(token):
+            logger.warning(f"DeepSeek Web token found in {found.get('source', 'browser')} but rejected by the API.")
+            return {
+                "success": False,
+                "found": True,
+                "masked": masked,
+                "source": found.get("source", ""),
+                "detail": (
+                    f"Found {masked} in the browser profile, but DeepSeek rejected it "
+                    "(code 40003). The stored session is expired; sign in again at chat.deepseek.com, "
+                    "then scan once more. Nothing was written to .env."
+                ),
+            }
+
+        try:
+            save_credentials_to_env(token, found.get("ds_session_id", ""))
+        except Exception as e:
+            logger.warning(f"DeepSeek Web token found but .env write failed: {e}")
+            return {
+                "success": False,
+                "found": True,
+                "masked": masked,
+                "source": found.get("source", ""),
+                "detail": f"Token verified but could not be saved to .env: {e}",
+            }
+
+        resolve_ds_credentials(force=True)
+        logger.success(f"DeepSeek Web token saved to .env from browser profile via Web UI ({found.get('source', '')}).")
         return {
             "success": True,
+            "saved": True,
             "masked": masked,
             "source": found.get("source", ""),
             "has_session": bool(found.get("ds_session_id")),

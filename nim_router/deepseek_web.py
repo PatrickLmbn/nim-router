@@ -33,6 +33,7 @@ _BROWSER_PROFILES = (
 )
 
 _LEVELDB_TOKEN_JSON = re.compile(rb'"userToken"\s*:\s*"([A-Za-z0-9_+\/=\.\-]{16,})"')
+_LEVELDB_USER_TOKENS_KEY = re.compile(rb'userTokens(?![A-Za-z0-9_])')
 _LEVELDB_DS_SESSION_JSON = re.compile(rb'"ds_session_id"\s*:\s*"([A-Za-z0-9_+\/=\.\-]{16,})"')
 _LEVELDB_RUN = re.compile(rb'[A-Za-z0-9_+\/=\.\-]{32,256}')
 _TOKEN_CHARS_RE = re.compile(rb'^[A-Za-z0-9_+\/=\.\-]{16,256}$')
@@ -50,6 +51,85 @@ def _read_env_token() -> str:
 
 def _read_env_session() -> str:
     return (os.getenv("DEEPSEEK_WEB_DS_SESSION_ID") or "").strip()
+
+
+def _json_object_after(blob: bytes, key: bytes) -> dict[str, Any] | None:
+    """Decode the JSON object that follows a LevelDB key in a raw dump."""
+    idx = blob.find(key)
+    while idx >= 0:
+        start = blob.find(b"{", idx + len(key), idx + len(key) + 64)
+        if start < 0:
+            return None
+        depth = 0
+        in_string = False
+        escaped = False
+        for pos in range(start, min(len(blob), start + 65536)):
+            char = blob[pos]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == 0x5C:  # backslash
+                    escaped = True
+                elif char == 0x22:  # quote
+                    in_string = False
+                continue
+            if char == 0x22:
+                in_string = True
+            elif char == 0x7B:  # {
+                depth += 1
+            elif char == 0x7D:  # }
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(blob[start:pos + 1].decode("utf-8", "ignore"))
+                    except (TypeError, ValueError):
+                        return None
+        idx = blob.find(key, idx + 1)
+    return None
+
+
+_LEVELDB_USER_TOKEN_ENTRY = re.compile(
+    rb'"([A-Za-z0-9_+\/=\.\-]{16,256})"\s*,\s*"expiration"\s*:\s*"[^"]*"'
+    rb'(?:\s*,\s*"lastAuth"\s*:\s*"([^"]*)")?'
+)
+
+
+def _token_from_user_tokens(blob: bytes) -> str:
+    """Pick the freshest token from the `userTokens` map DeepSeek writes.
+
+    The map looks like {"<base64 user id>": {"token": "...", "lastAuth": "..."}}.
+    LevelDB prefix-compresses keys inside the dump, so the literal JSON often
+    cannot be parsed; a tolerant regex over the token/expiration pair is used
+    as a fallback. Chat page cache keys also look token-ish, so this map is
+    preferred over the generic binary scan.
+    """
+    data = _json_object_after(blob, b"userTokens")
+    if isinstance(data, dict):
+        entries: list[tuple[str, str]] = []
+        for value in data.values():
+            if not isinstance(value, dict):
+                continue
+            token = str(value.get("token") or "").strip()
+            if not token or not _TOKEN_CHARS_RE.fullmatch(token.encode("ascii", "ignore")):
+                continue
+            entries.append((str(value.get("lastAuth") or value.get("expiration") or ""), token))
+        if entries:
+            entries.sort(reverse=True)
+            return entries[0][1]
+
+    idx = blob.find(b"userTokens")
+    if idx < 0:
+        return ""
+    entries = []
+    for match in _LEVELDB_USER_TOKEN_ENTRY.finditer(blob, idx, idx + 65536):
+        token = match.group(1).decode("ascii", "ignore")
+        if "/" in token:
+            continue
+        entries.append(((match.group(2) or b"").decode("ascii", "ignore"), token))
+    if not entries:
+        return ""
+    entries.sort(reverse=True)
+    return entries[0][1]
 
 
 def _leveldb_binary_value(blob: bytes, key: bytes) -> str:
@@ -91,13 +171,20 @@ def _scan_leveldb(profile: Path) -> dict[str, str]:
         except Exception:
             continue
         if "userToken" not in found:
-            match = _LEVELDB_TOKEN_JSON.search(blob)
-            if match:
-                found["userToken"] = match.group(1).decode("ascii", "ignore")
-            else:
-                binary = _leveldb_binary_value(blob, b"userToken")
-                if binary:
-                    found["userToken"] = binary
+            token = ""
+            if _LEVELDB_USER_TOKENS_KEY.search(blob):
+                token = _token_from_user_tokens(blob)
+            if not token:
+                match = _LEVELDB_TOKEN_JSON.search(blob)
+                if match:
+                    token = match.group(1).decode("ascii", "ignore")
+                else:
+                    binary = _leveldb_binary_value(blob, b"userToken")
+                    # Chat cache keys contain slashes; never treat those as tokens.
+                    if binary and "/" not in binary:
+                        token = binary
+            if token:
+                found["userToken"] = token
         if "ds_session_id" not in found:
             match = _LEVELDB_DS_SESSION_JSON.search(blob)
             if match:
@@ -215,6 +302,51 @@ def clear_credential_cache() -> None:
     """Reset cached credentials, e.g. after the dashboard updates the key."""
     _TOKEN_CACHE.update({"value": "", "ds_session_id": "", "source": "", "stamp": 0.0})
     _STICKY_TOKEN.update({"value": "", "ds_session_id": "", "source": "", "stamp": 0.0})
+
+
+def save_credentials_to_env(token: str, ds_session_id: str = "", env_path: str | None = None) -> str:
+    """Persist a verified token to .env so it survives restarts."""
+    token = (token or "").strip()
+    if not token:
+        raise ValueError("Refusing to save an empty DeepSeek Web token.")
+    if env_path is None:
+        env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+
+    values = {"DEEPSEEK_WEB_TOKEN": token}
+    if ds_session_id:
+        values["DEEPSEEK_WEB_DS_SESSION_ID"] = ds_session_id.strip()
+    else:
+        values["DEEPSEEK_WEB_DS_SESSION_ID"] = ""
+
+    lines: list[str] = []
+    if os.path.isfile(env_path):
+        with open(env_path, "r") as f:
+            lines = f.read().splitlines()
+
+    for name, value in values.items():
+        replaced = False
+        for i, line in enumerate(lines):
+            if line.strip().startswith(f"{name}="):
+                if value:
+                    lines[i] = f"{name}={value}"
+                else:
+                    lines[i] = f"{name}="
+                replaced = True
+                break
+        if not replaced and value:
+            lines.append(f"{name}={value}")
+
+    with open(env_path, "w") as f:
+        f.write("\n".join(lines).rstrip() + "\n")
+    try:
+        os.chmod(env_path, 0o600)
+    except OSError:
+        pass
+
+    os.environ.update(values)
+    clear_credential_cache()
+    logger.info(f"DeepSeek Web credentials written to {env_path}.")
+    return env_path
 
 
 def deepseek_web_upstream_model_id(model_id: str) -> str:
@@ -468,6 +600,19 @@ async def _fetch_current_user(client: httpx.AsyncClient, token: str) -> dict:
             f"DeepSeek Web: users/current returned invalid JSON: {resp.text[:200]}"
         )
     return _checked_biz(payload, "users/current")
+
+
+async def verify_token(token: str) -> bool:
+    """True when DeepSeek accepts the bearer token."""
+    token = (token or "").strip()
+    if not token:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            await _fetch_current_user(client, token)
+        return True
+    except Exception:
+        return False
 
 
 async def list_models() -> list[dict]:
