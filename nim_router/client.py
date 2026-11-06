@@ -224,13 +224,11 @@ async def probe_model(api_key: str, client: httpx.AsyncClient, model_id: str, se
                 return True, elapsed
             elif resp.status_code in (400, 429, 500, 502, 503):
                 detail = resp.text
-                if resp.status_code == 429 and "opencode.ai" in base_url and (
-                    "FreeUsageLimitError" in detail
-                    or "Free usage limit reached" in detail
-                    or "free tier" in detail.lower()
-                ):
-                    _record(resp.status_code, False, 999.0, detail)
-                    return False, 999.0
+                # Note: an OpenCode free-tier quota 429 (FreeUsageLimitError) is
+                # intentionally NOT hard-failed here. Falling through to the generic
+                # 429 handling keeps the model in the catalog (so it still shows in
+                # the dashboard) with a penalty latency; request-time 429s are
+                # handled separately via the engine's rate-limit cooldown.
                 latency = 10.0 + elapsed
                 _record(resp.status_code, True, latency, detail)
                 return True, latency
@@ -456,6 +454,27 @@ async def discover_antigravity_models(
     return verified
 
 
+def _is_free_opencode_model(m: dict) -> bool:
+    """An OpenCode Zen model is free when its ID says so or its reported cost prices are 0.
+
+    Some free models (e.g. ``big-pickle``) do not have "free" in their ID, so the
+    cost field is the reliable signal.
+    """
+    mid = m.get("id", "")
+    if not mid:
+        return False
+    if "free" in mid.lower():
+        return True
+    cost = m.get("cost") or {}
+    text_cost = cost.get("text") or {}
+    try:
+        input_price = float((text_cost.get("input") or {}).get("price"))
+        output_price = float((text_cost.get("output") or {}).get("price"))
+    except (TypeError, ValueError):
+        return False
+    return input_price == 0.0 and output_price == 0.0
+
+
 async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_keys: list[str] | str = "", opencode_key: str = "", groq_keys: list[str] | str = "", cerebras_keys: list[str] | str = "", bai_key: str = "", kiro_refresh_token: str = "", antigravity_refresh_token: str = "", report: dict | None = None) -> list[dict]:
     primary_nvidia_key = api_keys[0] if isinstance(api_keys, list) and api_keys else (api_keys if isinstance(api_keys, str) else "")
     primary_groq_key = groq_keys[0] if isinstance(groq_keys, list) and groq_keys else (groq_keys if isinstance(groq_keys, str) else "")
@@ -525,7 +544,7 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                     data = response.json()
                     oc_models = [
                         m for m in data.get("data", [])
-                        if "free" in m.get("id", "").lower() and not is_banned_model(m.get("id", ""), "OpenCode")
+                        if _is_free_opencode_model(m) and not is_banned_model(m.get("id", ""), "OpenCode")
                     ]
                     for m in oc_models:
                         m_copy = dict(m)
