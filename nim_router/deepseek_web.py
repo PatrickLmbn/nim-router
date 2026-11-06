@@ -38,6 +38,9 @@ _LEVELDB_RUN = re.compile(rb'[A-Za-z0-9_+\/=\.\-]{32,256}')
 _TOKEN_CHARS_RE = re.compile(rb'^[A-Za-z0-9_+\/=\.\-]{16,256}$')
 
 _TOKEN_CACHE: dict[str, Any] = {"value": "", "ds_session_id": "", "source": "", "stamp": 0.0}
+# A token that was adopted after an auth failure (usually a fresh browser login).
+# It wins over a stale env token until the user explicitly updates the env key.
+_STICKY_TOKEN: dict[str, Any] = {"value": "", "ds_session_id": "", "source": "", "stamp": 0.0}
 _TOKEN_TTL = 300.0
 
 
@@ -133,23 +136,60 @@ def _scan_cookies(profile: Path) -> dict[str, str]:
     return found
 
 
-def extract_browser_credentials() -> dict[str, str]:
+def _collect_browser_credentials() -> list[dict[str, str]]:
+    """Return browser sessions, newest profile first, deduplicated by token."""
+    profiles = []
     for raw in _BROWSER_PROFILES:
         profile = Path(raw).expanduser()
         if not profile.is_dir():
             continue
+        storage = profile / "Local Storage" / "leveldb"
+        newest = max((p.stat().st_mtime for p in storage.glob("*")), default=0.0) if storage.is_dir() else 0.0
+        profiles.append((newest, profile))
+    profiles.sort(key=lambda item: item[0], reverse=True)
+
+    sessions: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for _, profile in profiles:
         merged = _scan_leveldb(profile)
         for key, value in _scan_cookies(profile).items():
             merged.setdefault(key, value)
-        if merged.get("userToken"):
-            merged["source"] = str(profile)
-            return merged
-    return {}
+        token = (merged.get("userToken") or "").strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        sessions.append({
+            "token": token,
+            "ds_session_id": (merged.get("ds_session_id") or "").strip(),
+            "source": str(profile),
+        })
+    return sessions
+
+
+def extract_browser_credentials() -> dict[str, str]:
+    sessions = _collect_browser_credentials()
+    if not sessions:
+        return {}
+    best = sessions[0]
+    return {
+        "userToken": best["token"],
+        "ds_session_id": best["ds_session_id"],
+        "source": best["source"],
+    }
 
 
 def resolve_credentials(force: bool = False) -> dict[str, str]:
     now = time.time()
-    if not force and _TOKEN_CACHE["value"] and (now - _TOKEN_CACHE["stamp"]) < _TOKEN_TTL:
+    if force:
+        # An explicit refresh means the env/dashboard key is the source of truth.
+        _STICKY_TOKEN.update({"value": "", "ds_session_id": "", "source": "", "stamp": 0.0})
+    elif _STICKY_TOKEN["value"]:
+        return {
+            "token": _STICKY_TOKEN["value"],
+            "ds_session_id": _STICKY_TOKEN["ds_session_id"],
+            "source": _STICKY_TOKEN["source"],
+        }
+    elif _TOKEN_CACHE["value"] and (now - _TOKEN_CACHE["stamp"]) < _TOKEN_TTL:
         return {
             "token": _TOKEN_CACHE["value"],
             "ds_session_id": _TOKEN_CACHE["ds_session_id"],
@@ -169,6 +209,12 @@ def resolve_credentials(force: bool = False) -> dict[str, str]:
 
     _TOKEN_CACHE.update({"value": token, "ds_session_id": session, "source": source, "stamp": now})
     return {"token": token, "ds_session_id": session, "source": source}
+
+
+def clear_credential_cache() -> None:
+    """Reset cached credentials, e.g. after the dashboard updates the key."""
+    _TOKEN_CACHE.update({"value": "", "ds_session_id": "", "source": "", "stamp": 0.0})
+    _STICKY_TOKEN.update({"value": "", "ds_session_id": "", "source": "", "stamp": 0.0})
 
 
 def deepseek_web_upstream_model_id(model_id: str) -> str:
@@ -302,12 +348,38 @@ def _error_from_response(response: httpx.Response, body: bytes, context: str) ->
     )
 
 
-def _refresh_token_if_possible(previous_token: str) -> str:
-    fresh = resolve_credentials(force=True)
-    token = (fresh.get("token") or "").strip()
-    if token and token != previous_token:
-        return token
-    return ""
+def _refresh_token_candidates(previous_token: str) -> list[dict[str, str]]:
+    """Tokens to try after the current one was rejected, best candidate first.
+
+    A stale DEEPSEEK_WEB_TOKEN previously blocked browser auto-detection, so the
+    browser's current session token is included even when the env key is set.
+    """
+    previous = (previous_token or "").strip()
+    candidates: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    env_token = _read_env_token()
+    if env_token and env_token != previous and env_token not in seen:
+        seen.add(env_token)
+        candidates.append({"token": env_token, "ds_session_id": _read_env_session(), "source": "env"})
+
+    for session in _collect_browser_credentials():
+        token = session["token"]
+        if token and token != previous and token not in seen:
+            seen.add(token)
+            candidates.append(session)
+
+    return candidates
+
+
+def _adopt_token(credential: dict[str, str]) -> None:
+    """Remember a token that just authenticated successfully."""
+    _STICKY_TOKEN.update({
+        "value": credential.get("token", ""),
+        "ds_session_id": credential.get("ds_session_id", ""),
+        "source": credential.get("source", "refresh"),
+        "stamp": time.time(),
+    })
 
 
 async def fetch_hif_tokens(client: httpx.AsyncClient) -> dict[str, str]:
@@ -407,11 +479,19 @@ async def list_models() -> list[dict]:
         try:
             await _fetch_current_user(client, token)
         except DeepSeekAuthError:
-            fresh_token = _refresh_token_if_possible(token)
-            if not fresh_token:
+            refreshed = None
+            for credential in _refresh_token_candidates(token):
+                try:
+                    await _fetch_current_user(client, credential["token"])
+                except DeepSeekAuthError:
+                    continue
+                refreshed = credential
+                break
+            if refreshed is None:
                 raise
-            token = fresh_token
-            await _fetch_current_user(client, token)
+            _adopt_token(refreshed)
+            token = refreshed["token"]
+            logger.warning(f"DeepSeek Web: adopted refreshed credentials from {refreshed['source']}.")
     return [
         {
             "id": f"{DEEPSEEK_WEB_PREFIX}chat",
@@ -890,12 +970,21 @@ async def stream_chat_completion(
     try:
         response, line_iterator, first_line = await open_completion(token)
     except DeepSeekAuthError:
-        fresh_token = _refresh_token_if_possible(token)
-        if not fresh_token:
+        refreshed = None
+        for credential in _refresh_token_candidates(token):
+            try:
+                response, line_iterator, first_line = await open_completion(credential["token"])
+            except DeepSeekAuthError:
+                continue
+            refreshed = credential
+            token = credential["token"]
+            break
+        if refreshed is None:
             raise
-        logger.warning("DeepSeek Web: token was rejected; retrying once with refreshed credentials.")
-        token = fresh_token
-        response, line_iterator, first_line = await open_completion(token)
+        _adopt_token(refreshed)
+        logger.warning(
+            f"DeepSeek Web: token was rejected; retried with refreshed credentials from {refreshed['source']}."
+        )
 
     completion_id = _chunk_id()
     created = int(time.time())
