@@ -475,12 +475,13 @@ def _is_free_opencode_model(m: dict) -> bool:
     return input_price == 0.0 and output_price == 0.0
 
 
-async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_keys: list[str] | str = "", opencode_key: str = "", groq_keys: list[str] | str = "", cerebras_keys: list[str] | str = "", bai_key: str = "", kiro_refresh_token: str = "", antigravity_refresh_token: str = "", report: dict | None = None) -> list[dict]:
+async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_keys: list[str] | str = "", opencode_key: "str | list[str]" = "", groq_keys: list[str] | str = "", cerebras_keys: list[str] | str = "", bai_key: str = "", kiro_refresh_token: str = "", antigravity_refresh_token: str = "", report: dict | None = None) -> list[dict]:
     primary_nvidia_key = api_keys[0] if isinstance(api_keys, list) and api_keys else (api_keys if isinstance(api_keys, str) else "")
     primary_groq_key = groq_keys[0] if isinstance(groq_keys, list) and groq_keys else (groq_keys if isinstance(groq_keys, str) else "")
     primary_cerebras_key = cerebras_keys[0] if isinstance(cerebras_keys, list) and cerebras_keys else (cerebras_keys if isinstance(cerebras_keys, str) else "")
     openrouter_keys_list = [k.strip() for k in openrouter_keys if k.strip()] if isinstance(openrouter_keys, list) else [k.strip() for k in (openrouter_keys or "").split(",") if k.strip()]
     primary_openrouter_key = openrouter_keys_list[0] if openrouter_keys_list else ""
+    opencode_keys_list = [k.strip() for k in opencode_key if k.strip()] if isinstance(opencode_key, list) else [k.strip() for k in (opencode_key or "").split(",") if k.strip()]
 
     all_discovered = []
     candidates_to_probe = []
@@ -533,12 +534,12 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
         except Exception as e:
             logger.error(f"OpenRouter discovery failed: {e}")
 
-    if opencode_key:
+    if opencode_keys_list:
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.get(
                     f"{OPENCODE_API_BASE}/models",
-                    headers={"Authorization": f"Bearer {opencode_key}"},
+                    headers={"Authorization": f"Bearer {opencode_keys_list[0]}"},
                 )
                 if response.status_code == 200:
                     data = response.json()
@@ -546,10 +547,13 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                         m for m in data.get("data", [])
                         if _is_free_opencode_model(m) and not is_banned_model(m.get("id", ""), "OpenCode")
                     ]
-                    for m in oc_models:
+                    for idx, m in enumerate(oc_models):
                         m_copy = dict(m)
                         m_copy["provider"] = "OpenCode"
-                        candidates_to_probe.append((opencode_key, m_copy, OPENCODE_API_BASE))
+                        # Spread probes across accounts so one exhausted key does
+                        # not make the whole provider look unavailable.
+                        probe_key = opencode_keys_list[idx % len(opencode_keys_list)]
+                        candidates_to_probe.append((probe_key, m_copy, OPENCODE_API_BASE))
         except Exception as e:
             logger.error(f"OpenCode discovery failed: {e}")
 

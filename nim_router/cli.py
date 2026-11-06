@@ -10,7 +10,7 @@ import httpx
 from nim_router.config import (
     get_nvidia_keys,
     get_openrouter_keys,
-    get_opencode_key,
+    get_opencode_keys,
     get_groq_keys,
     get_cerebras_keys,
     get_bai_key,
@@ -190,7 +190,7 @@ def stop_server():
 async def async_probe_models():
     nvidia_keys = get_nvidia_keys()
     openrouter_keys = get_openrouter_keys()
-    opencode_key = get_opencode_key()
+    opencode_keys = get_opencode_keys()
     groq_keys = get_groq_keys()
     cerebras_keys = get_cerebras_keys()
     bai_key = get_bai_key()
@@ -204,7 +204,7 @@ async def async_probe_models():
     router = ModelRouter(
         api_key=nvidia_keys,
         openrouter_keys=openrouter_keys,
-        opencode_key=opencode_key,
+        opencode_key=opencode_keys,
         groq_keys=groq_keys,
         cerebras_keys=cerebras_keys,
         bai_key=bai_key,
@@ -233,7 +233,7 @@ async def async_probe_models():
 async def interactive_model_selector():
     nvidia_keys = get_nvidia_keys()
     openrouter_keys = get_openrouter_keys()
-    opencode_key = get_opencode_key()
+    opencode_keys = get_opencode_keys()
     groq_keys = get_groq_keys()
     cerebras_keys = get_cerebras_keys()
     bai_key = get_bai_key()
@@ -255,7 +255,7 @@ async def interactive_model_selector():
     router = ModelRouter(
         api_key=nvidia_keys,
         openrouter_keys=openrouter_keys,
-        opencode_key=opencode_key,
+        opencode_key=opencode_keys,
         groq_keys=groq_keys,
         cerebras_keys=cerebras_keys,
         bai_key=bai_key,
@@ -401,7 +401,7 @@ async def async_connect_api_keys():
 
     current_nvidia = get_nvidia_keys()
     current_or = get_openrouter_keys()
-    current_oc = get_opencode_key()
+    current_oc = get_opencode_keys()
     current_groq = get_groq_keys()
     current_cerebras = get_cerebras_keys()
     current_bai = get_bai_key()
@@ -420,7 +420,8 @@ async def async_connect_api_keys():
     print(f"Current Groq Key:      \033[1;33m{groq_disp}\033[0m")
     print(f"Current Cerebras Key:  \033[1;33m{cerebras_disp}\033[0m")
     print(f"Current OpenRouter Key: \033[1;33m{or_disp}\033[0m")
-    print(f"Current OpenCode Key:  \033[1;33m{mask(current_oc)}\033[0m")
+    oc_disp = ", ".join([mask(k) for k in current_oc]) if current_oc else "(Not set)"
+    print(f"Current OpenCode Key:  \033[1;33m{oc_disp}\033[0m")
     print(f"Current B.AI Key:      \033[1;33m{mask(current_bai)}\033[0m")
     print(f"Current Kiro Token:    \033[1;33m{mask(current_kiro)}\033[0m")
     print(f"Current Antigravity:   \033[1;33m{mask(current_antigravity)}\033[0m\n")
@@ -431,7 +432,7 @@ async def async_connect_api_keys():
         groq_k = getpass.getpass("Groq Free API Key (Optional): ").strip()
         cerebras_k = getpass.getpass("Cerebras Free API Key (Optional): ").strip()
         or_key = getpass.getpass("OpenRouter API Key (Optional, comma-separated for multiple): ").strip()
-        oc_key = getpass.getpass("OpenCode API Key (Optional): ").strip()
+        oc_key = getpass.getpass("OpenCode API Key (Optional, comma-separated for multiple accounts): ").strip()
         bai_k = getpass.getpass("B.AI Free API Key (Optional): ").strip()
         kiro_k = getpass.getpass("Kiro Refresh Token (Optional, auto-detected if empty): ").strip()
         antigravity_k = getpass.getpass("Antigravity Refresh Token (Optional, auto-detected if empty): ").strip()
@@ -441,7 +442,7 @@ async def async_connect_api_keys():
 
     final_nvidia = k1 if k1 else ",".join(current_nvidia)
     final_or = or_key if or_key else ",".join(current_or)
-    final_oc = oc_key if oc_key else current_oc
+    final_oc = oc_key if oc_key else ",".join(current_oc)
     final_groq = groq_k if groq_k else ",".join(current_groq)
     final_cerebras = cerebras_k if cerebras_k else ",".join(current_cerebras)
     final_bai = bai_k if bai_k else current_bai
@@ -463,7 +464,8 @@ async def async_connect_api_keys():
     if final_or:
         env_vars["OPENROUTER_API_KEY"] = final_or
     if final_oc:
-        env_vars["OPENCODE_API_KEY"] = final_oc
+        env_vars["OPENCODE_API_KEYS"] = final_oc
+        env_vars.pop("OPENCODE_API_KEY", None)
     if final_groq:
         env_vars["GROQ_API_KEYS"] = final_groq
     if final_cerebras:
@@ -502,7 +504,7 @@ async def async_manage_provider_keys():
     current_groq = get_groq_keys()
     current_cerebras = get_cerebras_keys()
     current_or = get_openrouter_keys()
-    current_oc = get_opencode_key()
+    current_oc = get_opencode_keys()
     current_bai = get_bai_key()
     current_kiro = get_kiro_refresh_token() or resolve_refresh_token()
     current_antigravity = get_antigravity_refresh_token() or resolve_antigravity_refresh_token()
@@ -517,7 +519,7 @@ async def async_manage_provider_keys():
     print(f"  \033[1;32m[2]\033[0m Groq LPU      \033[90m({len(current_groq)} keys: {mask_list(current_groq)})\033[0m")
     print(f"  \033[1;32m[3]\033[0m Cerebras      \033[90m({len(current_cerebras)} keys: {mask_list(current_cerebras)})\033[0m")
     print(f"  \033[1;32m[4]\033[0m OpenRouter    \033[90m({len(current_or)} keys: {mask_list(current_or)})\033[0m")
-    print(f"  \033[1;32m[5]\033[0m OpenCode      \033[90m(Key: {mask_list([current_oc] if current_oc else [])})\033[0m")
+    print(f"  \033[1;32m[5]\033[0m OpenCode      \033[90m({len(current_oc)} keys: {mask_list(current_oc)})\033[0m")
     print(f"  \033[1;32m[6]\033[0m B.AI          \033[90m(Key: {mask_list([current_bai] if current_bai else [])})\033[0m")
     print(f"  \033[1;32m[7]\033[0m Kiro          \033[90m(Token: {mask_list([current_kiro] if current_kiro else [])})\033[0m")
     print(f"  \033[1;32m[8]\033[0m Antigravity   \033[90m(Token: {mask_list([current_antigravity] if current_antigravity else [])})\033[0m\n")
@@ -539,7 +541,7 @@ async def async_manage_provider_keys():
         2: ("GROQ_API_KEYS", "Groq LPU", current_groq),
         3: ("CEREBRAS_API_KEYS", "Cerebras", current_cerebras),
         4: ("OPENROUTER_API_KEYS", "OpenRouter", current_or),
-        5: ("OPENCODE_API_KEY", "OpenCode", [current_oc] if current_oc else []),
+        5: ("OPENCODE_API_KEYS", "OpenCode", current_oc),
         6: ("BAI_API_KEY", "B.AI", [current_bai] if current_bai else []),
         7: ("KIRO_REFRESH_TOKEN", "Kiro", [current_kiro] if current_kiro else []),
         8: ("ANTIGRAVITY_REFRESH_TOKEN", "Antigravity", [current_antigravity] if current_antigravity else []),
@@ -584,15 +586,19 @@ async def async_manage_provider_keys():
 
     if new_val.lower() == "clear":
         env_vars.pop(env_var_name, None)
+        if prov_num == 5:
+            env_vars.pop("OPENCODE_API_KEY", None)
         print(f"\033[1;32m[✓] Cleared all API keys for {prov_label}.\033[0m")
     else:
         new_keys_list = [k.strip() for k in new_val.split(",") if k.strip()]
-        if prov_num in (1, 2, 3, 4):
+        if prov_num in (1, 2, 3, 4, 5):
             combined_keys = []
             for k in existing_keys + new_keys_list:
                 if k and k not in combined_keys:
                     combined_keys.append(k)
             env_vars[env_var_name] = ",".join(combined_keys)
+            if prov_num == 5:
+                env_vars.pop("OPENCODE_API_KEY", None)
             print(f"\033[1;32m[✓] Updated {prov_label} keys: {len(combined_keys)} total key(s) configured.\033[0m")
         else:
             env_vars[env_var_name] = new_keys_list[0] if new_keys_list else ""

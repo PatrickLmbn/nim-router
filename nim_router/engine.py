@@ -25,6 +25,7 @@ from nim_router.config import (
     get_primary_model,
     get_routing_strategy,
     get_kiro_enabled,
+    get_opencode_quota_cooldown,
 )
 from nim_router.combos import get_combo, load_combos
 from nim_router.logger import logger
@@ -50,7 +51,7 @@ from nim_router.deepseek_web import DEEPSEEK_WEB_PREFIX, DEEPSEEK_WEB_BASE
 from nim_router.gemini_web import GEMINI_WEB_PREFIX, GEMINI_WEB_BASE
 
 class ModelRouter:
-    def __init__(self, api_key: str | list[str], openrouter_keys: str | list[str] = "", opencode_key: str = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = "", bai_key: str = "", kiro_refresh_token: str = "", antigravity_refresh_token: str = "", strategy: str = ""):
+    def __init__(self, api_key: str | list[str], openrouter_keys: str | list[str] = "", opencode_key: "str | list[str]" = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = "", bai_key: str = "", kiro_refresh_token: str = "", antigravity_refresh_token: str = "", strategy: str = ""):
         self.tracker = get_usage_tracker()
         if isinstance(api_key, list):
             self.api_keys = [k.strip() for k in api_key if k.strip()]
@@ -65,7 +66,11 @@ class ModelRouter:
             self.openrouter_keys = [k.strip() for k in openrouter_keys if k.strip()]
         else:
             self.openrouter_keys = [k.strip() for k in (openrouter_keys or "").split(",") if k.strip()]
-        self.opencode_key = opencode_key.strip()
+        if isinstance(opencode_key, list):
+            self.opencode_keys = [k.strip() for k in opencode_key if k.strip()]
+        else:
+            self.opencode_keys = [k.strip() for k in (opencode_key or "").split(",") if k.strip()]
+        self.opencode_key = self.opencode_keys[0] if self.opencode_keys else ""
         self.bai_key = bai_key.strip()
         self.kiro_refresh_token = (kiro_refresh_token or "").strip()
         self.antigravity_refresh_token = (antigravity_refresh_token or "").strip()
@@ -82,6 +87,7 @@ class ModelRouter:
 
         self.key_index = 0
         self.openrouter_key_index = 0
+        self.opencode_key_index = 0
         self.groq_key_index = 0
         self.cerebras_key_index = 0
         self.models: list[dict] = []
@@ -127,6 +133,15 @@ class ModelRouter:
             return self._model_providers[mid_clean]
         return _catalog_get_provider_name(mid_clean)
 
+    def set_opencode_keys(self, keys: "str | list[str]") -> None:
+        """Replace the OpenCode key pool (called after the dashboard updates keys)."""
+        if isinstance(keys, list):
+            self.opencode_keys = [k.strip() for k in keys if k.strip()]
+        else:
+            self.opencode_keys = [k.strip() for k in (keys or "").split(",") if k.strip()]
+        self.opencode_key = self.opencode_keys[0] if self.opencode_keys else ""
+        self.opencode_key_index = 0
+
     def _get_provider_info(self, model_id: str, overrides: dict[str, str] | None = None) -> tuple[str, str, list[str]]:
         provider = self._get_provider_name(model_id, overrides)
         now = time.time()
@@ -138,8 +153,11 @@ class ModelRouter:
             self.openrouter_key_index = (self.openrouter_key_index + 1) % len(keys)
             keys = rotated
         elif provider == "OpenCode":
-            keys = [self.opencode_key] if self.opencode_key else [""]
+            keys = self.opencode_keys if self.opencode_keys else [""]
             base_url = OPENCODE_API_BASE
+            rotated = keys[self.opencode_key_index:] + keys[:self.opencode_key_index]
+            self.opencode_key_index = (self.opencode_key_index + 1) % len(keys)
+            keys = rotated
         elif provider == "BAI":
             keys = [self.bai_key] if self.bai_key else [""]
             base_url = BAI_API_BASE
@@ -291,7 +309,7 @@ class ModelRouter:
             self.api_keys,
             self._latencies,
             self.openrouter_keys,
-            self.opencode_key,
+            self.opencode_keys,
             self.groq_keys,
             self.cerebras_keys,
             self.bai_key,
@@ -299,6 +317,7 @@ class ModelRouter:
             self.antigravity_refresh_token,
             report=self.discovery_report,
         )
+
         self.discovery_report_at = time.time()
         for m in discovered:
             mid = m.get("id")
@@ -353,15 +372,30 @@ class ModelRouter:
         self._provider_cooldowns.pop(provider, None)
         note_success(f"provider:{provider}")
 
-    def _record_key_failure(self, provider: str, key: str, model_id: str, status_code: int, retry_after: float | None = None):
+    def _record_key_failure(self, provider: str, key: str, model_id: str, status_code: int, retry_after: float | None = None, detail: str = ""):
         now = time.time()
         key_short = key[:8] if key else "default"
         key_ident = f"{provider}:{key_short}"
         fail_count = self._consecutive_failures.get(key_ident, 0) + 1
         self._consecutive_failures[key_ident] = fail_count
 
+        detail_lower = (detail or "").lower()
+        is_opencode_free_quota = (
+            provider == "OpenCode"
+            and status_code == 429
+            and (
+                "freeusagelimiterror" in detail_lower
+                or "free usage limit" in detail_lower
+                or "free tier" in detail_lower
+            )
+        )
+
         if status_code in (429, 402, 503):
-            if retry_after is not None and retry_after > 0:
+            if is_opencode_free_quota:
+                # Free-tier quotas do not reset in seconds; park the account's key
+                # for a long window and fail over to another configured account.
+                cooldown_sec = get_opencode_quota_cooldown()
+            elif retry_after is not None and retry_after > 0:
                 cooldown_sec = retry_after
             else:
                 cooldown_sec = min(60.0, max(5.0, 5.0 * (2 ** (fail_count - 1))))
@@ -369,7 +403,10 @@ class ModelRouter:
             cooldown_until = now + cooldown_sec
             if key:
                 self._key_cooldowns[(provider, key)] = cooldown_until
-            self._rate_limited_until[model_id] = cooldown_until
+            if not is_opencode_free_quota:
+                # A free-tier quota is per account, so only the key is parked;
+                # the same model stays usable through another account's key.
+                self._rate_limited_until[model_id] = cooldown_until
             logger.warning(
                 f"Key {key_ident} for model '{model_id}' cooling down for {cooldown_sec:.1f}s "
                 f"(status={status_code}, retry_after_hdr={retry_after}, consecutive_fails={fail_count})"
@@ -1277,7 +1314,7 @@ class ModelRouter:
                     except HTTPException as e:
                         retry_after_hdr = e.headers.get("Retry-After") if e.headers else None
                         retry_sec = float(retry_after_hdr) if retry_after_hdr else None
-                        self._record_key_failure(provider, current_key, selected_id, e.status_code, retry_after=retry_sec)
+                        self._record_key_failure(provider, current_key, selected_id, e.status_code, retry_after=retry_sec, detail=str(e.detail or ""))
                         self.tracker.record_request(
                             provider=provider,
                             model=selected_id,

@@ -109,8 +109,21 @@ def get_openrouter_keys() -> list[str]:
     raw_keys = os.getenv("OPENROUTER_API_KEYS", "") or os.getenv("OPENROUTER_API_KEY", "")
     return [k.strip() for k in raw_keys.split(",") if k.strip()]
 
+def get_opencode_keys() -> list[str]:
+    raw_keys = os.getenv("OPENCODE_API_KEYS", "") or os.getenv("OPENCODE_API_KEY", "")
+    return [k.strip() for k in raw_keys.split(",") if k.strip()]
+
 def get_opencode_key() -> str:
-    return os.getenv("OPENCODE_API_KEY", "").strip()
+    """Back-compat helper: the first configured OpenCode key."""
+    keys = get_opencode_keys()
+    return keys[0] if keys else ""
+
+def get_opencode_quota_cooldown() -> float:
+    """How long a key whose OpenCode free-tier quota is exhausted stays parked."""
+    try:
+        return max(60.0, float(_load_settings().get("opencode_quota_cooldown", 21600)))
+    except (TypeError, ValueError):
+        return 21600.0
 
 def get_groq_keys() -> list[str]:
     raw_keys = os.getenv("GROQ_API_KEYS", "") or os.getenv("GROQ_API_KEY", "")

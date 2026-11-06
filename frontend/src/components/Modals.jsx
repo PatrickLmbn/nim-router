@@ -331,7 +331,7 @@ export function KeysManagerModal({ onClose, onKeysUpdated }) {
     Groq: { name: 'Groq LPU', short: 'Groq', color: '#F55036', env: 'GROQ_API_KEYS', multi: true, placeholder: 'gsk_...' },
     Cerebras: { name: 'Cerebras Wafer', short: 'Cerebras', color: '#FF6B35', env: 'CEREBRAS_API_KEYS', multi: true, placeholder: 'csk-...' },
     OpenRouter: { name: 'OpenRouter Free', short: 'OpenRouter', color: '#6366F1', env: 'OPENROUTER_API_KEYS', multi: true, placeholder: 'sk-or-v1-...' },
-    OpenCode: { name: 'OpenCode Zen', short: 'OpenCode', color: '#00D2FF', env: 'OPENCODE_API_KEY', multi: false, placeholder: 'opencode_...' },
+    OpenCode: { name: 'OpenCode Zen', short: 'OpenCode', color: '#00D2FF', env: 'OPENCODE_API_KEYS', multi: true, placeholder: 'oc_sk_... (comma-separated for multiple accounts)' },
     BAI: { name: 'B.AI Free', short: 'B.AI', color: '#A855F7', env: 'BAI_API_KEY', multi: false, placeholder: 'bai_...' },
     Kiro: { name: 'Kiro (AWS CodeWhisperer)', short: 'Kiro', color: '#FF9900', env: 'KIRO_REFRESH_TOKEN', multi: false, placeholder: 'aor_...' },
     Antigravity: { name: 'Antigravity (Google)', short: 'Antigravity', color: '#4285F4', env: 'ANTIGRAVITY_REFRESH_TOKEN', multi: false, placeholder: '1//...' },

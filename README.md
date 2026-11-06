@@ -236,7 +236,8 @@ NVIDIA_API_KEYS="nvapi-key1,nvapi-key2"
 GROQ_API_KEYS="gsk_key1,gsk_key2"
 CEREBRAS_API_KEYS="csk-key1,csk-key2"
 OPENROUTER_API_KEYS="sk-or-v1-key1,sk-or-v1-key2"
-OPENCODE_API_KEY="your-opencode-key"
+# OpenCode Zen: add multiple accounts to rotate around free-tier limits.
+OPENCODE_API_KEYS="oc_sk-key1,oc_sk-key2"
 BAI_API_KEY="your-bai-key"
 
 # Kiro (AWS CodeWhisperer) - written for you by the sign-in flow.
@@ -268,6 +269,7 @@ routing_strategy: "fallback"     # 'fallback' or 'round_robin'
 max_latency_threshold: 3.0       # Exclude endpoints slower than 3.0s
 health_refresh_interval: 180     # Background health probe cycle in seconds
 rate_limit_cooldown: 30          # Fallback cooldown in seconds on 429 errors
+opencode_quota_cooldown: 21600   # Seconds to park an OpenCode key out of free quota
 primary_pool_size: 7             # Number of top models used for round_robin
 model_max_rpm: 35                # Maximum requests per minute per endpoint
 model_max_concurrency: 4         # Maximum in-flight requests per endpoint

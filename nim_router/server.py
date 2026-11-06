@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from nim_router.config import (
     get_nvidia_keys,
     get_openrouter_keys,
-    get_opencode_key,
+    get_opencode_keys,
     get_groq_keys,
     get_cerebras_keys,
     get_bai_key,
@@ -75,7 +75,7 @@ async def lifespan(app: FastAPI):
     _server_start_time = time.time()
     nvidia_keys = get_nvidia_keys()
     openrouter_keys = get_openrouter_keys()
-    opencode_key = get_opencode_key()
+    opencode_keys = get_opencode_keys()
     groq_keys = get_groq_keys()
     cerebras_keys = get_cerebras_keys()
     bai_key = get_bai_key()
@@ -83,13 +83,13 @@ async def lifespan(app: FastAPI):
     antigravity_refresh_token = get_antigravity_refresh_token()
     strategy = get_routing_strategy()
 
-    if not nvidia_keys and not openrouter_keys and not opencode_key and not groq_keys and not cerebras_keys and not bai_key and not kiro_refresh_token and not antigravity_refresh_token:
+    if not nvidia_keys and not openrouter_keys and not opencode_keys and not groq_keys and not cerebras_keys and not bai_key and not kiro_refresh_token and not antigravity_refresh_token:
         logger.warning("No API keys found in environment (.env). Please configure NVIDIA_API_KEYS, OPENROUTER_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, BAI_API_KEY, or sign in with Kiro or Antigravity.")
 
     _router_instance = ModelRouter(
         api_key=nvidia_keys,
         openrouter_keys=openrouter_keys,
-        opencode_key=opencode_key,
+        opencode_key=opencode_keys,
         groq_keys=groq_keys,
         cerebras_keys=cerebras_keys,
         bai_key=bai_key,
@@ -279,7 +279,7 @@ def create_app() -> FastAPI:
         groq_keys = get_groq_keys()
         cerebras_keys = get_cerebras_keys()
         or_keys = get_openrouter_keys()
-        oc_key = get_opencode_key()
+        oc_keys = get_opencode_keys()
         bai_key = get_bai_key()
         kiro_token = get_kiro_refresh_token() or resolve_refresh_token()
         antigravity_token = get_antigravity_refresh_token() or resolve_antigravity_refresh_token()
@@ -418,7 +418,7 @@ def create_app() -> FastAPI:
                 "Groq": {"keys_count": len(groq_keys), "active": len(groq_keys) > 0, "models_count": prov_models_count.get("Groq", 0)},
                 "Cerebras": {"keys_count": len(cerebras_keys), "active": len(cerebras_keys) > 0, "models_count": prov_models_count.get("Cerebras", 0)},
                 "OpenRouter": {"keys_count": len(or_keys), "active": len(or_keys) > 0, "models_count": prov_models_count.get("OpenRouter", 0)},
-                "OpenCode": {"keys_count": 1 if oc_key else 0, "active": bool(oc_key), "models_count": prov_models_count.get("OpenCode", 0)},
+                "OpenCode": {"keys_count": len(oc_keys), "active": bool(oc_keys), "models_count": prov_models_count.get("OpenCode", 0)},
                 "BAI": {"keys_count": 1 if bai_key else 0, "active": bool(bai_key), "models_count": prov_models_count.get("BAI", 0)},
                 "Kiro": {"keys_count": 1 if kiro_token else 0, "active": bool(kiro_token) and get_kiro_enabled(), "disabled": not get_kiro_enabled(), "disabled_reason": KIRO_DISABLED_REASON, "models_count": prov_models_count.get("Kiro", 0)},
                 "Antigravity": {"keys_count": 1 if antigravity_token else 0, "active": bool(antigravity_token), "models_count": prov_models_count.get("Antigravity", 0)},
@@ -486,7 +486,7 @@ def create_app() -> FastAPI:
         groq_keys = get_groq_keys()
         cerebras_keys = get_cerebras_keys()
         or_keys = get_openrouter_keys()
-        oc_key = get_opencode_key()
+        oc_keys = get_opencode_keys()
         bai_key = get_bai_key()
         kiro_token = get_kiro_refresh_token() or resolve_refresh_token()
         antigravity_token = get_antigravity_refresh_token() or resolve_antigravity_refresh_token()
@@ -513,7 +513,7 @@ def create_app() -> FastAPI:
                 {"id": "Groq", "name": "Groq LPU", "env_var": "GROQ_API_KEYS", "keys": [mask(k) for k in groq_keys], "count": len(groq_keys)},
                 {"id": "Cerebras", "name": "Cerebras Wafer-Scale", "env_var": "CEREBRAS_API_KEYS", "keys": [mask(k) for k in cerebras_keys], "count": len(cerebras_keys)},
                 {"id": "OpenRouter", "name": "OpenRouter Free", "env_var": "OPENROUTER_API_KEYS", "keys": [mask(k) for k in or_keys], "count": len(or_keys)},
-                {"id": "OpenCode", "name": "OpenCode Zen", "env_var": "OPENCODE_API_KEY", "keys": [mask(oc_key)] if oc_key else [], "count": 1 if oc_key else 0},
+                {"id": "OpenCode", "name": "OpenCode Zen", "env_var": "OPENCODE_API_KEYS", "keys": [mask(k) for k in oc_keys], "count": len(oc_keys)},
                 {"id": "BAI", "name": "B.AI Free", "env_var": "BAI_API_KEY", "keys": [mask(bai_key)] if bai_key else [], "count": 1 if bai_key else 0},
                 {"id": "Kiro", "name": "Kiro (AWS CodeWhisperer)", "env_var": "KIRO_REFRESH_TOKEN", "keys": [mask(kiro_token)] if kiro_token else [], "count": 1 if kiro_token else 0, "disabled": not get_kiro_enabled(), "disabled_reason": KIRO_DISABLED_REASON},
                 {"id": "Antigravity", "name": "Antigravity (Google)", "env_var": "ANTIGRAVITY_REFRESH_TOKEN", "keys": [mask(antigravity_token)] if antigravity_token else [], "count": 1 if antigravity_token else 0, "scopes_ok": _antigravity_scopes_ok(), "missing_scopes": _antigravity_missing_scopes()},
@@ -535,7 +535,7 @@ def create_app() -> FastAPI:
             "GROQ": "GROQ_API_KEYS",
             "CEREBRAS": "CEREBRAS_API_KEYS",
             "OPENROUTER": "OPENROUTER_API_KEYS",
-            "OPENCODE": "OPENCODE_API_KEY",
+            "OPENCODE": "OPENCODE_API_KEYS",
             "BAI": "BAI_API_KEY",
             "KIRO": "KIRO_REFRESH_TOKEN",
             "ANTIGRAVITY": "ANTIGRAVITY_REFRESH_TOKEN",
@@ -558,6 +558,9 @@ def create_app() -> FastAPI:
                         env_vars[parts[0].strip()] = parts[1].strip()
 
         current_val = env_vars.get(env_var, "")
+        if provider == "OPENCODE" and not current_val:
+            # Migrate the legacy single-key variable into the key pool.
+            current_val = env_vars.get("OPENCODE_API_KEY", "")
         current_list = [k.strip() for k in current_val.split(",") if k.strip()]
 
         if action == "clear":
@@ -620,6 +623,10 @@ def create_app() -> FastAPI:
             else:
                 env_vars.pop(env_var, None)
 
+        if provider == "OPENCODE" and env_vars.get("OPENCODE_API_KEYS"):
+            # Keep a single source of truth once the plural pool exists.
+            env_vars.pop("OPENCODE_API_KEY", None)
+
         with open(_ENV_FILE, "w") as f:
             for k, v in env_vars.items():
                 f.write(f"{k}={v}\n")
@@ -644,7 +651,7 @@ def create_app() -> FastAPI:
         if _router_instance:
             _router_instance.api_keys = get_nvidia_keys()
             _router_instance.openrouter_keys = get_openrouter_keys()
-            _router_instance.opencode_key = get_opencode_key()
+            _router_instance.set_opencode_keys(get_opencode_keys())
             _router_instance.groq_keys = get_groq_keys()
             _router_instance.cerebras_keys = get_cerebras_keys()
             _router_instance.bai_key = get_bai_key()
@@ -1013,7 +1020,7 @@ def create_app() -> FastAPI:
         if _router_instance:
             _router_instance.api_keys = get_nvidia_keys()
             _router_instance.openrouter_keys = get_openrouter_keys()
-            _router_instance.opencode_key = get_opencode_key()
+            _router_instance.set_opencode_keys(get_opencode_keys())
             _router_instance.groq_keys = get_groq_keys()
             _router_instance.cerebras_keys = get_cerebras_keys()
             _router_instance.bai_key = get_bai_key()
@@ -1558,7 +1565,7 @@ def create_app() -> FastAPI:
             pass
         _router_instance.api_keys = get_nvidia_keys()
         _router_instance.openrouter_keys = get_openrouter_keys()
-        _router_instance.opencode_key = get_opencode_key()
+        _router_instance.set_opencode_keys(get_opencode_keys())
         _router_instance.groq_keys = get_groq_keys()
         _router_instance.cerebras_keys = get_cerebras_keys()
         _router_instance.bai_key = get_bai_key()
