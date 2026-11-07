@@ -50,6 +50,21 @@ from nim_router.antigravity import ANTIGRAVITY_PREFIX, ANTIGRAVITY_API_BASE, ant
 from nim_router.deepseek_web import DEEPSEEK_WEB_PREFIX, DEEPSEEK_WEB_BASE
 from nim_router.gemini_web import GEMINI_WEB_PREFIX, GEMINI_WEB_BASE
 
+
+def _fmt_duration(seconds: float | None) -> str:
+    """Human-readable cooldown, e.g. '6h 0m', '15h 44m', '45s'."""
+    if seconds is None:
+        return "?"
+    total = int(round(seconds))
+    if total < 60:
+        return f"{total}s"
+    hours, rem = divmod(total, 3600)
+    minutes = rem // 60
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m {rem % 60}s"
+
+
 class ModelRouter:
     def __init__(self, api_key: str | list[str], openrouter_keys: str | list[str] = "", opencode_key: "str | list[str]" = "", groq_keys: str | list[str] = "", cerebras_keys: str | list[str] = "", bai_key: str = "", kiro_refresh_token: str = "", antigravity_refresh_token: str = "", strategy: str = ""):
         self.tracker = get_usage_tracker()
@@ -408,8 +423,8 @@ class ModelRouter:
                 # the same model stays usable through another account's key.
                 self._rate_limited_until[model_id] = cooldown_until
             logger.warning(
-                f"Key {key_ident} for model '{model_id}' cooling down for {cooldown_sec:.1f}s "
-                f"(status={status_code}, retry_after_hdr={retry_after}, consecutive_fails={fail_count})"
+                f"Key {key_ident} for model '{model_id}' cooling down for {_fmt_duration(cooldown_sec)} "
+                f"(status={status_code}, retry_after_hdr={_fmt_duration(retry_after)}, consecutive_fails={fail_count})"
             )
 
     def _record_key_success(self, provider: str, key: str, model_id: str):
