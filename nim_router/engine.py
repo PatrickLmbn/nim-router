@@ -409,7 +409,10 @@ class ModelRouter:
             if is_opencode_free_quota:
                 # Free-tier quotas do not reset in seconds; park the account's key
                 # for a long window and fail over to another configured account.
-                cooldown_sec = get_opencode_quota_cooldown()
+                # Honor the server's Retry-After when it is longer than the
+                # configured window, otherwise the key is retried before the
+                # quota actually resets and re-parked in a loop.
+                cooldown_sec = max(get_opencode_quota_cooldown(), retry_after or 0.0)
             elif retry_after is not None and retry_after > 0:
                 cooldown_sec = retry_after
             else:
