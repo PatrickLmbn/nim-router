@@ -23,7 +23,7 @@ class ColoredFormatter(logging.Formatter):
     def format(self, record):
         color = self.LEVEL_COLORS.get(record.levelno, "")
         reset = "\033[0m"
-        asctime = self.formatTime(record, "%Y-%m-%d %H:%M:%S")
+        asctime = self.formatTime(record, "%Y-%m-%d %I:%M:%S %p")
         levelname = record.levelname
         msg = record.getMessage()
         return f"{asctime} - {color}{levelname}{reset} - {color}{msg}{reset}"
@@ -39,7 +39,7 @@ class BufferAndBroadcastHandler(logging.Handler):
     def emit(self, record):
         try:
             entry = {
-                "timestamp": time.strftime("%H:%M:%S", time.localtime(record.created)),
+                "timestamp": time.strftime("%I:%M:%S %p", time.localtime(record.created)),
                 "level": record.levelname,
                 "message": record.getMessage(),
             }

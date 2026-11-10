@@ -18,6 +18,7 @@ from nim_router.config import (
     BAI_API_BASE,
     get_first_token_timeout,
     get_stream_idle_timeout,
+    get_request_timeout,
     get_kiro_enabled,
 )
 from nim_router.logger import logger
@@ -475,10 +476,13 @@ def _is_free_opencode_model(m: dict) -> bool:
     return input_price == 0.0 and output_price == 0.0
 
 
-async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_keys: list[str] | str = "", opencode_key: "str | list[str]" = "", groq_keys: list[str] | str = "", cerebras_keys: list[str] | str = "", bai_key: str = "", kiro_refresh_token: str = "", antigravity_refresh_token: str = "", report: dict | None = None) -> list[dict]:
-    primary_nvidia_key = api_keys[0] if isinstance(api_keys, list) and api_keys else (api_keys if isinstance(api_keys, str) else "")
-    primary_groq_key = groq_keys[0] if isinstance(groq_keys, list) and groq_keys else (groq_keys if isinstance(groq_keys, str) else "")
-    primary_cerebras_key = cerebras_keys[0] if isinstance(cerebras_keys, list) and cerebras_keys else (cerebras_keys if isinstance(cerebras_keys, str) else "")
+async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openrouter_keys: list[str] | str = "", opencode_key: "str | list[str]" = "", groq_keys: list[str] | str = "", cerebras_keys: list[str] | str = "", bai_key: str = "", kiro_refresh_token: str = "", antigravity_refresh_token: str = "", report: dict | None = None, key_model_report: dict | None = None) -> list[dict]:
+    nvidia_keys_list = [k.strip() for k in api_keys if k.strip()] if isinstance(api_keys, list) else [k.strip() for k in (api_keys or "").split(",") if k.strip()]
+    primary_nvidia_key = nvidia_keys_list[0] if nvidia_keys_list else ""
+    groq_keys_list = [k.strip() for k in groq_keys if k.strip()] if isinstance(groq_keys, list) else [k.strip() for k in (groq_keys or "").split(",") if k.strip()]
+    primary_groq_key = groq_keys_list[0] if groq_keys_list else ""
+    cerebras_keys_list = [k.strip() for k in cerebras_keys if k.strip()] if isinstance(cerebras_keys, list) else [k.strip() for k in (cerebras_keys or "").split(",") if k.strip()]
+    primary_cerebras_key = cerebras_keys_list[0] if cerebras_keys_list else ""
     openrouter_keys_list = [k.strip() for k in openrouter_keys if k.strip()] if isinstance(openrouter_keys, list) else [k.strip() for k in (openrouter_keys or "").split(",") if k.strip()]
     primary_openrouter_key = openrouter_keys_list[0] if openrouter_keys_list else ""
     opencode_keys_list = [k.strip() for k in opencode_key if k.strip()] if isinstance(opencode_key, list) else [k.strip() for k in (opencode_key or "").split(",") if k.strip()]
@@ -486,21 +490,23 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
     all_discovered = []
     candidates_to_probe = []
 
-    if primary_nvidia_key:
+    if nvidia_keys_list:
         try:
             async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.get(
-                    f"{NIM_API_BASE}/models",
-                    headers={"Authorization": f"Bearer {primary_nvidia_key}"},
-                )
-                if response.status_code == 200:
+                for nv_key in nvidia_keys_list:
+                    response = await client.get(
+                        f"{NIM_API_BASE}/models",
+                        headers={"Authorization": f"Bearer {nv_key}"},
+                    )
+                    if response.status_code != 200:
+                        continue
                     data = response.json()
                     all_models = data.get("data", [])
                     valid_models = [m for m in all_models if m.get("id")]
                     for m in valid_models:
                         m_copy = dict(m)
                         m_copy["provider"] = "NVIDIA"
-                        candidates_to_probe.append((primary_nvidia_key, m_copy, NIM_API_BASE))
+                        candidates_to_probe.append((nv_key, m_copy, NIM_API_BASE))
         except Exception as e:
             logger.error(f"NVIDIA model discovery failed: {e}")
 
@@ -537,34 +543,39 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
     if opencode_keys_list:
         try:
             async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.get(
-                    f"{OPENCODE_API_BASE}/models",
-                    headers={"Authorization": f"Bearer {opencode_keys_list[0]}"},
-                )
-                if response.status_code == 200:
+                # Fetch the model list per account: different accounts expose
+                # different free models, so a key-1-only list would hide models
+                # that only exist on other accounts (and probe models that a
+                # given key cannot serve).
+                for oc_key in opencode_keys_list:
+                    response = await client.get(
+                        f"{OPENCODE_API_BASE}/models",
+                        headers={"Authorization": f"Bearer {oc_key}"},
+                    )
+                    if response.status_code != 200:
+                        continue
                     data = response.json()
                     oc_models = [
                         m for m in data.get("data", [])
                         if _is_free_opencode_model(m) and not is_banned_model(m.get("id", ""), "OpenCode")
                     ]
-                    for idx, m in enumerate(oc_models):
+                    for m in oc_models:
                         m_copy = dict(m)
                         m_copy["provider"] = "OpenCode"
-                        # Spread probes across accounts so one exhausted key does
-                        # not make the whole provider look unavailable.
-                        probe_key = opencode_keys_list[idx % len(opencode_keys_list)]
-                        candidates_to_probe.append((probe_key, m_copy, OPENCODE_API_BASE))
+                        candidates_to_probe.append((oc_key, m_copy, OPENCODE_API_BASE))
         except Exception as e:
             logger.error(f"OpenCode discovery failed: {e}")
 
-    if primary_groq_key:
+    if groq_keys_list:
         try:
             async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.get(
-                    f"{GROQ_API_BASE}/models",
-                    headers={"Authorization": f"Bearer {primary_groq_key}"},
-                )
-                if response.status_code == 200:
+                for gq_key in groq_keys_list:
+                    response = await client.get(
+                        f"{GROQ_API_BASE}/models",
+                        headers={"Authorization": f"Bearer {gq_key}"},
+                    )
+                    if response.status_code != 200:
+                        continue
                     data = response.json()
                     groq_models = [
                         m for m in data.get("data", [])
@@ -573,18 +584,20 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                     for m in groq_models:
                         m_copy = dict(m)
                         m_copy["provider"] = "Groq"
-                        candidates_to_probe.append((primary_groq_key, m_copy, GROQ_API_BASE))
+                        candidates_to_probe.append((gq_key, m_copy, GROQ_API_BASE))
         except Exception as e:
             logger.error(f"Groq model discovery failed: {e}")
 
-    if primary_cerebras_key:
+    if cerebras_keys_list:
         try:
             async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.get(
-                    f"{CEREBRAS_API_BASE}/models",
-                    headers={"Authorization": f"Bearer {primary_cerebras_key}"},
-                )
-                if response.status_code == 200:
+                for cb_key in cerebras_keys_list:
+                    response = await client.get(
+                        f"{CEREBRAS_API_BASE}/models",
+                        headers={"Authorization": f"Bearer {cb_key}"},
+                    )
+                    if response.status_code != 200:
+                        continue
                     data = response.json()
                     cerebras_models = [
                         m for m in data.get("data", [])
@@ -593,7 +606,7 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                     for m in cerebras_models:
                         m_copy = dict(m)
                         m_copy["provider"] = "Cerebras"
-                        candidates_to_probe.append((primary_cerebras_key, m_copy, CEREBRAS_API_BASE))
+                        candidates_to_probe.append((cb_key, m_copy, CEREBRAS_API_BASE))
         except Exception as e:
             logger.error(f"Cerebras model discovery failed: {e}")
 
@@ -643,20 +656,42 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
 
         logger.info(f"Discovered {total_probes} candidate models across enabled providers.")
 
+        # Dummy semaphore for probe_model: the real sem is acquired here,
+        # outside the wait_for, so queueing behind other probes never eats
+        # into the per-probe HTTP timeout (which cancelled queued probes and
+        # wrongly dropped whole providers when probe counts grew).
+        _null_sem = asyncio.Semaphore(10 ** 9)
         async with httpx.AsyncClient(timeout=30) as client:
             async def probe_task(item):
                 nonlocal completed_count
                 key, m_obj, base_url = item
                 mid = m_obj.get("id", "")
                 probe_report: dict = {}
+                await sem.acquire()
                 try:
-                    ok, latency = await asyncio.wait_for(probe_model(key, client, mid, sem, base_url, timeout_sec=20.0, report=probe_report), timeout=25.0)
+                    ok, latency = await asyncio.wait_for(probe_model(key, client, mid, _null_sem, base_url, timeout_sec=20.0, report=probe_report), timeout=25.0)
                 except Exception as e:
                     ok, latency = False, 999.0
                     probe_report = {"status": None, "ok": False, "latency": 999.0, "detail": f"{type(e).__name__}: {e}"[:240]}
+                finally:
+                    sem.release()
+                provider = m_obj.get("provider") or "Unknown"
                 if report is not None:
-                    provider = m_obj.get("provider") or "Unknown"
-                    report.setdefault(provider, {})[mid] = probe_report
+                    # Provider-level report keeps the best result across keys:
+                    # a model is available if any key serves it.
+                    cell = report.setdefault(provider, {})
+                    existing = cell.get(mid)
+                    if existing is None or (probe_report.get("ok") and not existing.get("ok")) or (
+                        probe_report.get("ok") == existing.get("ok")
+                        and probe_report.get("latency", 999.0) < existing.get("latency", 999.0)
+                    ):
+                        cell[mid] = probe_report
+                if key_model_report is not None:
+                    # Per-key availability for routing: True = key serves the
+                    # model (or at least accepts it — quota/transient errors
+                    # stay True so the key is not skipped), False = hard
+                    # failure (key lacks the model).
+                    key_model_report[(provider, key, mid)] = bool(probe_report.get("ok"))
                 async with lock:
                     completed_count += 1
                     if is_tty:
@@ -675,9 +710,11 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                 sys.stdout.write("\n")
                 sys.stdout.flush()
 
+            seen_mids: set[str] = set()
             for m, ok, latency in probe_results:
                 mid = m.get("id")
-                if ok and mid:
+                if ok and mid and mid not in seen_mids:
+                    seen_mids.add(mid)
                     latencies_dict[mid] = latency
                     all_discovered.append(m)
 
@@ -1005,7 +1042,12 @@ async def call_provider_endpoint(
                 await _safe_aclose(response)
     else:
         try:
-            response = await client.post(url, headers=headers, json=payload)
+            # Cap each key attempt so one unresponsive key cannot hold the
+            # request for the shared client's full read timeout (300s).
+            response = await asyncio.wait_for(
+                client.post(url, headers=headers, json=payload),
+                timeout=get_request_timeout(),
+            )
             retry_sec = parse_retry_after(response.headers.get("Retry-After") or response.headers.get("retry-after"))
 
             if response.status_code == 200:

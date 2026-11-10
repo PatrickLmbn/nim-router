@@ -95,6 +95,10 @@ def get_max_latency_threshold() -> float:
 def get_first_token_timeout() -> float:
     return float(_load_settings().get("first_token_timeout") or 20.0)
 
+def get_request_timeout() -> float:
+    """Per-attempt cap for non-streaming upstream calls (seconds)."""
+    return float(_load_settings().get("request_timeout") or 120.0)
+
 def get_stream_idle_timeout() -> float:
     return float(_load_settings().get("stream_idle_timeout") or 120.0)
 

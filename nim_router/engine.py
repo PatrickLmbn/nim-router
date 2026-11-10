@@ -116,6 +116,8 @@ class ModelRouter:
         self._quality_n: dict[str, int] = {}
         self._rate_limited_until: dict[str, float] = {}
         self._key_cooldowns: dict[tuple[str, str], float] = {}
+        self._key_model_ok: dict[tuple[str, str, str], bool] = {}
+        self._key_model_unavailable: dict[tuple[str, str, str], float] = {}
         self._provider_cooldowns: dict[str, float] = {}
         self._consecutive_failures: dict[str, int] = {}
         self._request_history: dict[str, list[float]] = {}
@@ -320,6 +322,7 @@ class ModelRouter:
     async def _discover_models(self) -> list[dict]:
         self.discovery_report = {}
         self.discovery_report_at = 0.0
+        key_model_report: dict[tuple[str, str, str], bool] = {}
         discovered = await discover_models(
             self.api_keys,
             self._latencies,
@@ -331,8 +334,16 @@ class ModelRouter:
             self.kiro_refresh_token,
             self.antigravity_refresh_token,
             report=self.discovery_report,
+            key_model_report=key_model_report,
         )
 
+        self._key_model_ok = key_model_report
+        now = time.time()
+        self._key_model_unavailable = {
+            triple: until
+            for triple, until in self._key_model_unavailable.items()
+            if until > now
+        }
         self.discovery_report_at = time.time()
         for m in discovered:
             mid = m.get("id")
@@ -394,6 +405,13 @@ class ModelRouter:
         fail_count = self._consecutive_failures.get(key_ident, 0) + 1
         self._consecutive_failures[key_ident] = fail_count
 
+        if status_code == 404 and key:
+            # This key's account does not carry the model: remember it so
+            # routing skips the pair instead of paying a full attempt cost
+            # on every request. Expires after 10 minutes.
+            self._key_model_unavailable[(provider, key, model_id)] = now + 600.0
+            self._key_model_ok[(provider, key, model_id)] = False
+
         detail_lower = (detail or "").lower()
         is_opencode_free_quota = (
             provider == "OpenCode"
@@ -436,7 +454,28 @@ class ModelRouter:
         self._consecutive_failures.pop(key_ident, None)
         if key:
             self._key_cooldowns.pop((provider, key), None)
+            self._key_model_unavailable.pop((provider, key, model_id), None)
+            self._key_model_ok[(provider, key, model_id)] = True
         self._consecutive_failures.pop(model_id, None)
+
+    def _order_keys_for_model(self, provider: str, keys: list[str], model_id: str) -> list[str]:
+        """Order keys for a model using discovery + live 404 knowledge.
+
+        Known-good keys first, unknown next, known-bad last; keys with a live
+        404 memory are skipped. Stable sort preserves round-robin order
+        within each rank. Returns [] if every key is 404-remembered.
+        """
+        now = time.time()
+        ranked: list[tuple[int, str]] = []
+        for k in keys:
+            triple = (provider, k, model_id)
+            if self._key_model_unavailable.get(triple, 0.0) > now:
+                continue
+            ok = self._key_model_ok.get(triple)
+            rank = 0 if ok is True else (1 if ok is None else 2)
+            ranked.append((rank, k))
+        ranked.sort(key=lambda t: t[0])
+        return [k for _, k in ranked]
 
     def _record_failure(self, model_id: str, status_code: int = 500):
         now = time.time()
@@ -1247,7 +1286,14 @@ class ModelRouter:
                 now_check = time.time()
                 _healthy_keys = [k for k in keys_to_try if self._key_cooldowns.get((provider, k), 0.0) <= now_check]
                 _cooling_keys = [k for k in keys_to_try if k not in _healthy_keys]
-                ordered_keys = (_healthy_keys + _cooling_keys) if _healthy_keys else list(keys_to_try)
+                ordered_keys = (
+                    self._order_keys_for_model(provider, _healthy_keys, selected_id)
+                    + self._order_keys_for_model(provider, _cooling_keys, selected_id)
+                ) if _healthy_keys else list(keys_to_try)
+                if not ordered_keys:
+                    # Every key is 404-remembered for this model: try anyway
+                    # rather than failing the request outright.
+                    ordered_keys = list(keys_to_try)
                 for k_idx, current_key in enumerate(ordered_keys):
                     try:
                         request.model = selected_id
