@@ -439,9 +439,10 @@ class ModelRouter:
             cooldown_until = now + cooldown_sec
             if key:
                 self._key_cooldowns[(provider, key)] = cooldown_until
-            if not is_opencode_free_quota:
-                # A free-tier quota is per account, so only the key is parked;
-                # the same model stays usable through another account's key.
+            is_account_scoped = is_opencode_free_quota or (
+                provider == "NVIDIA" and status_code == 429
+            )
+            if not is_account_scoped:
                 self._rate_limited_until[model_id] = cooldown_until
             logger.warning(
                 f"Key {key_ident} for model '{model_id}' cooling down for {_fmt_duration(cooldown_sec)} "
@@ -1392,7 +1393,7 @@ class ModelRouter:
                             is_estimated=False,
                             timestamp=t0
                         )
-                        if e.status_code in (429, 400, 404, 500, 502, 503) and k_idx < len(ordered_keys) - 1:
+                        if e.status_code in (429, 400, 404, 500, 502, 503, 504) and k_idx < len(ordered_keys) - 1:
                             logger.warning(f"Model {provider} :: {selected_id} error {e.status_code} on key {current_key[:8]}..., retrying next API key...")
                             await asyncio.sleep(0.1)
                             continue
