@@ -15,6 +15,7 @@ from nim_router.config import (
     get_model_max_concurrency,
     get_max_latency_threshold,
     get_health_refresh_interval,
+    get_max_failover_attempts,
     get_quality_floor,
     NIM_API_BASE,
     OPENROUTER_API_BASE,
@@ -26,6 +27,14 @@ from nim_router.config import (
     get_routing_strategy,
     get_kiro_enabled,
     get_opencode_quota_cooldown,
+    get_nvidia_keys,
+    get_openrouter_keys,
+    get_opencode_keys,
+    get_groq_keys,
+    get_cerebras_keys,
+    get_bai_key,
+    get_kiro_refresh_token,
+    get_antigravity_refresh_token,
 )
 from nim_router.combos import get_combo, load_combos
 from nim_router.logger import logger
@@ -159,22 +168,50 @@ class ModelRouter:
         self.opencode_key = self.opencode_keys[0] if self.opencode_keys else ""
         self.opencode_key_index = 0
 
-    def _get_provider_info(self, model_id: str, overrides: dict[str, str] | None = None) -> tuple[str, str, list[str]]:
+    def reload_keys_from_env(self):
+        self.api_keys = [k.strip() for k in get_nvidia_keys() if k.strip()] or [""]
+        self.api_key = self.api_keys[0]
+        self.key_index = 0
+        self.openrouter_keys = [k.strip() for k in get_openrouter_keys() if k.strip()]
+        self.openrouter_key_index = 0
+        self.set_opencode_keys(get_opencode_keys())
+        self.groq_keys = [k.strip() for k in get_groq_keys() if k.strip()]
+        self.groq_key_index = 0
+        self.cerebras_keys = [k.strip() for k in get_cerebras_keys() if k.strip()]
+        self.cerebras_key_index = 0
+        self.bai_key = get_bai_key().strip()
+        self.kiro_refresh_token = get_kiro_refresh_token()
+        self.antigravity_refresh_token = get_antigravity_refresh_token()
+        pools = {
+            "NVIDIA": self.api_keys,
+            "OpenRouter": self.openrouter_keys,
+            "OpenCode": self.opencode_keys,
+            "Groq": self.groq_keys,
+            "Cerebras": self.cerebras_keys,
+            "BAI": [self.bai_key] if self.bai_key else [],
+        }
+        self._key_cooldowns = {k: v for k, v in self._key_cooldowns.items() if k[0] not in pools or k[1] in pools[k[0]]}
+        self._key_model_ok = {k: v for k, v in self._key_model_ok.items() if k[0] not in pools or k[1] in pools[k[0]]}
+        self._key_model_unavailable = {k: v for k, v in self._key_model_unavailable.items() if k[0] not in pools or k[1] in pools[k[0]]}
+
+    def _get_provider_info(self, model_id: str, overrides: dict[str, str] | None = None, rotate: bool = True) -> tuple[str, str, list[str]]:
         provider = self._get_provider_name(model_id, overrides)
         now = time.time()
 
         if provider == "OpenRouter":
             keys = self.openrouter_keys if self.openrouter_keys else [""]
             base_url = OPENROUTER_API_BASE
-            rotated = keys[self.openrouter_key_index:] + keys[:self.openrouter_key_index]
-            self.openrouter_key_index = (self.openrouter_key_index + 1) % len(keys)
-            keys = rotated
+            if rotate:
+                rotated = keys[self.openrouter_key_index:] + keys[:self.openrouter_key_index]
+                self.openrouter_key_index = (self.openrouter_key_index + 1) % len(keys)
+                keys = rotated
         elif provider == "OpenCode":
             keys = self.opencode_keys if self.opencode_keys else [""]
             base_url = OPENCODE_API_BASE
-            rotated = keys[self.opencode_key_index:] + keys[:self.opencode_key_index]
-            self.opencode_key_index = (self.opencode_key_index + 1) % len(keys)
-            keys = rotated
+            if rotate:
+                rotated = keys[self.opencode_key_index:] + keys[:self.opencode_key_index]
+                self.opencode_key_index = (self.opencode_key_index + 1) % len(keys)
+                keys = rotated
         elif provider == "BAI":
             keys = [self.bai_key] if self.bai_key else [""]
             base_url = BAI_API_BASE
@@ -193,21 +230,24 @@ class ModelRouter:
         elif provider == "Groq":
             keys = self.groq_keys if self.groq_keys else [""]
             base_url = GROQ_API_BASE
-            rotated = keys[self.groq_key_index:] + keys[:self.groq_key_index]
-            self.groq_key_index = (self.groq_key_index + 1) % len(keys)
-            keys = rotated
+            if rotate:
+                rotated = keys[self.groq_key_index:] + keys[:self.groq_key_index]
+                self.groq_key_index = (self.groq_key_index + 1) % len(keys)
+                keys = rotated
         elif provider == "Cerebras":
             keys = self.cerebras_keys if self.cerebras_keys else [""]
             base_url = CEREBRAS_API_BASE
-            rotated = keys[self.cerebras_key_index:] + keys[:self.cerebras_key_index]
-            self.cerebras_key_index = (self.cerebras_key_index + 1) % len(keys)
-            keys = rotated
+            if rotate:
+                rotated = keys[self.cerebras_key_index:] + keys[:self.cerebras_key_index]
+                self.cerebras_key_index = (self.cerebras_key_index + 1) % len(keys)
+                keys = rotated
         else:
             keys = self.api_keys if self.api_keys else [""]
             base_url = NIM_API_BASE
-            rotated = keys[self.key_index:] + keys[:self.key_index]
-            self.key_index = (self.key_index + 1) % len(keys)
-            keys = rotated
+            if rotate:
+                rotated = keys[self.key_index:] + keys[:self.key_index]
+                self.key_index = (self.key_index + 1) % len(keys)
+                keys = rotated
 
         healthy_keys = [k for k in keys if self._key_cooldowns.get((provider, k), 0.0) <= now]
         cooling_keys = [k for k in keys if self._key_cooldowns.get((provider, k), 0.0) > now]
@@ -266,7 +306,7 @@ class ModelRouter:
         return is_vision_request(request)
 
     async def _probe_model(self, client: httpx.AsyncClient, model_id: str, sem: asyncio.Semaphore) -> tuple[bool, float]:
-        base_url, key, _ = self._get_provider_info(model_id)
+        base_url, key, _ = self._get_provider_info(model_id, rotate=False)
         return await probe_model(key, client, model_id, sem, base_url)
 
     def _invalidate_kiro_models(self):
@@ -337,7 +377,7 @@ class ModelRouter:
             key_model_report=key_model_report,
         )
 
-        self._key_model_ok = key_model_report
+        self._key_model_ok.update(key_model_report)
         now = time.time()
         self._key_model_unavailable = {
             triple: until
@@ -423,27 +463,22 @@ class ModelRouter:
             )
         )
 
-        if status_code in (429, 402, 503):
+        if status_code in (429, 402, 503, 500, 502, 504, 401, 403):
             if is_opencode_free_quota:
-                # Free-tier quotas do not reset in seconds; park the account's key
-                # for a long window and fail over to another configured account.
-                # Honor the server's Retry-After when it is longer than the
-                # configured window, otherwise the key is retried before the
-                # quota actually resets and re-parked in a loop.
                 cooldown_sec = max(get_opencode_quota_cooldown(), retry_after or 0.0)
             elif retry_after is not None and retry_after > 0:
                 cooldown_sec = retry_after
+            elif status_code in (500, 502, 503, 504):
+                cooldown_sec = 2.0
             else:
                 cooldown_sec = min(60.0, max(5.0, 5.0 * (2 ** (fail_count - 1))))
 
             cooldown_until = now + cooldown_sec
-            if key:
+            if key and status_code in (429, 402, 401, 403):
                 self._key_cooldowns[(provider, key)] = cooldown_until
-            is_account_scoped = is_opencode_free_quota or (
-                provider == "NVIDIA" and status_code == 429
-            )
-            if not is_account_scoped:
-                self._rate_limited_until[model_id] = cooldown_until
+            if status_code in (429, 402, 401, 403):
+                if not (is_opencode_free_quota or status_code in (401, 403) or (provider == "NVIDIA" and status_code == 429)):
+                    self._rate_limited_until[model_id] = cooldown_until
             logger.warning(
                 f"Key {key_ident} for model '{model_id}' cooling down for {_fmt_duration(cooldown_sec)} "
                 f"(status={status_code}, retry_after_hdr={_fmt_duration(retry_after)}, consecutive_fails={fail_count})"
@@ -771,18 +806,20 @@ class ModelRouter:
             if new_models:
                 now = time.time()
                 probed_providers = set()
-                for m in new_models:
-                    mid = m.get("id")
-                    if not mid:
-                        continue
-                    provider = m.get("provider") or self._get_provider_name(mid)
-                    self._model_providers[mid] = provider
-                    self._health[mid] = {"failures": 0, "last_check": now, "healthy": True}
-                    self._rate_limited_until.pop(mid, None)
-                    probed_providers.add(provider)
-                for provider in probed_providers:
-                    self.clear_provider_cooldown(provider)
                 async with self._write_lock:
+                    for m in new_models:
+                        mid = m.get("id")
+                        if not mid:
+                            continue
+                        provider = m.get("provider") or self._get_provider_name(mid)
+                        self._model_providers[mid] = provider
+                        if mid not in self._health:
+                            self._health[mid] = {"failures": 0, "last_check": now, "healthy": True}
+                        if self._rate_limited_until.get(mid, 0.0) <= now:
+                            self._rate_limited_until.pop(mid, None)
+                        probed_providers.add(provider)
+                    for provider in probed_providers:
+                        self.clear_provider_cooldown(provider)
                     self.models = new_models
                     self._healthy_pool = self._build_healthy_pool()
                     self._pool_updated = time.time()
@@ -795,6 +832,7 @@ class ModelRouter:
         except Exception as e:
             logger.error(f"Error during background model probing: {e}")
         finally:
+            self._pool_updated = time.time()
             self._is_probing = False
 
     async def handle_request(self, raw_request: Request) -> Response:
@@ -1245,10 +1283,12 @@ class ModelRouter:
 
         tried_models = set()
         last_error = None
-        attempts = len(candidate_ids)
+        attempts = min(len(candidate_ids), get_max_failover_attempts())
         context_rejected_providers = set()
 
         for selected_id in candidate_ids:
+            if len(tried_models) >= attempts:
+                break
             if selected_id in tried_models:
                 continue
             tried_models.add(selected_id)
@@ -1286,16 +1326,16 @@ class ModelRouter:
                 base_url, _, keys_to_try = self._get_provider_info(selected_id, combo_provider_overrides)
                 now_check = time.time()
                 _healthy_keys = [k for k in keys_to_try if self._key_cooldowns.get((provider, k), 0.0) <= now_check]
-                _cooling_keys = [k for k in keys_to_try if k not in _healthy_keys]
-                ordered_keys = (
-                    self._order_keys_for_model(provider, _healthy_keys, selected_id)
-                    + self._order_keys_for_model(provider, _cooling_keys, selected_id)
-                ) if _healthy_keys else list(keys_to_try)
+                ordered_keys = self._order_keys_for_model(provider, _healthy_keys, selected_id) if _healthy_keys else []
+                if not ordered_keys and _healthy_keys:
+                    ordered_keys = list(_healthy_keys)
                 if not ordered_keys:
-                    # Every key is 404-remembered for this model: try anyway
-                    # rather than failing the request outright.
-                    ordered_keys = list(keys_to_try)
+                    raise HTTPException(status_code=503, detail=f"All API keys for {provider} are cooling down; failing over to the next model.")
                 for k_idx, current_key in enumerate(ordered_keys):
+                    if self._key_cooldowns.get((provider, current_key), 0.0) > time.time():
+                        continue
+                    if self._key_model_unavailable.get((provider, current_key, selected_id), 0.0) > time.time():
+                        continue
                     try:
                         request.model = selected_id
                         recorded_tokens = [0]
@@ -1393,7 +1433,7 @@ class ModelRouter:
                             is_estimated=False,
                             timestamp=t0
                         )
-                        if e.status_code in (429, 400, 404, 500, 502, 503, 504) and k_idx < len(ordered_keys) - 1:
+                        if e.status_code in (429, 400, 404, 500, 502, 503, 504, 401, 403) and k_idx < len(ordered_keys) - 1:
                             logger.warning(f"Model {provider} :: {selected_id} error {e.status_code} on key {current_key[:8]}..., retrying next API key...")
                             await asyncio.sleep(0.1)
                             continue

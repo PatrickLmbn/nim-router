@@ -9,6 +9,36 @@ _BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 _ENV_FILE = os.path.join(_BASE_DIR, ".env")
 _SETTINGS_FILE = os.path.join(_BASE_DIR, "config", "settings.yaml")
 
+_KEY_ENV_VARS = (
+    "NVIDIA_API_KEYS", "NVIDIA_API_KEY",
+    "OPENROUTER_API_KEYS", "OPENROUTER_API_KEY",
+    "OPENCODE_API_KEYS", "OPENCODE_API_KEY",
+    "GROQ_API_KEYS", "GROQ_API_KEY",
+    "CEREBRAS_API_KEYS", "CEREBRAS_API_KEY",
+    "BAI_API_KEY", "KIRO_REFRESH_TOKEN", "ANTIGRAVITY_REFRESH_TOKEN",
+    "DEEPSEEK_WEB_TOKEN", "DEEPSEEK_WEB_DS_SESSION_ID",
+    "GEMINI_WEB_COOKIE", "GEMINI_WEB_1PSID", "GEMINI_WEB_1PSIDTS", "GEMINI_WEB_SAPISID",
+)
+
+
+def _read_env_file_key_vars() -> set:
+    keys = set()
+    if os.path.exists(_ENV_FILE):
+        try:
+            with open(_ENV_FILE, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and "=" in line and not line.startswith("#"):
+                        name = line.split("=", 1)[0].strip()
+                        if name in _KEY_ENV_VARS:
+                            keys.add(name)
+        except Exception:
+            pass
+    return keys
+
+
+_FILE_KEY_VARS: set = _read_env_file_key_vars()
+
 load_dotenv(dotenv_path=_ENV_FILE, override=True)
 
 NIM_API_BASE = "https://integrate.api.nvidia.com/v1"
@@ -74,6 +104,11 @@ def update_setting(key: str, value):
 def reload_env():
     if os.path.exists(_ENV_FILE):
         load_dotenv(dotenv_path=_ENV_FILE, override=True)
+        current = _read_env_file_key_vars()
+        for var in _FILE_KEY_VARS - current:
+            os.environ.pop(var, None)
+        _FILE_KEY_VARS.clear()
+        _FILE_KEY_VARS.update(current)
 
 _s = _load_settings()
 
@@ -178,6 +213,9 @@ def get_api_keys() -> list[str]:
 
 def get_health_refresh_interval() -> int:
     return min(480, max(60, int(_load_settings().get("health_refresh_interval", 180))))
+
+def get_max_failover_attempts() -> int:
+    return min(20, max(3, int(_load_settings().get("max_failover_attempts", 8))))
 
 DEFAULT_DASHBOARD_PASSWORD = "nimrouter"
 

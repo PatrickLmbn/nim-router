@@ -648,10 +648,19 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
         logger.error(f"Antigravity model discovery failed: {e}")
 
     if candidates_to_probe:
+        seen = set()
+        deduped = []
+        for key, m_obj, base_url in candidates_to_probe:
+            ident = (key, m_obj.get("id", ""), m_obj.get("provider", ""), base_url)
+            if ident in seen:
+                continue
+            seen.add(ident)
+            deduped.append((key, m_obj, base_url))
+        candidates_to_probe = deduped
         total_probes = len(candidates_to_probe)
         completed_count = 0
         lock = asyncio.Lock()
-        sem = asyncio.Semaphore(15)
+        sem = asyncio.Semaphore(30)
         is_tty = sys.stdout.isatty()
 
         logger.info(f"Discovered {total_probes} candidate models across enabled providers.")
@@ -691,7 +700,7 @@ async def discover_models(api_keys: list[str] | str, latencies_dict: dict, openr
                     # model (or at least accepts it — quota/transient errors
                     # stay True so the key is not skipped), False = hard
                     # failure (key lacks the model).
-                    key_model_report[(provider, key, mid)] = bool(probe_report.get("ok"))
+                    key_model_report[(provider, key, mid)] = bool(probe_report.get("ok")) and probe_report.get("status") in (200, None)
                 async with lock:
                     completed_count += 1
                     if is_tty:

@@ -649,12 +649,7 @@ def create_app() -> FastAPI:
             if _router_instance:
                 _router_instance.clear_provider_cooldown("Gemini Web")
         if _router_instance:
-            _router_instance.api_keys = get_nvidia_keys()
-            _router_instance.openrouter_keys = get_openrouter_keys()
-            _router_instance.set_opencode_keys(get_opencode_keys())
-            _router_instance.groq_keys = get_groq_keys()
-            _router_instance.cerebras_keys = get_cerebras_keys()
-            _router_instance.bai_key = get_bai_key()
+            _router_instance.reload_keys_from_env()
             if provider == "KIRO":
                 kiro_token = get_kiro_refresh_token() or resolve_refresh_token()
                 _router_instance.kiro_refresh_token = kiro_token
@@ -1018,12 +1013,7 @@ def create_app() -> FastAPI:
         import shutil
         reload_env()
         if _router_instance:
-            _router_instance.api_keys = get_nvidia_keys()
-            _router_instance.openrouter_keys = get_openrouter_keys()
-            _router_instance.set_opencode_keys(get_opencode_keys())
-            _router_instance.groq_keys = get_groq_keys()
-            _router_instance.cerebras_keys = get_cerebras_keys()
-            _router_instance.bai_key = get_bai_key()
+            _router_instance.reload_keys_from_env()
             asyncio.create_task(_router_instance.refresh_models())
 
         pm2_bin = shutil.which("pm2")
@@ -1601,12 +1591,7 @@ def create_app() -> FastAPI:
                     update_setting("primary_model", val)
         except Exception:
             pass
-        _router_instance.api_keys = get_nvidia_keys()
-        _router_instance.openrouter_keys = get_openrouter_keys()
-        _router_instance.set_opencode_keys(get_opencode_keys())
-        _router_instance.groq_keys = get_groq_keys()
-        _router_instance.cerebras_keys = get_cerebras_keys()
-        _router_instance.bai_key = get_bai_key()
+        _router_instance.reload_keys_from_env()
         kiro_token = get_kiro_refresh_token() or resolve_refresh_token()
         if kiro_token:
             _router_instance.kiro_refresh_token = kiro_token
